@@ -1,0 +1,43 @@
+# --- Local configuration & secrets ---
+.env
+.env.*
+!.env.example
+# 로컬 설정 파일 (공유용 템플릿은 conf.example.toml)
+conf.toml
+
+# --- Build & packaging output ---
+dist/
+build/
+*.egg-info/
+*.spec
+MultiAgentOrchestrator_bundle*
+MultiAgentOrchestrator_offline*
+vendor/
+wheelhouse/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Runtime data ---
+*.db
+*.sqlite
+*.sqlite3
+*.log
+workspace/
+
+# --- Editors & OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

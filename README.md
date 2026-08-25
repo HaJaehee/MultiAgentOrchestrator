@@ -1,0 +1,244 @@
+# 🤖 Multi-Agent Orchestrator Platform
+
+> **MCP 도구를 활용하는 반응형 멀티 에이전트 협업 & 토론 웹 애플리케이션**  
+> Dynamic Agent Profiling via `conf.toml`, MCP Tool Integration, Multi-Model LLM Abstraction (LiteLLM), StateGraph Orchestration, and NiceGUI + FastAPI Reactive Web Interface.
+
+---
+
+## 🌟 주요 특징 (Key Features)
+
+1. **`conf.toml` 기반 동적 에이전트 프로파일링**:
+   - 시스템 기동 시 `conf.toml` 설정 파일로부터 에이전트 풀(Agent Pool)과 MCP 서버를 동적으로 등록.
+   - `${OPENAI_API_KEY}`, `${ANTHROPIC_API_KEY}` 등 환경 변수 동적 치환 지원.
+2. **Model Context Protocol (MCP) 내장 호스트 & 도구 연동**:
+   - Filesystem, Web Search 등 외부 MCP 서버와 JSON-RPC stdio 통신.
+   - 도구 검색 및 Function Calling 스키마 자동 변환, 실행 결과(Observation) 피드백.
+3. **다양한 LLM 프로바이더 추상화 (LiteLLM)**:
+   - OpenAI (`gpt-4o`), Anthropic (`claude-3-5-sonnet`), Google (`gemini-1.5-pro`), Ollama 등 통합 지원.
+   - `[llm]` 전역 섹션에서 **API URL(`api_base`), 모델 명, API 버전, provider, timeout/재시도, 커스텀 헤더**를 지정하고 모든 에이전트가 상속.
+   - 사내 OpenAI 호환 게이트웨이 · vLLM · LM Studio · Ollama 등 **API 키 없는 로컬 엔드포인트도 그대로 사용 가능**.
+   - **Sequential Thinking(단계적 사고)** 을 `prompt` / `native` / `mcp` 3가지 모드로 에이전트별 설정.
+   - API 키·엔드포인트가 모두 없는 개발/테스트 환경에서도 즉각 구동 가능한 지능형 Fallback 시뮬레이터 내장.
+4. **멀티 에이전트 토론 & 상태 머신 오케스트레이션**:
+   - **Master Orchestrator**: 목표 분해, 발언자 선정, 토론 중재, 합의 검증 및 최종 산출물 합성.
+   - **3가지 토론 전략**: 자유 토론 (`free_debate`), 순차 검증 (`sequential_review`), 디베이트 (`adversarial_debate`).
+   - 무한 루프 방지를 위한 `max_rounds` 및 `is_consensus_reached` 종료 보장.
+5. **반응형 모던 Web GUI (FastAPI + NiceGUI)**:
+   - **좌측 사이드바**: 세션 히스토리, 신규 생성(`+ New Chat`), 이름 변경, 삭제.
+   - **상단 제어 패널**: 에이전트 온/오프 토글, 라운드 제한 슬라이더, 전략 선택, 세션별 커스텀 지침.
+   - **메인 토론 피드**: 에이전트별 색상/아바타 구분 대화창, 접이식(Accordion) MCP 도구 호출 로그.
+   - **우측 산출물 뷰어**: 최종 종합 보고서(Markdown), 소스코드(Code), Mermaid 아키텍처 다이어그램 탭 및 원클릭 복사/다운로드.
+6. **SQLite 영구 저장소 (SQLAlchemy Async)**:
+   - 세션, 메시지, 도구 호출 기록, 최종 아티팩트 영구 보존.
+
+---
+
+## 🏗️ 시스템 아키텍처 (Architecture)
+
+```mermaid
+graph TD
+    User([Web User / Browser]) <--> UI[NiceGUI + FastAPI Reactive UI]
+    UI <--> Engine[Multi-Agent Orchestrator Engine]
+    Engine <--> DB[(SQLite Database / SQLAlchemy Async)]
+    Engine <--> Pool[Agent Pool Manager]
+    
+    Pool --> Orch[Master Orchestrator]
+    Pool --> Arch[System Architect]
+    Pool --> Coder[Senior Python Engineer]
+    Pool --> Critic[Security & Quality Critic]
+    
+    Orch <--> LLM[LiteLLM Provider Layer]
+    Arch <--> LLM
+    Coder <--> LLM
+    Critic <--> LLM
+    
+    Orch <--> MCP[MCP Client & Host Manager]
+    Coder <--> MCP
+    MCP <--> MCPServers[External MCP Servers via stdio]
+```
+
+---
+
+## 📁 프로젝트 구조 (Directory Structure)
+
+```
+MultiAgentOrchestrator/
+├── conf.example.toml         # 설정 템플릿 (저장소에 커밋되는 원본)
+├── conf.toml                 # 실제 시스템 설정 파일 (로컬 전용, .gitignore 대상)
+├── .env.example              # 환경 변수 템플릿
+├── requirements.txt          # 파이썬 의존성 패키지
+├── README.md                 # 프로젝트 문서
+├── app/
+│   ├── main.py               # FastAPI + NiceGUI 실행 엔트리포인트
+│   ├── config.py             # TOML 로더, 환경변수 치환 및 Pydantic 검증
+│   ├── database/             # SQLite & SQLAlchemy 비동기 ORM
+│   │   ├── models.py         # Session, Message, ToolCallRecord, Artifact 모델
+│   │   └── session.py        # Async Engine 및 세션 관리
+│   ├── mcp/                  # MCP Host & Tool Integration
+│   │   ├── client.py         # Stdio MCP Client 프로세스 관리자
+│   │   └── manager.py        # 도구 검색 및 Function Calling 디스패치
+│   ├── agents/               # 에이전트 및 LLM 계층
+│   │   ├── base.py           # Agent 모델 및 UI 스타일 매핑
+│   │   ├── llm.py            # LiteLLM 호출기, Tool 루프 및 Fallback
+│   │   └── pool.py           # 동적 에이전트 풀 레지스트리
+│   ├── orchestration/        # 멀티 에이전트 토론 상태 머신
+│   │   ├── state.py          # DebateState, DebateMessage, ArtifactItem
+│   │   ├── strategies.py     # 자유 토론, 순차 검증, 디베이트 전략
+│   │   └── engine.py         # 오케스트레이션 엔진 & 산출물 합성기
+│   └── ui/                   # NiceGUI 반응형 웹 UI
+│       ├── app.py            # UI 페이지 레이아웃 및 리액티브 바인딩
+│       ├── theme.py          # Quasar CSS 스타일 & 컬러 팔레트
+│       └── components/       # UI 컴포넌트
+│           ├── sidebar.py    # 세션 히스토리 사이드바
+│           ├── roster.py     # 에이전트 로스터 및 토론 제어판
+│           ├── chat_feed.py  # 대화 타임라인 & MCP 도구 아코디언
+│           └── artifact_viewer.py # 탭형 산출물 뷰어 (Code, Markdown, Mermaid)
+└── tests/                    # 자동화 테스트 스위트
+    ├── test_config.py
+    ├── test_llm_settings.py   # [llm] 상속, 엔드포인트/단계적 사고 설정
+    ├── test_db.py
+    ├── test_mcp.py
+    └── test_orchestrator.py
+```
+
+---
+
+## 🚀 시작하기 (Getting Started)
+
+### 1. 의존성 설치
+```bash
+pip install -r requirements.txt
+```
+
+### 2. 설정 파일 준비
+`conf.toml` 은 로컬 전용 파일이라 저장소에 포함되지 않습니다. 템플릿을 복사해서 시작하세요.
+```bash
+cp conf.example.toml conf.toml
+```
+
+### 3. 환경 변수 설정 (선택사항)
+`.env.example`을 복사하여 `.env`를 생성하고 엔드포인트와 키를 입력합니다.
+```bash
+cp .env.example .env
+```
+```dotenv
+LLM_API_BASE=http://localhost:1234/v1     # 사내 게이트웨이 / vLLM / LM Studio / Ollama
+LLM_MODEL=openai/qwen2.5-coder-32b        # 모델 명
+LLM_API_KEY=                              # 키가 필요 없는 서버라면 비워두세요
+```
+*(엔드포인트와 키가 모두 없는 경우에도 내장 시뮬레이터를 통해 모든 UI 및 다자간 토론 기능을 즉시 체험할 수 있습니다)*
+
+### 4. 애플리케이션 실행
+```bash
+python -m app.main
+```
+실행 후 브라우저에서 `http://127.0.0.1:8000`으로 접속합니다.
+
+---
+
+## 🧪 테스트 실행 (Running Tests)
+
+```bash
+pytest -v tests/
+```
+
+---
+
+## ⚙️ `conf.toml` 커스텀 가이드
+
+### 전역 LLM 설정 `[llm]`
+
+`[llm]` 섹션의 값은 각 에이전트가 같은 항목을 직접 지정하지 않는 한 **모든 에이전트에 상속**됩니다.
+따라서 사내 게이트웨이나 로컬 LLM 서버를 쓸 때는 `[llm]` 한 곳만 고치면 됩니다.
+
+```toml
+[llm]
+model = "openai/qwen2.5-coder-32b"          # 모델 명
+api_base = "https://llm-gateway.mycorp.com/v1"  # LLM API URL (api_url / base_url 도 동일)
+api_key = "${CORP_LLM_TOKEN}"               # 로컬 모델이면 비워두어도 됩니다
+api_version = "2024-10-21"                  # Azure OpenAI 전용
+provider = "openai"                          # LiteLLM provider 강제 지정 (선택)
+temperature = 0.4
+max_tokens = 4096
+max_context_window = 128000
+timeout = 120            # 요청 타임아웃(초)
+num_retries = 2          # 재시도 횟수
+drop_params = true       # 엔드포인트가 모르는 파라미터 자동 제거 (로컬 모델 호환성)
+max_tool_iterations = 5  # 한 턴에서 허용할 MCP 도구 루프 횟수
+fallback_to_simulation = true  # false 로 두면 연결 오류를 그대로 표면화
+extra_headers = { "X-Org-Id" = "${MY_ORG_ID}" }
+extra_body = { "user" = "multiagent-orchestrator" }
+```
+
+> **호출 모드 판정**: `api_base` 또는 `api_key` 중 하나라도 설정되어 있으면(또는 모델이 `ollama/`, `ollama_chat/`, `lm_studio/` 로 시작하면) 실제 LLM 을 호출합니다.
+> 둘 다 없을 때만 내장 시뮬레이터로 동작합니다. API 키가 필요 없는 로컬 서버도 그대로 사용할 수 있습니다.
+
+### Sequential Thinking (단계적 사고)
+
+```toml
+[llm.sequential_thinking]        # 또는 [agents.<key>.sequential_thinking]
+enabled = true
+mode = "prompt"                  # "prompt" | "native" | "mcp"
+max_steps = 5
+show_steps = true                # false 면 최종 결론만 피드에 노출
+reasoning_effort = "high"        # native 모드: minimal | low | medium | high
+thinking_budget_tokens = 8192    # native 모드: 확장 사고 토큰 예산 (Anthropic 계열)
+mcp_server = "sequential_thinking"  # mcp 모드에서 사용할 MCP 서버 키
+# prompt_template = """...{max_steps}..."""   # 프로토콜 문구 직접 작성
+```
+
+| mode | 동작 | 적용 대상 |
+|------|------|-----------|
+| `prompt` | 단계적 사고 프로토콜을 시스템 프롬프트에 주입 | 모든 모델 (로컬 포함) |
+| `native` | `reasoning_effort` / `thinking` 파라미터를 실제 요청에 전달 | 추론 지원 모델 |
+| `mcp` | `@modelcontextprotocol/server-sequential-thinking` 도구를 강제 사용 | MCP 서버 활성화 필요 |
+
+에이전트 블록의 `[agents.<key>.sequential_thinking]` 은 전역 값과 **키 단위로 병합**되므로,
+바꾸고 싶은 항목만 적으면 나머지는 `[llm.sequential_thinking]` 값을 그대로 사용합니다.
+
+### 로컬 / 사내 엔드포인트 예시
+
+```toml
+# Ollama (API 키 불필요)
+[agents.coder]
+model = "ollama_chat/qwen2.5-coder:14b"
+api_base = "http://localhost:11434"
+
+# LM Studio / vLLM (OpenAI 호환)
+[agents.coder]
+model = "openai/local-model"
+api_base = "http://localhost:1234/v1"
+api_key = "lm-studio"
+
+# Azure OpenAI
+[agents.orchestrator]
+model = "azure/my-gpt4o-deployment"
+api_base = "https://my-resource.openai.azure.com"
+api_version = "2024-10-21"
+api_key = "${AZURE_OPENAI_API_KEY}"
+```
+
+환경 변수는 `${VAR}` 외에 `${VAR:-기본값}`, 그리고 중첩(`${A:-${B:-기본값}}`) 형태까지 지원합니다.
+빈 값으로 해석된 항목은 "미설정"으로 간주되어 `[llm]` 전역값을 상속합니다.
+
+### 에이전트 추가
+
+새로운 전문 에이전트를 추가하거나 MCP 서버를 확장하려면 `conf.toml`에 아래와 같이 추가하기만 하면 자동으로 등록됩니다
+(생략한 항목은 `[llm]` 값을 상속하며, `enabled = false` 로 잠시 비활성화할 수 있습니다):
+
+```toml
+[agents.data_scientist]
+name = "Data Scientist"
+role = "Data Analysis & ML Pipeline"
+model = "openai/gpt-4o"
+api_key = "${OPENAI_API_KEY}"
+temperature = 0.2
+allowed_mcp_servers = ["filesystem"]
+system_prompt = "데이터 파이프라인 설계 및 머신러닝 모델 아키텍처 검토를 전담합니다."
+
+[agents.data_scientist.sequential_thinking]
+enabled = true
+max_steps = 8
+```
+
+현재 각 에이전트가 어떤 모델/엔드포인트로 잡혔는지는 `GET /api/agents` 또는 UI 로스터 카드의 툴팁에서 확인할 수 있습니다.
