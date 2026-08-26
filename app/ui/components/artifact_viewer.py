@@ -80,7 +80,7 @@ class ArtifactViewer:
         content = art.get("content", "")
         language = art.get("language", "markdown")
 
-        with ui.column().classes("w-full h-full gap-2 flex flex-col overflow-hidden"):
+        with ui.column().classes("w-full h-full gap-2 flex flex-col flex-nowrap overflow-hidden"):
             # Sub-header with copy/download controls
             with ui.row().classes("w-full items-center justify-between bg-slate-800/80 px-3 py-1.5 rounded-lg text-xs flex-shrink-0"):
                 with ui.row().classes("items-center gap-2"):

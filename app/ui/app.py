@@ -127,13 +127,22 @@ def create_ui() -> None:
         # Main Splitter Workspace (58% Debate Feed / 42% Artifact Viewer)
         with ui.splitter(value=58).classes("w-full h-[calc(100vh-65px)] overflow-hidden") as splitter:
             with splitter.before:
-                with ui.column().classes("w-full h-full p-3 gap-3 overflow-hidden flex flex-col"):
+                # flex-nowrap 이 없으면 NiceGUI 컬럼 기본값(flex-wrap: wrap) 때문에
+                # 로스터가 커졌을 때 채팅 카드가 다음 열로 줄바꿈되어 화면 밖으로 밀려납니다.
+                with ui.column().classes(
+                    "w-full h-full p-3 gap-3 overflow-hidden flex flex-col flex-nowrap"
+                ):
                     roster_control.build_ui()
-                    with ui.card().classes("w-full flex-grow bg-slate-900/70 border border-slate-800 p-3 rounded-xl shadow-lg flex flex-col min-h-0 overflow-hidden"):
+                    with ui.card().classes(
+                        "w-full flex-grow bg-slate-900/70 border border-slate-800 p-3 rounded-xl "
+                        "shadow-lg flex flex-col flex-nowrap min-h-[240px] overflow-hidden"
+                    ):
                         chat_feed.build_ui()
 
             with splitter.after:
-                with ui.column().classes("w-full h-full p-3 overflow-hidden flex flex-col"):
+                with ui.column().classes(
+                    "w-full h-full p-3 overflow-hidden flex flex-col flex-nowrap"
+                ):
                     artifact_viewer.build_ui()
 
         # Helper DB Functions

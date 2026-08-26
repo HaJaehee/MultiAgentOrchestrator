@@ -25,15 +25,20 @@ def test_tool_definition_to_openai():
 
 
 @pytest.mark.asyncio
-async def test_mcp_manager_discovery_and_execution():
+async def test_mcp_manager_falls_back_to_mock_tools():
+    """외부 서버를 띄울 수 없으면 mock 도구로 폴백해 앱이 계속 동작해야 한다.
+
+    실제 서버가 설치되어 있는지에 결과가 좌우되지 않도록, 존재할 수 없는 명령을
+    일부러 지정한다.
+    """
     server_configs = {
         "filesystem": MCPServerConfig(
-            command="node",
-            args=["./mcp_node/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", "./workspace"],
+            command="__no_such_command_filesystem__",
+            args=["./workspace"],
         ),
         "search": MCPServerConfig(
-            command="python",
-            args=["-m", "duckduckgo_mcp_server"],
+            command="__no_such_command_search__",
+            args=[],
         ),
     }
     manager = MCPManager(server_configs)
@@ -47,10 +52,13 @@ async def test_mcp_manager_discovery_and_execution():
     openai_tools = manager.get_openai_tools_for_servers(["filesystem", "search"])
     assert len(openai_tools) >= 2
 
-    # Verify tool execution (simulation / actual)
+    # 폴백 시뮬레이션은 성공으로 보고된다
     output, status = await manager.execute_tool("filesystem__read_file", {"path": "sample.py"})
     assert status == "success"
     assert len(output) > 0
+    assert not manager.clients["filesystem"].is_connected
+
+    await manager.shutdown()
 
 
 FIXTURE_SERVER = str(Path(__file__).parent / "fixtures" / "stateful_mcp_server.py")

@@ -50,7 +50,12 @@ class AgentRosterControl:
         ).classes("w-full bg-slate-900 border border-slate-800 rounded-xl shadow-md text-slate-100 flex-shrink-0")
 
         with self.expansion:
-            with ui.column().classes("w-full p-2 gap-3"):
+            # 펼친 상태에서도 아래 채팅창이 보이도록 높이를 제한합니다. 고정 비율 대신
+            # "채팅이 필요한 높이를 뺀 나머지" 로 잡아, 화면이 크면 설정이 전부 보이고
+            # 작을 때만 내부에서 스크롤되게 합니다.
+            with ui.column().classes(
+                "w-full p-2 gap-3 max-h-[calc(100vh-400px)] overflow-y-auto"
+            ):
                 # 1. Agent Selection Cards
                 with ui.row().classes("w-full items-center justify-between"):
                     with ui.row().classes("items-center gap-2"):
@@ -75,7 +80,7 @@ class AgentRosterControl:
                 # 2. MCP Tool Servers status
                 with ui.row().classes("w-full items-center justify-between"):
                     with ui.row().classes("items-center gap-2"):
-                        ui.label("MCP 도구 서버").classes("text-xs font-bold text-slate-300")
+                        ui.label("MCP 서버").classes("text-xs font-bold text-slate-300")
                         self.mcp_badge = ui.badge("-", color="slate-7").props("dense text-xs")
                     self.mcp_reconnect_btn = (
                         ui.button(icon="refresh", on_click=self._on_mcp_reconnect)

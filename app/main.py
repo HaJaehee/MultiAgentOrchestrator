@@ -28,6 +28,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 1. Load configuration
     cfg = get_config()
     logger.info(f"Loaded configuration for host={cfg.app.host}:{cfg.app.port}, db={cfg.app.db_url}")
+    logger.info(f"Web UI: http://{cfg.app.host}:{cfg.app.port}")
 
     # 2. Initialize Database Tables
     await init_db(cfg.app.db_url)

@@ -22,7 +22,11 @@ class ChatFeed:
         self.is_busy: bool = False
 
     def build_ui(self) -> ui.column:
-        with ui.column().classes("w-full h-full flex flex-col justify-between overflow-hidden") as root:
+        # flex-nowrap 없이는 내용이 카드보다 커질 때 입력 바가 다음 열로 줄바꿈되어
+        # 화면 밖으로 밀려납니다 (NiceGUI 컬럼 기본값이 flex-wrap: wrap).
+        with ui.column().classes(
+            "w-full h-full flex flex-col flex-nowrap justify-between overflow-hidden"
+        ) as root:
             # 1. Status Indicator Bar
             with ui.row().classes(
                 "w-full items-center justify-between px-3 py-1.5 bg-slate-900/90 border border-slate-800 rounded-lg text-xs flex-shrink-0"

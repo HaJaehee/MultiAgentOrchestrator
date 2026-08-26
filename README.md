@@ -69,6 +69,7 @@ graph TD
 ```
 MultiAgentOrchestrator/
 ├── conf.example.toml         # 설정 템플릿 (저장소에 커밋되는 원본)
+├── setup_mcp.py              # 개발 PC용 MCP 서버 일괄 설치
 ├── package_offline.py        # 폐쇄망 배포 번들 패키징 (런타임 + MCP 서버 동봉)
 ├── conf.toml                 # 실제 시스템 설정 파일 (로컬 전용, .gitignore 대상)
 ├── .env.example              # 환경 변수 템플릿
@@ -122,6 +123,18 @@ MultiAgentOrchestrator/
 pip install -r requirements.txt
 ```
 
+### 1-1. MCP 서버 준비
+`conf.toml` 이 기본으로 켜 두는 MCP 서버를 한 번에 준비합니다 (인터넷 필요, 최초 1회).
+```bash
+python setup_mcp.py
+```
+- `./workspace` 생성 및 **git 저장소 초기화** — git MCP 서버는 유효한 git 저장소가 아니면 기동에 실패합니다
+- `./mcp_node` 에 공식 Node MCP 서버 설치 (filesystem / memory / sequential-thinking, Node.js 필요)
+- `./mcp_sandbox` 에 [AirgappedPySandbox](https://github.com/HaJaehee/AirgappedPySandbox) 체크아웃
+
+Node 를 쓰지 않거나 샌드박스가 필요 없으면 `--skip-node` / `--skip-sandbox` 를 붙이고,
+해당 서버는 `conf.toml` 에서 `enabled = false` 로 꺼두세요.
+
 ### 2. 설정 파일 준비
 `conf.toml` 은 로컬 전용 파일이라 저장소에 포함되지 않습니다. 템플릿을 복사해서 시작하세요.
 ```bash
@@ -144,7 +157,15 @@ LLM_API_KEY=                              # 키가 필요 없는 서버라면 �
 ```bash
 python -m app.main
 ```
-실행 후 브라우저에서 `http://127.0.0.1:8000`으로 접속합니다.
+접속 주소는 기동 로그의 `Web UI: http://...` 줄에 표시됩니다. 주소는 `conf.toml` 의
+`[app] host / port` 를 따르며, 이 값은 `.env` 의 `APP_HOST` / `APP_PORT` 로도 덮어쓸 수 있습니다.
+실행 스크립트에 주소를 하드코딩하지 않으므로 포트를 바꾸려면 한 곳만 고치면 됩니다.
+
+```toml
+[app]
+host = "${APP_HOST:-127.0.0.1}"
+port = "${APP_PORT:-8000}"
+```
 
 ---
 
@@ -317,19 +338,23 @@ stdio 세션은 서버마다 전용 태스크가 소유합니다. anyio 의 canc
 #### 개발 PC 준비 (최초 1회, 인터넷 필요)
 
 ```bash
-# Node MCP 서버 (순수 JS — 네이티브 애드온 없음)
+pip install -r requirements.txt   # mcp-server-git, jupyter_client, ipykernel 포함
+python setup_mcp.py               # workspace(git init) + mcp_node + mcp_sandbox
+```
+
+`setup_mcp.py` 가 하는 일을 직접 하려면:
+```bash
 npm install --omit=dev --prefix ./mcp_node \
   @modelcontextprotocol/server-filesystem \
   @modelcontextprotocol/server-memory \
   @modelcontextprotocol/server-sequential-thinking
-
-# Python MCP 서버
-pip install mcp-server-git mcp-server-fetch
-
-# 코드 실행 샌드박스
 git clone --depth 1 https://github.com/HaJaehee/AirgappedPySandbox ./mcp_sandbox
-pip install -r ./mcp_sandbox/requirements-server.txt
+git init ./workspace              # git MCP 서버는 유효한 저장소를 요구합니다
 ```
+
+> **Python MCP 서버는 앱과 같은 인터프리터로 실행됩니다.** `PYTHON_BIN` 을 지정하지 않으면
+> `sys.executable` 이 기본값입니다. PATH 의 `python` 을 쓰면 가상환경에서 앱을 돌릴 때
+> 의존성이 없는 다른 인터프리터를 가리켜 서버가 기동에 실패합니다.
 
 #### 실행 경로 재정의
 
@@ -339,7 +364,7 @@ pip install -r ./mcp_sandbox/requirements-server.txt
 | 변수 | 기본값 | 용도 |
 |------|--------|------|
 | `NODE_BIN` | `node` | Node 실행기 |
-| `PYTHON_BIN` | `python` | Python 실행기 |
+| `PYTHON_BIN` | 앱과 동일한 인터프리터 (`sys.executable`) | Python 실행기 |
 | `MCP_NODE_HOME` | `./mcp_node` | Node MCP 서버 설치 위치 |
 | `MCP_SANDBOX_HOME` | `./mcp_sandbox` | 샌드박스 서버 위치 |
 | `WORKSPACE_DIR` | `./workspace` | 에이전트 공용 작업 공간 |

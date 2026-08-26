@@ -7,6 +7,14 @@ sqlalchemy>=2.0.30
 aiosqlite>=0.20.0
 litellm>=1.40.0
 mcp>=1.0.0
+
+# 기본 활성화된 MCP 서버 (Python 구현)
+mcp-server-git>=2025.1.14        # git MCP 서버
+jupyter_client>=8.0              # sandbox MCP 서버(AirgappedPySandbox)가 커널 구동에 사용
+ipykernel>=6.0
+
+# 선택: 외부 네트워크가 열린 환경에서 fetch MCP 서버를 켤 때 필요
+# mcp-server-fetch
 python-dotenv>=1.0.0
 pytest>=8.0.0
 pytest-asyncio>=0.23.0

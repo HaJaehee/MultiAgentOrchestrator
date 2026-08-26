@@ -1,10 +1,58 @@
 import json
 import logging
+import os
+import shutil
+import subprocess
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from app.config import MCPServerConfig
 from app.mcp.client import MCPClientConnection, MCPToolDefinition, MCPToolError
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_workspace(path: str) -> None:
+    """에이전트 공용 작업 공간을 만들고, 없으면 git 저장소로 초기화합니다.
+
+    git MCP 서버는 대상이 유효한 git 저장소가 아니면 "is not a valid Git
+    repository" 로 기동에 실패합니다. 작업 공간은 앱이 소유하는 디렉터리이고
+    git 서버가 기본 활성이므로, 여기서 만들어 둡니다.
+    """
+    workspace = Path(path).expanduser()
+    try:
+        workspace.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.warning(f"Could not create workspace '{workspace}': {e}")
+        return
+
+    if (workspace / ".git").exists():
+        return
+    if shutil.which("git") is None:
+        logger.warning(
+            f"git not found on PATH; '{workspace}' stays a plain directory and "
+            "the git MCP server will fail to start."
+        )
+        return
+
+    try:
+        subprocess.run(
+            ["git", "init", "-q", str(workspace)],
+            check=True, capture_output=True, timeout=30,
+        )
+        keep = workspace / ".gitkeep"
+        keep.touch()
+        subprocess.run(
+            ["git", "-C", str(workspace), "add", ".gitkeep"],
+            check=True, capture_output=True, timeout=30,
+        )
+        subprocess.run(
+            ["git", "-C", str(workspace), "-c", "user.name=multiagent",
+             "-c", "user.email=multiagent@localhost", "commit", "-q", "-m", "workspace 초기화"],
+            check=True, capture_output=True, timeout=30,
+        )
+        logger.info(f"Initialized agent workspace as a git repository: {workspace}")
+    except (subprocess.SubprocessError, OSError) as e:
+        logger.warning(f"Could not initialize git repository at '{workspace}': {e}")
 
 
 class MCPManager:
@@ -23,6 +71,8 @@ class MCPManager:
         """
         await self.shutdown()
         self._tool_lookup.clear()
+
+        ensure_workspace(os.environ.get("WORKSPACE_DIR", "./workspace"))
 
         for name in self.server_configs:
             await self._start_client(name)

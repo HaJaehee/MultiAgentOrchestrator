@@ -61,8 +61,13 @@ class _StderrTee:
     그대로 넘길 수 없습니다. 파이프를 만들어 읽기 쪽을 데몬 스레드가 비웁니다.
     """
 
-    def __init__(self, max_lines: int = 12):
-        self._lines: deque = deque(maxlen=max_lines)
+    def __init__(self, head_lines: int = 4, tail_lines: int = 8):
+        # 원인은 대개 첫 줄에 있고(예: "Cannot find module ..."), 그 뒤로 스택
+        # 트레이스가 길게 이어집니다. 꼬리만 보관하면 정작 원인이 밀려나므로
+        # 머리와 꼬리를 따로 붙잡습니다.
+        self._head: List[str] = []
+        self._head_limit = head_lines
+        self._lines: deque = deque(maxlen=tail_lines)
         read_fd, write_fd = os.pipe()
         self._handle = os.fdopen(write_fd, "w", buffering=1, encoding="utf-8", errors="replace")
         self._thread = threading.Thread(target=self._pump, args=(read_fd,), daemon=True)
@@ -74,7 +79,10 @@ class _StderrTee:
                 for line in stream:
                     stripped = line.rstrip()
                     if stripped:
-                        self._lines.append(stripped)
+                        if len(self._head) < self._head_limit:
+                            self._head.append(stripped)
+                        else:
+                            self._lines.append(stripped)
                     sys.stderr.write(line)
         except Exception:  # noqa: BLE001 - 로깅 보조 경로가 앱을 막으면 안 됩니다
             pass
@@ -85,7 +93,11 @@ class _StderrTee:
 
     @property
     def tail(self) -> str:
-        return "\n".join(self._lines)
+        head = list(self._head)
+        rest = list(self._lines)
+        if not rest:
+            return "\n".join(head)
+        return "\n".join(head + ["..."] + rest)
 
     def close(self, drain: bool = False) -> None:
         try:

@@ -1,6 +1,7 @@
 import copy
 import os
 import re
+import sys
 import tomllib
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -28,6 +29,13 @@ DEFAULT_SEQUENTIAL_THINKING_PROMPT = """[Sequential Thinking Protocol]
 
 
 VAR_NAME_PATTERN = re.compile(r"[A-Za-z0-9_]+")
+
+# Python 으로 구동되는 MCP 서버는 기본적으로 **앱과 같은 인터프리터**로 띄웁니다.
+# conf.toml 의 `${PYTHON_BIN:-python}` 이 PATH 의 python 으로 풀리면, 앱이 가상환경
+# 에서 돌 때 의존성이 없는 다른 인터프리터를 가리켜 서버가 기동에 실패합니다.
+# 사용자가 PYTHON_BIN 을 직접 지정했다면 그 값을 존중합니다.
+if not os.environ.get("PYTHON_BIN"):
+    os.environ["PYTHON_BIN"] = sys.executable
 
 
 def _substitute_env(text: str) -> str:
