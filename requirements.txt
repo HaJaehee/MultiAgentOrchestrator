@@ -6,7 +6,9 @@ pydantic-settings>=2.4.0
 sqlalchemy>=2.0.30
 aiosqlite>=0.20.0
 litellm>=1.40.0
-mcp>=1.0.0
+# mcp 2.x 는 mcp.server.fastmcp 를 제거했고(MCPServer 로 개명), mcp-server-git 도
+# mcp<2 를 요구합니다. 샌드박스 서버가 FastMCP 를 쓰므로 1.x 계열로 고정합니다.
+mcp>=1.29.0,<2
 
 # 기본 활성화된 MCP 서버 (Python 구현)
 mcp-server-git>=2025.1.14        # git MCP 서버

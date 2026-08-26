@@ -26,6 +26,7 @@ pip wheel 이 실행 플랫폼 기준으로 수집되기 때문입니다. 패키
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
@@ -60,11 +61,30 @@ PYTHON_MCP_PACKAGES = [
 
 # Python 코드 실행 샌드박스 MCP 서버.
 SANDBOX_REPO_URL = "https://github.com/HaJaehee/AirgappedPySandbox"
+
+# 번들 전체에 적용할 버전 제약. 벤더링한 샌드박스의 requirements-server.txt 는
+# `mcp>=1.2.0` 으로 상한이 없어, 그대로 두면 pip 가 mcp 2.x 를 끌어옵니다.
+# mcp 2.x 는 mcp.server.fastmcp 를 제거했으므로 샌드박스 서버가 기동하지 못합니다.
+PIP_CONSTRAINTS = [
+    "mcp>=1.29.0,<2",
+]
+
+# 번들 런타임에서 반드시 import 되어야 하는 모듈. 하나라도 없으면 실행 시점에
+# 조용히 기능이 빠지므로, 패키징 단계에서 실패로 처리합니다.
+REQUIRED_IMPORTS = [
+    ("nicegui", "웹 UI"),
+    ("litellm", "LLM 호출"),
+    ("mcp", "MCP 클라이언트"),
+    ("mcp.server.fastmcp", "샌드박스 MCP 서버 (mcp 2.x 에서는 제거됨 → mcp<2 필요)"),
+    ("mcp_server_git", "git MCP 서버"),
+    ("jupyter_client", "샌드박스 커널"),
+    ("ipykernel", "샌드박스 커널"),
+]
 SANDBOX_EXCLUDE = shutil.ignore_patterns(
     ".git", ".github", "__pycache__", "*.pyc", "dist", "build", "workspace", ".venv"
 )
 
-STEPS = 8
+STEPS = 10
 
 
 def log(step: int, message: str) -> None:
@@ -149,20 +169,63 @@ def stage_sandbox(sandbox_src: str | None) -> Path | None:
 # ---------------------------------------------------------------------------
 # 3. pip wheel 수집
 # ---------------------------------------------------------------------------
+def _requirements_fingerprint(sandbox_source: Path | None) -> str:
+    """요구사항 목록의 지문. 바뀌면 wheel 을 다시 받습니다."""
+    parts = [(ROOT_DIR / "requirements.txt").read_text(encoding="utf-8")]
+    parts.extend(PYTHON_MCP_PACKAGES)
+    parts.extend(PIP_CONSTRAINTS)
+    if sandbox_source is not None:
+        req = sandbox_source / "requirements-server.txt"
+        if req.exists():
+            parts.append(req.read_text(encoding="utf-8"))
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def write_constraints() -> Path:
+    """pip download / install 양쪽에 쓸 제약 파일을 만듭니다."""
+    path = STAGING_DIR / "constraints.txt"
+    path.write_text(
+        "# package_offline.py 가 생성합니다. 번들 전체의 버전 정합성을 강제합니다.\n"
+        + "\n".join(PIP_CONSTRAINTS)
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def staged_python() -> Path | None:
+    """번들에 들어간 포터블 인터프리터 경로."""
+    runtime = STAGING_DIR / "python_runtime"
+    for rel in ("python.exe", "bin/python3", "bin/python"):
+        candidate = runtime / rel
+        if candidate.exists():
+            return candidate
+    return None
+
+
+
 def collect_wheels(sandbox_source: Path | None) -> None:
     staging_wheels = STAGING_DIR / "wheels"
     staging_wheels.mkdir(parents=True, exist_ok=True)
 
+    # 요구사항이 바뀌면 수집분을 자동으로 무효화합니다. 예전에는 마커가 존재하기만
+    # 하면 재사용해서, requirements.txt 를 고쳐도 낡은 wheel 이 그대로 실렸습니다.
+    fingerprint = _requirements_fingerprint(sandbox_source)
     marker = staging_wheels / ".collected"
-    if marker.exists():
+    if marker.exists() and marker.read_text(encoding="utf-8").strip() == fingerprint:
         count = len(list(staging_wheels.glob("*.whl")))
         print(f"      기존 수집분({count}개) 재사용. 다시 받으려면 wheels/.collected 를 지우세요.")
         return
+    if marker.exists():
+        print("      요구사항이 변경되어 wheel 을 다시 수집합니다.")
+
+    constraints = write_constraints()
 
     def pip_download(args: list[str], label: str) -> None:
         print(f"      - {label}")
         subprocess.run(
-            [sys.executable, "-m", "pip", "download", *args, "-d", str(staging_wheels)],
+            [sys.executable, "-m", "pip", "download",
+             "-c", str(constraints), *args, "-d", str(staging_wheels)],
             check=True,
         )
 
@@ -174,7 +237,7 @@ def collect_wheels(sandbox_source: Path | None) -> None:
         if req.exists():
             pip_download(["-r", str(req)], "샌드박스 MCP 서버 의존성 (jupyter_client / ipykernel)")
 
-    marker.touch()
+    marker.write_text(fingerprint, encoding="utf-8")
     print(f"      총 {len(list(staging_wheels.glob('*.whl')))}개 wheel 수집 완료.")
 
 
@@ -247,6 +310,79 @@ def stage_node_runtime(node_version: str) -> bool:
     size_mb = round(node_exe.stat().st_size / (1024 * 1024), 1)
     print(f"      node.exe 추출 완료 (v{node_version}, {size_mb} MB)")
     return True
+
+
+# ---------------------------------------------------------------------------
+# 런타임에 의존성 설치 & 검증
+# ---------------------------------------------------------------------------
+def install_into_runtime(sandbox_source: Path | None) -> bool:
+    """수집한 wheel 을 **번들 런타임 안에** 설치합니다.
+
+    포터블 런타임은 패키징 머신의 파이썬을 복사한 것이라, 그 머신에 설치되지 않은
+    패키지는 번들에도 없습니다. 예전에는 wheel 을 wheels/ 에 넣어두기만 해서,
+    패키징 머신 상태에 따라 mcp-server-git 이 빠지거나 mcp 버전이 어긋난 번들이
+    그대로 배포되었습니다.
+    """
+    python = staged_python()
+    if python is None:
+        print("      [경고] 번들 런타임을 찾을 수 없어 건너뜁니다.")
+        print("             Windows 에서 실행하면 python_runtime/python.exe 가 만들어집니다.")
+        return False
+
+    wheels = STAGING_DIR / "wheels"
+    if not any(wheels.glob("*.whl")):
+        print("      [경고] wheels/ 가 비어 있어 설치할 것이 없습니다.")
+        return False
+
+    constraints = write_constraints()
+    targets = [["-r", str(STAGING_DIR / "requirements.txt")], list(PYTHON_MCP_PACKAGES)]
+    if sandbox_source is not None:
+        req = sandbox_source / "requirements-server.txt"
+        if req.exists():
+            targets.append(["-r", str(req)])
+
+    for spec in targets:
+        label = spec[1] if spec[0] == "-r" else ", ".join(spec)
+        print(f"      - {Path(label).name if spec[0] == '-r' else label}")
+        try:
+            subprocess.run(
+                [str(python), "-m", "pip", "install", "--no-index",
+                 f"--find-links={wheels}", "-c", str(constraints),
+                 "--upgrade", "--no-warn-script-location", *spec],
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            print(f"      [경고] 설치 실패: {exc}")
+            return False
+    return True
+
+
+def verify_runtime() -> list[str]:
+    """번들 런타임에서 필수 모듈이 실제로 import 되는지 확인합니다.
+
+    없는 모듈 이름 목록을 돌려줍니다. 실행 시점에 조용히 기능이 빠지는 대신
+    패키징 단계에서 드러나게 하는 것이 목적입니다.
+    """
+    python = staged_python()
+    if python is None:
+        print("      [경고] 번들 런타임이 없어 검증을 건너뜁니다.")
+        return []
+
+    missing: list[str] = []
+    for module, purpose in REQUIRED_IMPORTS:
+        result = subprocess.run(
+            [str(python), "-c", f"import {module}"],
+            capture_output=True, text=True, cwd=str(STAGING_DIR),
+        )
+        if result.returncode == 0:
+            print(f"      [OK  ] {module}")
+        else:
+            missing.append(module)
+            print(f"      [실패] {module}  ({purpose})")
+            tail = (result.stderr or "").strip().splitlines()
+            if tail:
+                print(f"             {tail[-1][:120]}")
+    return missing
 
 
 # ---------------------------------------------------------------------------
@@ -372,12 +508,26 @@ def write_launchers(has_node: bool, has_sandbox: bool) -> None:
     install_bat = (
         "@echo off\r\n"
         "chcp 65001 > nul\r\n"
-        "cd /d \"%~dp0\"\r\n"
-        "echo [*] wheels 디렉토리의 오프라인 패키지를 로컬 환경에 설치합니다...\r\n"
-        "pip install --no-index --find-links=.\\wheels -r requirements.txt\r\n"
+        "cd /d \"%~dp0\"\r\n\r\n"
+        "rem 번들 런타임이 있으면 그쪽에, 없으면 PATH 의 pip 로 설치합니다.\r\n"
+        "set \"TARGET_PY=%~dp0python_runtime\\python.exe\"\r\n"
+        "if not exist \"%TARGET_PY%\" set \"TARGET_PY=python\"\r\n"
+        "echo [*] 설치 대상 인터프리터: %TARGET_PY%\r\n\r\n"
+        "rem constraints.txt 가 mcp 를 1.x 로 묶습니다. 빠뜨리면 2.x 가 들어와\r\n"
+        "rem mcp.server.fastmcp 가 사라지고 샌드박스 서버가 기동하지 못합니다.\r\n"
+        "set \"PIP_C=\"\r\n"
+        "if exist \"%~dp0constraints.txt\" set \"PIP_C=-c .\\constraints.txt\"\r\n\r\n"
+        "echo [*] wheels 디렉토리의 오프라인 패키지를 설치합니다...\r\n"
+        "\"%TARGET_PY%\" -m pip install --no-index --find-links=.\\wheels %PIP_C% "
+        "--upgrade --no-warn-script-location -r requirements.txt\r\n"
         "echo [*] MCP 서버 패키지(fetch / git / 샌드박스 커널)를 설치합니다...\r\n"
-        "pip install --no-index --find-links=.\\wheels "
-        "mcp-server-fetch mcp-server-git jupyter_client ipykernel\r\n"
+        "\"%TARGET_PY%\" -m pip install --no-index --find-links=.\\wheels %PIP_C% "
+        "--upgrade --no-warn-script-location "
+        "mcp-server-fetch mcp-server-git jupyter_client ipykernel\r\n\r\n"
+        "echo [*] 필수 모듈 검증...\r\n"
+        "\"%TARGET_PY%\" -c \"import nicegui, litellm, mcp.server.fastmcp, mcp_server_git, "
+        "jupyter_client, ipykernel; print('  전부 정상')\"\r\n"
+        "if errorlevel 1 echo [!] 위에 표시된 모듈이 빠져 있습니다. 해당 MCP 서버가 동작하지 않습니다.\r\n"
         "echo.\r\n"
         "echo [!] 이 방식으로 실행할 때는 conf.toml 이 참조하는 아래 환경변수를 직접 지정하거나\r\n"
         "echo     PATH 에 node 를 등록해야 filesystem / memory MCP 가 동작합니다.\r\n"
@@ -426,6 +576,16 @@ def write_launchers(has_node: bool, has_sandbox: bool) -> None:
         + sandbox_line
         + "- `wheels/` 에 포함된 `mcp-server-git` : 산출물 버전 관리 (기본 활성)\r\n"
         "- `wheels/` 에 포함된 `mcp-server-fetch` : URL 조회 (기본 **비활성** — 폐쇄망에서는 켜지 마세요)\r\n\r\n"
+        "### 런타임에 모듈이 빠졌을 때\r\n"
+        "`No module named mcp_server_git` / `No module named 'mcp.server.fastmcp'` 처럼 모듈이 없다는 "
+        "로그가 보이면, 번들 런타임에 의존성이 설치되지 않은 것입니다. 아래를 실행하세요.\r\n"
+        "```\r\n"
+        "install_wheels_offline.bat\r\n"
+        "```\r\n"
+        "이 스크립트는 번들 런타임(`python_runtime\\python.exe`)을 대상으로 `wheels\\` 의 오프라인 "
+        "패키지를 설치하고, 끝에 필수 모듈 import 를 검증합니다.\r\n\r\n"
+        "> `mcp` 는 반드시 1.x 여야 합니다. 2.x 는 `mcp.server.fastmcp` 를 제거해(MCPServer 로 개명) "
+        "샌드박스 서버가 기동하지 못합니다.\r\n\r\n"
         "MCP 서버는 `conf.toml` 의 `[mcp_servers.*]` 에서 `enabled = false` 로 개별 비활성화할 수 있습니다.\r\n"
         "모든 서버는 `node`/`python` 진입점을 **직접** 실행합니다. `npx` 는 패키지가 로컬에 없으면 "
         "npm 레지스트리에 접속하므로 폐쇄망에서 사용하지 않습니다.\r\n\r\n"
@@ -479,20 +639,26 @@ def main() -> None:
     log(4, "포터블 파이썬 런타임 복제 중...")
     stage_python_runtime()
 
+    log(5, "번들 런타임에 의존성 설치 중 (오프라인 wheel)...")
+    installed = install_into_runtime(sandbox_source)
+
+    log(6, "번들 런타임 필수 모듈 검증 중...")
+    missing = verify_runtime()
+
     has_node = False
     if args.skip_node:
-        log(5, "Node 런타임 — --skip-node 지정으로 건너뜁니다.")
-        log(6, "Node MCP 서버 — --skip-node 지정으로 건너뜁니다.")
+        log(7, "Node 런타임 — --skip-node 지정으로 건너뜁니다.")
+        log(8, "Node MCP 서버 — --skip-node 지정으로 건너뜁니다.")
     else:
-        log(5, "Node 런타임(node.exe) 준비 중...")
+        log(7, "Node 런타임(node.exe) 준비 중...")
         node_ok = stage_node_runtime(args.node_version)
-        log(6, "공식 Node MCP 서버 설치 중 (filesystem / memory / sequential-thinking)...")
+        log(8, "공식 Node MCP 서버 설치 중 (filesystem / memory / sequential-thinking)...")
         has_node = stage_node_mcp_servers() and node_ok
 
-    log(7, "폐쇄망 전용 실행 스크립트 및 문서 작성 중 (UTF-8 BOM)...")
+    log(9, "폐쇄망 전용 실행 스크립트 및 문서 작성 중 (UTF-8 BOM)...")
     write_launchers(has_node=has_node, has_sandbox=sandbox_source is not None)
 
-    log(8, f"최종 ZIP 아카이브 생성 중 ({ZIP_FILE})...")
+    log(10, f"최종 ZIP 아카이브 생성 중 ({ZIP_FILE})...")
     if ZIP_FILE.exists():
         ZIP_FILE.unlink()
     shutil.make_archive(str(DIST_DIR / "MultiAgentOrchestrator_offline"), "zip", STAGING_DIR)
@@ -508,6 +674,22 @@ def main() -> None:
     print(f"               코드 실행 샌드박스({'포함' if sandbox_source is not None else '미포함'}),")
     print("               실행 스크립트")
     print("=" * 60)
+
+    if missing:
+        print()
+        print("!" * 60)
+        print(" [경고] 번들 런타임에서 다음 모듈을 import 할 수 없습니다:")
+        for module in missing:
+            print(f"   - {module}")
+        print()
+        print(" 이 상태로 배포하면 해당 MCP 서버가 실행 시점에 조용히 빠집니다.")
+        if not installed:
+            print(" 원인: 런타임에 의존성을 설치하지 못했습니다. 위 로그를 확인하세요.")
+        print(" 조치: wheels/.collected 를 지우고 다시 패키징하거나, 아래를 직접 실행하세요.")
+        print(r"   python_runtime\python.exe -m pip install --no-index "
+              r"--find-links=.\wheels -r requirements.txt")
+        print("!" * 60)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
