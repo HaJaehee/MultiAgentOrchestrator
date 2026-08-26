@@ -3,6 +3,8 @@ from typing import Callable, Coroutine, Dict, List, Optional
 from nicegui import ui
 from app.agents.base import Agent
 from app.agents.pool import AgentPool, get_agent_pool
+from app.config import get_config
+from app.mcp.manager import get_mcp_manager
 from app.orchestration.strategies import STRATEGY_MAP
 
 logger = logging.getLogger(__name__)
@@ -31,6 +33,9 @@ class AgentRosterControl:
         self.custom_instr_input: Optional[ui.textarea] = None
         self.expansion: Optional[ui.expansion] = None
         self.summary_badge: Optional[ui.badge] = None
+        self.mcp_row: Optional[ui.row] = None
+        self.mcp_badge: Optional[ui.badge] = None
+        self.mcp_reconnect_btn: Optional[ui.button] = None
 
     def build_ui(self) -> ui.expansion:
         # Expansion defaulted to open as requested
@@ -53,7 +58,23 @@ class AgentRosterControl:
 
                 ui.separator().classes("bg-slate-800 my-1")
 
-                # 2. Control Panel: Rounds & Strategy & Custom Instructions
+                # 2. MCP Tool Servers status
+                with ui.row().classes("w-full items-center justify-between"):
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label("MCP 도구 서버").classes("text-xs font-bold text-slate-300")
+                        self.mcp_badge = ui.badge("-", color="slate-7").props("dense text-xs")
+                    self.mcp_reconnect_btn = (
+                        ui.button(icon="refresh", on_click=self._on_mcp_reconnect)
+                        .props("flat dense round size=sm color=slate-4")
+                    )
+                    self.mcp_reconnect_btn.tooltip("연결되지 않은 MCP 서버 다시 시도")
+
+                self.mcp_row = ui.row().classes("w-full gap-2 flex-wrap items-center")
+                self.refresh_mcp_status()
+
+                ui.separator().classes("bg-slate-800 my-1")
+
+                # 3. Control Panel: Rounds & Strategy & Custom Instructions
                 with ui.row().classes("w-full items-center justify-between gap-3 flex-wrap"):
                     # Strategy Selection
                     with ui.row().classes("items-center gap-2 min-w-[240px]"):
@@ -126,6 +147,85 @@ class AgentRosterControl:
                 f"{f'{agent.sequential_thinking.mode} (max {agent.sequential_thinking.max_steps} steps)' if agent.sequential_thinking.enabled else 'disabled'}\n"
                 f"mcp: {', '.join(agent.allowed_mcp_servers) or '-'}"
             ).classes("whitespace-pre-line text-[10px]")
+
+    def refresh_mcp_status(self) -> None:
+        """conf.toml 의 MCP 서버별 연결 상태를 칩으로 다시 그립니다."""
+        if self.mcp_row is None:
+            return
+
+        try:
+            status = get_mcp_manager().connection_status()
+            configured = get_config().mcp_servers
+        except Exception as e:  # noqa: BLE001 - UI 는 설정 오류로 죽지 않아야 합니다
+            logger.warning(f"Could not read MCP status: {e}")
+            status, configured = {}, {}
+
+        self.mcp_row.clear()
+        connected_count = 0
+
+        with self.mcp_row:
+            if not configured:
+                ui.label("conf.toml 에 등록된 MCP 서버가 없습니다.").classes("text-[10px] text-slate-500")
+            for name, server_cfg in configured.items():
+                info = status.get(name)
+
+                if not server_cfg.enabled:
+                    icon, icon_cls, color, detail = "toggle_off", "text-slate-500", "grey-8", "비활성"
+                    tip = f"{name}: conf.toml 에서 enabled = false"
+                elif info is None:
+                    icon, icon_cls, color, detail = "help_outline", "text-slate-500", "grey-8", "미기동"
+                    tip = f"{name}: 아직 기동되지 않았습니다"
+                elif info["connected"]:
+                    connected_count += 1
+                    icon, icon_cls, color = "check_circle", "text-emerald-400", "green-8"
+                    detail = f"툴 {info['tool_count']}"
+                    tip = f"{name}: 연결됨\ncommand: {info['command']}\n등록된 툴: {info['tool_count']}개"
+                elif info["available"]:
+                    icon, icon_cls, color, detail = "sync_problem", "text-amber-400", "amber-9", "연결 끊김"
+                    tip = f"{name}: 세션이 끊겼습니다. 다음 도구 호출 시 자동 재연결을 시도합니다."
+                else:
+                    icon, icon_cls, color, detail = "error", "text-rose-400", "red-9", "연결 실패"
+                    tip = (f"{name}: 기동 실패\ncommand: {info['command']}\n"
+                           f"{info.get('error') or '원인을 확인할 수 없습니다'}\n"
+                           f"에이전트는 이 서버의 도구 없이 토론을 진행합니다.")
+
+                with ui.element("div").classes(
+                    "flex items-center gap-1 px-2 py-1 rounded-md bg-slate-800/70 border border-slate-700"
+                ):
+                    ui.icon(icon, size="12px").classes(icon_cls)
+                    ui.label(name).classes("text-[10px] font-semibold text-slate-200")
+                    ui.badge(detail, color=color).props("dense")
+                    ui.tooltip(tip).classes("whitespace-pre-line text-[10px]")
+
+        enabled_total = len([c for c in configured.values() if c.enabled])
+        if self.mcp_badge:
+            summary_color = (
+                "green-7" if enabled_total and connected_count == enabled_total
+                else "amber-8" if connected_count
+                else "red-8"
+            )
+            self.mcp_badge.set_text(f"{connected_count}/{enabled_total} 연결됨")
+            self.mcp_badge.props(f"dense color={summary_color}")
+
+    async def _on_mcp_reconnect(self) -> None:
+        """연결되지 않은 MCP 서버를 다시 띄웁니다."""
+        if self.mcp_reconnect_btn:
+            self.mcp_reconnect_btn.disable()
+        try:
+            ui.notify("MCP 서버 재연결을 시도합니다...", type="ongoing", position="bottom-right")
+            changed = await get_mcp_manager().reconnect()
+            self.refresh_mcp_status()
+            if changed:
+                ui.notify("MCP 서버에 다시 연결되었습니다.", type="positive", position="bottom-right")
+            else:
+                ui.notify("재연결할 서버가 없거나 여전히 실패했습니다. 서버 로그를 확인하세요.",
+                          type="warning", position="bottom-right")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"MCP reconnect failed: {e}")
+            ui.notify(f"재연결 중 오류: {e}", type="negative", position="bottom-right")
+        finally:
+            if self.mcp_reconnect_btn:
+                self.mcp_reconnect_btn.enable()
 
     def _on_agent_toggle(self, key: str, value: bool) -> None:
         self.selected_agents[key] = value

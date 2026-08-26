@@ -131,3 +131,33 @@ async def test_reconnects_after_server_process_dies():
         assert int(_field(out2, "pid")) != old_pid, "새 서버 프로세스로 붙지 않았습니다"
     finally:
         await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_connection_status_and_reconnect():
+    """UI 가 쓰는 상태 조회와 재연결 경로."""
+    good = MCPServerConfig(command=sys.executable, args=[FIXTURE_SERVER])
+    bad = MCPServerConfig(command=sys.executable, args=["-m", "no_such_mcp_server_xyz"])
+    manager = MCPManager({"stateful": good, "broken": bad})
+    await manager.initialize()
+    try:
+        status = manager.connection_status()
+        assert status["stateful"]["connected"] is True
+        assert status["stateful"]["tool_count"] > 0
+
+        assert status["broken"]["connected"] is False
+        # 서버가 stderr 로 남긴 실제 원인이 보고되어야 한다
+        # (anyio 의 'unhandled errors in a TaskGroup' 이 아니라)
+        assert "no_such_mcp_server_xyz" in (status["broken"]["error"] or "")
+
+        # 실패한 서버만 다시 시도하며, 여전히 실패하면 False
+        assert await manager.reconnect() is False
+        assert manager.connection_status()["stateful"]["connected"] is True
+
+        # 정상 서버를 지정해 재연결하면 새 프로세스로 붙는다
+        out_before, _ = await manager.execute_tool("stateful__bump", {})
+        assert await manager.reconnect("stateful") is True
+        out_after, _ = await manager.execute_tool("stateful__bump", {})
+        assert _field(out_before, "pid") != _field(out_after, "pid")
+    finally:
+        await manager.shutdown()

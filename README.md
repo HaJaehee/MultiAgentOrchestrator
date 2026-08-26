@@ -230,6 +230,24 @@ mcp_server = "sequential_thinking"  # mcp 모드에서 사용할 MCP 서버 키
 | `coder` | `filesystem`, `sandbox`, `git` |
 | `critic` | `filesystem`, `sandbox`, `git`, `memory` |
 
+#### 연결 상태 확인
+
+에이전트 로스터 패널에 서버별 연결 상태가 칩으로 표시됩니다. 연결 실패 칩에 마우스를
+올리면 실행 명령과 함께 **서버가 stderr 로 남긴 실제 원인**이 보입니다
+(`No module named mcp_server_fetch` 처럼). anyio 가 올리는
+"unhandled errors in a TaskGroup" 은 원인을 담고 있지 않아, 서버 stderr 를 파이프로
+받아 마지막 줄들을 보관합니다.
+
+| 칩 | 뜻 |
+|----|-----|
+| 🟢 `filesystem 툴 14` | 연결됨 · 등록된 도구 수 |
+| 🟠 `연결 끊김` | 세션이 끊김. 다음 도구 호출 시 자동 재연결 |
+| 🔴 `연결 실패` | 기동 실패. 툴팁에 원인 표시 |
+| ⚪ `비활성` | `conf.toml` 에서 `enabled = false` |
+
+헤더의 새로고침 버튼은 연결되지 않은 서버만 다시 띄웁니다. 같은 정보를 `GET /api/mcp`
+로도 조회할 수 있습니다.
+
 #### 세션 수명주기
 
 MCP 세션은 앱 기동 시 서버당 한 번 열고 **종료할 때까지 유지**합니다. 도구 호출마다

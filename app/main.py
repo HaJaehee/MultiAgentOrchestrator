@@ -92,6 +92,25 @@ async def list_agents():
     ]
 
 
+@server.get("/api/mcp")
+async def mcp_status():
+    """MCP 서버별 연결 상태. conf.toml 에서 비활성화한 서버도 함께 보고합니다."""
+    cfg = get_config()
+    status = get_mcp_manager().connection_status()
+    return [
+        {
+            "name": name,
+            "enabled": server_cfg.enabled,
+            "command": server_cfg.command,
+            **(
+                status.get(name)
+                or {"connected": False, "available": False, "tool_count": 0, "error": None}
+            ),
+        }
+        for name, server_cfg in cfg.mcp_servers.items()
+    ]
+
+
 from app.ui.theme import FAVICON_SVG
 
 # 2. Build NiceGUI Application

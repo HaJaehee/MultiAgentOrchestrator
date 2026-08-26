@@ -24,31 +24,17 @@ class MCPManager:
         await self.shutdown()
         self._tool_lookup.clear()
 
-        for name, cfg in self.server_configs.items():
-            client = MCPClientConnection(
-                server_name=name,
-                command=cfg.command,
-                args=cfg.args,
-                env=cfg.env,
-            )
-            self.clients[name] = client
+        for name in self.server_configs:
+            await self._start_client(name)
 
-            try:
-                tools = await client.discover_tools()
-                for tool in tools:
-                    self._tool_lookup[tool.qualified_name] = (client, tool.name)
-                    # Also allow plain tool name if unambiguous
-                    if tool.name not in self._tool_lookup:
-                        self._tool_lookup[tool.name] = (client, tool.name)
-            except Exception as e:
-                logger.error(f"Failed to discover tools for MCP server '{name}': {e}")
-
+        self._rebuild_tool_lookup()
         self._initialized = True
+        tool_total = sum(len(c.tools) for c in self.clients.values())
         connected = [n for n, c in self.clients.items() if c.is_connected]
         failed = [n for n in self.clients if n not in connected]
         logger.info(
             f"MCPManager initialized. Connected: {connected or '-'} | "
-            f"Unavailable: {failed or '-'} | Total registered tools: {len(self._tool_lookup)}"
+            f"Unavailable: {failed or '-'} | Total registered tools: {tool_total}"
         )
 
     async def shutdown(self) -> None:
@@ -61,6 +47,59 @@ class MCPManager:
         self.clients.clear()
         self._initialized = False
 
+    async def _start_client(self, name: str) -> None:
+        """서버 하나를 띄우고 도구를 검색합니다. 실패해도 예외를 올리지 않습니다."""
+        cfg = self.server_configs[name]
+        client = MCPClientConnection(
+            server_name=name,
+            command=cfg.command,
+            args=cfg.args,
+            env=cfg.env,
+        )
+        self.clients[name] = client
+        try:
+            await client.discover_tools()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Failed to discover tools for MCP server '{name}': {e}")
+
+    def _rebuild_tool_lookup(self) -> None:
+        """모든 클라이언트의 도구로 조회 인덱스를 다시 만듭니다."""
+        self._tool_lookup.clear()
+        for client in self.clients.values():
+            for tool in client.tools:
+                self._tool_lookup[tool.qualified_name] = (client, tool.name)
+                # Also allow plain tool name if unambiguous
+                if tool.name not in self._tool_lookup:
+                    self._tool_lookup[tool.name] = (client, tool.name)
+
+    async def reconnect(self, server_name: Optional[str] = None) -> bool:
+        """서버 하나(또는 실패한 서버 전부)를 다시 띄웁니다.
+
+        UI 의 재연결 버튼용입니다. 하나라도 새로 붙었으면 True 를 반환합니다.
+        """
+        if server_name is not None:
+            targets = [server_name] if server_name in self.server_configs else []
+        else:
+            targets = [n for n in self.server_configs
+                       if n not in self.clients or not self.clients[n].is_connected]
+
+        if not targets:
+            return False
+
+        for name in targets:
+            existing = self.clients.pop(name, None)
+            if existing is not None:
+                try:
+                    await existing.close()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Error closing MCP server '{name}' before reconnect: {e}")
+            await self._start_client(name)
+
+        self._rebuild_tool_lookup()
+        reconnected = [n for n in targets if self.clients[n].is_connected]
+        logger.info(f"MCP reconnect requested for {targets} -> connected: {reconnected or '-'}")
+        return bool(reconnected)
+
     def connection_status(self) -> Dict[str, Dict[str, Any]]:
         """서버별 연결 상태 요약 (UI/헬스체크용)."""
         return {
@@ -69,6 +108,7 @@ class MCPManager:
                 "available": client.is_available,
                 "tool_count": len(client.tools),
                 "command": client.command,
+                "error": client.connect_error,
             }
             for name, client in self.clients.items()
         }

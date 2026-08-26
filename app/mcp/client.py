@@ -2,6 +2,9 @@ import asyncio
 import json
 import logging
 import os
+import sys
+import threading
+from collections import deque
 
 import anyio
 from typing import Any, Dict, List, Optional
@@ -11,12 +14,72 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+
+def _describe_exception(exc: Optional[BaseException]) -> str:
+    """ExceptionGroup 을 펼쳐 실제 원인을 문자열로 만듭니다."""
+    if exc is None:
+        return ""
+    nested = getattr(exc, "exceptions", None)
+    if nested:
+        return " / ".join(_describe_exception(sub) for sub in nested)
+    text = str(exc).strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
 # 서버 기동 후 initialize 응답까지 기다리는 한도(초). IPython 커널을 띄우는
 # 샌드박스 서버처럼 초기화가 무거운 경우를 감안한 값입니다.
 STARTUP_TIMEOUT = 60.0
 
 # 종료 신호를 보낸 뒤 프로세스가 정리되기를 기다리는 한도(초).
 SHUTDOWN_TIMEOUT = 10.0
+
+
+class _StderrTee:
+    """서버 stderr 를 콘솔로 흘려보내면서 마지막 몇 줄을 보관합니다.
+
+    기동에 실패하면 anyio 는 "unhandled errors in a TaskGroup" 같은 예외를
+    올릴 뿐 원인을 담고 있지 않습니다. 진짜 원인(`No module named ...`,
+    `command not found` 등)은 서버가 stderr 로 내보내므로 그 꼬리를 남겨
+    UI 툴팁과 로그에 붙입니다.
+
+    `anyio.open_process` 는 실제 파일 디스크립터를 요구하므로 파이썬 객체를
+    그대로 넘길 수 없습니다. 파이프를 만들어 읽기 쪽을 데몬 스레드가 비웁니다.
+    """
+
+    def __init__(self, max_lines: int = 12):
+        self._lines: deque = deque(maxlen=max_lines)
+        read_fd, write_fd = os.pipe()
+        self._handle = os.fdopen(write_fd, "w", buffering=1, encoding="utf-8", errors="replace")
+        self._thread = threading.Thread(target=self._pump, args=(read_fd,), daemon=True)
+        self._thread.start()
+
+    def _pump(self, read_fd: int) -> None:
+        try:
+            with os.fdopen(read_fd, "r", encoding="utf-8", errors="replace") as stream:
+                for line in stream:
+                    stripped = line.rstrip()
+                    if stripped:
+                        self._lines.append(stripped)
+                    sys.stderr.write(line)
+        except Exception:  # noqa: BLE001 - 로깅 보조 경로가 앱을 막으면 안 됩니다
+            pass
+
+    @property
+    def handle(self):
+        return self._handle
+
+    @property
+    def tail(self) -> str:
+        return "\n".join(self._lines)
+
+    def close(self, drain: bool = False) -> None:
+        try:
+            self._handle.close()
+        except Exception:  # noqa: BLE001
+            pass
+        if drain:
+            # 쓰기 쪽을 닫으면 pump 가 EOF 로 끝납니다. 자식이 아직 살아 있으면
+            # 자기 복제본을 들고 있으므로 타임아웃으로 빠져나옵니다.
+            self._thread.join(timeout=1.0)
 
 
 class MCPToolDefinition(BaseModel):
@@ -71,6 +134,7 @@ class MCPClientConnection:
         self._ready: Optional[asyncio.Event] = None
         self._shutdown: Optional[asyncio.Event] = None
         self._connect_error: Optional[BaseException] = None
+        self._stderr_tail: str = ""
         # connect / teardown 직렬화 (도구 호출 자체는 동시 실행 가능)
         self._lock = asyncio.Lock()
 
@@ -87,6 +151,19 @@ class MCPClientConnection:
         """실제 stdio 세션이 살아있는지 여부 (mock 폴백과 구분됩니다)."""
         return self._session is not None
 
+    @property
+    def connect_error(self) -> Optional[str]:
+        """마지막 기동 실패 사유 (UI 표시용). 성공했으면 None.
+
+        서버가 stderr 로 남긴 마지막 줄들을 우선합니다. anyio 예외 문구보다
+        원인을 훨씬 정확히 담고 있기 때문입니다.
+        """
+        if self._connect_error is None and not self._stderr_tail:
+            return None
+        if self._stderr_tail:
+            return self._stderr_tail
+        return _describe_exception(self._connect_error)
+
     def _get_server_params(self) -> StdioServerParameters:
         merged_env = os.environ.copy()
         merged_env.update(self.env)
@@ -101,18 +178,29 @@ class MCPClientConnection:
 
         컨텍스트 진입과 이탈이 모두 이 태스크 안에서 일어나야 합니다.
         """
+        tee = _StderrTee()
+        connected = False
         try:
-            async with stdio_client(self._get_server_params()) as (read_stream, write_stream):
+            async with stdio_client(self._get_server_params(), errlog=tee.handle) as (
+                read_stream,
+                write_stream,
+            ):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
                     self._session = session
                     self._connect_error = None
+                    self._stderr_tail = ""
+                    connected = True
                     self._ready.set()
                     # 종료 요청이 올 때까지 프로세스를 유지합니다.
                     await self._shutdown.wait()
         except Exception as e:  # noqa: BLE001 - 기동 실패는 모두 폴백으로 흡수
             self._connect_error = e
         finally:
+            # 기동에 실패했을 때만 stderr 를 회수합니다 (정상 종료 경로는 대기 없이 닫음).
+            tee.close(drain=not connected)
+            if not connected:
+                self._stderr_tail = tee.tail
             self._session = None
             if self._ready is not None:
                 # 기동에 실패한 경우에도 대기 중인 connect() 를 깨웁니다.
@@ -143,7 +231,7 @@ class MCPClientConnection:
             if self._session is None:
                 logger.warning(
                     f"Could not connect to MCP server '{self.server_name}' "
-                    f"({self.command}): {self._connect_error}"
+                    f"({self.command}): {self.connect_error or _describe_exception(self._connect_error)}"
                 )
                 await self._teardown_locked()
                 return False
