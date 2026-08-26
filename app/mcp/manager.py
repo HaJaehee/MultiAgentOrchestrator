@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 from app.config import MCPServerConfig
-from app.mcp.client import MCPClientConnection, MCPToolDefinition
+from app.mcp.client import MCPClientConnection, MCPToolDefinition, MCPToolError
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +145,9 @@ class MCPManager:
             try:
                 result = await client.execute_tool(actual_tool_name, arguments)
                 return result, "success"
+            except MCPToolError as e:
+                # 서버가 보고한 실패 메시지를 그대로 전달합니다 (모델이 읽고 교정).
+                return e.message, "error"
             except Exception as e:
                 return f"Tool execution failed ({type(e).__name__}): {e}", "error"
 
@@ -155,6 +158,9 @@ class MCPManager:
                 try:
                     result = await self.clients[server_name].execute_tool(actual_tool_name, arguments)
                     return result, "success"
+                except MCPToolError as e:
+                    # 서버가 보고한 실패 메시지를 그대로 전달합니다 (모델이 읽고 교정).
+                    return e.message, "error"
                 except Exception as e:
                     return f"Tool execution failed ({type(e).__name__}): {e}", "error"
 

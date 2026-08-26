@@ -161,3 +161,35 @@ async def test_connection_status_and_reconnect():
         assert _field(out_before, "pid") != _field(out_after, "pid")
     finally:
         await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_tool_level_error_is_reported_as_error():
+    """서버가 isError 로 보고한 실패는 'error' 상태로 전달되어야 한다.
+
+    MCP 는 프로토콜 오류와 도구 실행 오류를 구분한다. 후자는 성공 응답처럼
+    LLM 컨텍스트에 들어가므로, 서버 메시지가 훼손 없이 전달되어야 모델이
+    원인을 읽고 스스로 고칠 수 있다.
+    """
+    manager = MCPManager({"stateful": MCPServerConfig(command=sys.executable, args=[FIXTURE_SERVER])})
+    await manager.initialize()
+    try:
+        ok_out, ok_status = await manager.execute_tool("stateful__bump", {})
+        assert ok_status == "success"
+        assert "count=" in ok_out
+
+        err_out, err_status = await manager.execute_tool(
+            "stateful__fail", {"reason": "잘못된 경로"}
+        )
+        assert err_status == "error", f"isError 가 무시되었습니다: {err_out}"
+        # 서버 메시지가 그대로 남아야 모델이 읽고 교정할 수 있다
+        assert "잘못된 경로" in err_out
+        assert not err_out.startswith("Tool execution failed"), "래핑되어 원문이 가려졌습니다"
+
+        # 실패해도 세션은 살아있어야 한다 (재연결 대상이 아님)
+        assert manager.clients["stateful"].is_connected
+        after_out, after_status = await manager.execute_tool("stateful__bump", {})
+        assert after_status == "success"
+        assert _field(after_out, "count") == "2", "실패 호출이 세션을 재기동시켰습니다"
+    finally:
+        await manager.shutdown()

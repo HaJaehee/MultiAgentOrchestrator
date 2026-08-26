@@ -21,5 +21,11 @@ def bump() -> str:
     return f"count={_state['count']} pid={os.getpid()}"
 
 
+@server.tool()
+def fail(reason: str) -> str:
+    """항상 실패하는 도구. isError 경로 검증용입니다."""
+    raise ValueError(f"의도된 실패: {reason}")
+
+
 if __name__ == "__main__":
     server.run()

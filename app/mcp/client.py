@@ -15,6 +15,22 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 
+class MCPToolError(Exception):
+    """서버가 `isError: true` 로 보고한 도구 실행 실패.
+
+    MCP 는 프로토콜 오류(JSON-RPC error)와 도구 실행 오류를 구분합니다.
+    전자는 클라이언트에서 소비되고 끝나지만, 후자는 성공 응답과 똑같이 LLM
+    컨텍스트에 주입되어야 모델이 원인을 보고 스스로 고칠 수 있습니다.
+    그래서 서버 메시지를 그대로 담아 전달합니다.
+    """
+
+    def __init__(self, server_name: str, tool_name: str, message: str):
+        self.server_name = server_name
+        self.tool_name = tool_name
+        self.message = message
+        super().__init__(message)
+
+
 def _describe_exception(exc: Optional[BaseException]) -> str:
     """ExceptionGroup 을 펼쳐 실제 원인을 문자열로 만듭니다."""
     if exc is None:
@@ -389,7 +405,14 @@ class MCPClientConnection:
 
             try:
                 res = await session.call_tool(tool_name, arguments=arguments)
-                return self._extract_result_text(res)
+                text = self._extract_result_text(res)
+                if getattr(res, "isError", False):
+                    # 도구는 실행됐지만 실패했다. 서버 메시지를 그대로 올려
+                    # 모델이 보고 스스로 고칠 수 있게 한다.
+                    raise MCPToolError(self.server_name, tool_name, text)
+                return text
+            except MCPToolError:
+                raise
             except Exception as e:  # noqa: BLE001
                 # 세션이 죽은 경우에만 재시도합니다. 도구 자체가 실패한 것이라면
                 # 재실행이 부작용(파일 쓰기 등)을 두 번 일으킬 수 있습니다.
