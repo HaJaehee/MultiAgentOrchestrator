@@ -17,8 +17,11 @@ class MCPManager:
         self._initialized = False
 
     async def initialize(self) -> None:
-        """Initializes all configured MCP clients and discovers tools."""
-        self.clients.clear()
+        """Initializes all configured MCP clients and discovers tools.
+
+        각 클라이언트는 여기서 연 세션을 `shutdown()` 까지 유지합니다.
+        """
+        await self.shutdown()
         self._tool_lookup.clear()
 
         for name, cfg in self.server_configs.items():
@@ -41,7 +44,34 @@ class MCPManager:
                 logger.error(f"Failed to discover tools for MCP server '{name}': {e}")
 
         self._initialized = True
-        logger.info(f"MCPManager initialized. Total registered tools: {len(self._tool_lookup)}")
+        connected = [n for n, c in self.clients.items() if c.is_connected]
+        failed = [n for n in self.clients if n not in connected]
+        logger.info(
+            f"MCPManager initialized. Connected: {connected or '-'} | "
+            f"Unavailable: {failed or '-'} | Total registered tools: {len(self._tool_lookup)}"
+        )
+
+    async def shutdown(self) -> None:
+        """열려 있는 모든 MCP 세션과 서버 프로세스를 정리합니다."""
+        for name, client in list(self.clients.items()):
+            try:
+                await client.close()
+            except Exception as e:  # noqa: BLE001 - 종료 경로의 오류는 무시
+                logger.warning(f"Error closing MCP server '{name}': {e}")
+        self.clients.clear()
+        self._initialized = False
+
+    def connection_status(self) -> Dict[str, Dict[str, Any]]:
+        """서버별 연결 상태 요약 (UI/헬스체크용)."""
+        return {
+            name: {
+                "connected": client.is_connected,
+                "available": client.is_available,
+                "tool_count": len(client.tools),
+                "command": client.command,
+            }
+            for name, client in self.clients.items()
+        }
 
     def get_tools_for_servers(self, allowed_servers: List[str]) -> List[MCPToolDefinition]:
         """Returns tool definitions available for the specified server names."""
@@ -76,7 +106,7 @@ class MCPManager:
                 result = await client.execute_tool(actual_tool_name, arguments)
                 return result, "success"
             except Exception as e:
-                return f"Tool execution failed: {str(e)}", "error"
+                return f"Tool execution failed ({type(e).__name__}): {e}", "error"
 
         # Check if qualified name split works e.g. server__tool
         if "__" in tool_name:
@@ -86,7 +116,7 @@ class MCPManager:
                     result = await self.clients[server_name].execute_tool(actual_tool_name, arguments)
                     return result, "success"
                 except Exception as e:
-                    return f"Tool execution failed: {str(e)}", "error"
+                    return f"Tool execution failed ({type(e).__name__}): {e}", "error"
 
         return f"Unknown tool: '{tool_name}'. Available tools: {list(self._tool_lookup.keys())}", "error"
 

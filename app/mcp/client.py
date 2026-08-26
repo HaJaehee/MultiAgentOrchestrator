@@ -2,12 +2,21 @@ import asyncio
 import json
 import logging
 import os
+
+import anyio
 from typing import Any, Dict, List, Optional
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+# 서버 기동 후 initialize 응답까지 기다리는 한도(초). IPython 커널을 띄우는
+# 샌드박스 서버처럼 초기화가 무거운 경우를 감안한 값입니다.
+STARTUP_TIMEOUT = 60.0
+
+# 종료 신호를 보낸 뒤 프로세스가 정리되기를 기다리는 한도(초).
+SHUTDOWN_TIMEOUT = 10.0
 
 
 class MCPToolDefinition(BaseModel):
@@ -35,7 +44,18 @@ class MCPToolDefinition(BaseModel):
 
 
 class MCPClientConnection:
-    """Manages individual MCP Server process lifecycle and tool calls."""
+    """단일 MCP 서버 프로세스의 수명주기와 도구 호출을 관리합니다.
+
+    세션은 최초 연결 시 한 번 열고 계속 유지합니다. 도구 호출마다 프로세스를
+    새로 띄우면 서버가 들고 있는 상태(예: 코드 실행 샌드박스의 네임스페이스별
+    IPython 커널과 그 안의 변수/데이터프레임)가 매번 사라지고, 호출마다 기동
+    비용을 다시 치르게 됩니다.
+
+    stdio 세션은 **자신을 연 태스크(`_serve`)가 끝까지 소유**합니다. anyio 의
+    cancel scope 는 태스크에 묶여 있어, 컨텍스트를 연 태스크가 아닌 곳에서
+    빠져나오면 런타임 에러가 나기 때문입니다. 다른 태스크는 `_session` 으로
+    요청만 보냅니다 (ClientSession 이 요청/응답 다중화를 처리합니다).
+    """
 
     def __init__(self, server_name: str, command: str, args: List[str], env: Optional[Dict[str, str]] = None):
         self.server_name = server_name
@@ -45,6 +65,15 @@ class MCPClientConnection:
         self._tools: List[MCPToolDefinition] = []
         self._is_available = False
 
+        # 살아있는 세션과 그것을 소유한 태스크
+        self._session: Optional[ClientSession] = None
+        self._owner_task: Optional[asyncio.Task] = None
+        self._ready: Optional[asyncio.Event] = None
+        self._shutdown: Optional[asyncio.Event] = None
+        self._connect_error: Optional[BaseException] = None
+        # connect / teardown 직렬화 (도구 호출 자체는 동시 실행 가능)
+        self._lock = asyncio.Lock()
+
     @property
     def tools(self) -> List[MCPToolDefinition]:
         return self._tools
@@ -52,6 +81,11 @@ class MCPClientConnection:
     @property
     def is_available(self) -> bool:
         return self._is_available
+
+    @property
+    def is_connected(self) -> bool:
+        """실제 stdio 세션이 살아있는지 여부 (mock 폴백과 구분됩니다)."""
+        return self._session is not None
 
     def _get_server_params(self) -> StdioServerParameters:
         merged_env = os.environ.copy()
@@ -62,38 +96,139 @@ class MCPClientConnection:
             env=merged_env,
         )
 
-    async def discover_tools(self) -> List[MCPToolDefinition]:
-        """Spawns server, initializes session, discovers tools and caches them."""
-        server_params = self._get_server_params()
+    async def _serve(self) -> None:
+        """세션을 열고 종료 신호가 올 때까지 살려둡니다.
+
+        컨텍스트 진입과 이탈이 모두 이 태스크 안에서 일어나야 합니다.
+        """
         try:
-            async with stdio_client(server_params) as (read_stream, write_stream):
+            async with stdio_client(self._get_server_params()) as (read_stream, write_stream):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
-                    result = await session.list_tools()
-                    discovered: List[MCPToolDefinition] = []
-                    for t in result.tools:
-                        input_schema = getattr(t, "inputSchema", getattr(t, "input_schema", {}))
-                        if hasattr(input_schema, "model_dump"):
-                            input_schema = input_schema.model_dump()
-                        elif not isinstance(input_schema, dict):
-                            input_schema = dict(input_schema) if input_schema else {}
+                    self._session = session
+                    self._connect_error = None
+                    self._ready.set()
+                    # 종료 요청이 올 때까지 프로세스를 유지합니다.
+                    await self._shutdown.wait()
+        except Exception as e:  # noqa: BLE001 - 기동 실패는 모두 폴백으로 흡수
+            self._connect_error = e
+        finally:
+            self._session = None
+            if self._ready is not None:
+                # 기동에 실패한 경우에도 대기 중인 connect() 를 깨웁니다.
+                self._ready.set()
 
-                        discovered.append(
-                            MCPToolDefinition(
-                                server_name=self.server_name,
-                                name=t.name,
-                                description=t.description or "",
-                                input_schema=input_schema,
-                            )
-                        )
-                    self._tools = discovered
-                    self._is_available = True
-                    logger.info(f"Discovered {len(discovered)} tools from MCP server '{self.server_name}'")
-                    return self._tools
-        except Exception as e:
-            logger.warning(f"Could not connect to MCP server '{self.server_name}' ({self.command}): {e}")
+    async def connect(self) -> bool:
+        """세션이 없으면 새로 열고, 사용 가능해졌는지 반환합니다."""
+        async with self._lock:
+            if self._session is not None:
+                return True
+
+            await self._teardown_locked()
+
+            self._ready = asyncio.Event()
+            self._shutdown = asyncio.Event()
+            self._connect_error = None
+            self._owner_task = asyncio.create_task(self._serve(), name=f"mcp-{self.server_name}")
+
+            try:
+                await asyncio.wait_for(self._ready.wait(), timeout=STARTUP_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"MCP server '{self.server_name}' did not initialize within {STARTUP_TIMEOUT}s"
+                )
+                await self._teardown_locked()
+                return False
+
+            if self._session is None:
+                logger.warning(
+                    f"Could not connect to MCP server '{self.server_name}' "
+                    f"({self.command}): {self._connect_error}"
+                )
+                await self._teardown_locked()
+                return False
+
+            logger.info(f"MCP session established for '{self.server_name}'")
+            return True
+
+    async def close(self) -> None:
+        """세션을 닫고 서버 프로세스를 정리합니다."""
+        async with self._lock:
+            await self._teardown_locked()
+
+    async def _teardown_locked(self) -> None:
+        """호출자가 `self._lock` 을 들고 있어야 합니다."""
+        task, self._owner_task = self._owner_task, None
+        if task is None:
+            self._session = None
+            self._ready = None
+            self._shutdown = None
+            return
+
+        if self._shutdown is not None:
+            self._shutdown.set()
+        try:
+            await asyncio.wait_for(task, timeout=SHUTDOWN_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning(f"MCP server '{self.server_name}' did not shut down cleanly; cancelled")
+        except Exception:  # noqa: BLE001 - 종료 경로의 오류는 무시
+            pass
+        finally:
+            self._session = None
+            self._ready = None
+            self._shutdown = None
+
+    def _is_session_dead(self, exc: BaseException) -> bool:
+        """예외가 '세션이 끊겼다'는 신호인지 판정합니다.
+
+        서버 프로세스가 죽어도 소유 태스크는 곧바로 끝나지 않으므로
+        (`_shutdown` 대기 중), 태스크 상태만으로는 판정할 수 없습니다.
+        스트림이 닫혔다는 anyio 예외가 가장 이른 신호입니다.
+        """
+        if self._session is None:
+            return True
+        task = self._owner_task
+        if task is None or task.done():
+            return True
+        return isinstance(
+            exc, (anyio.ClosedResourceError, anyio.BrokenResourceError, anyio.EndOfStream)
+        )
+
+    async def discover_tools(self) -> List[MCPToolDefinition]:
+        """세션을 열고 도구 목록을 받아 캐시합니다."""
+        if not await self.connect():
             self._is_available = False
-            # Fallback mock tools for simulation/testing if external server cannot be spawned
+            # 외부 서버를 띄울 수 없으면 시뮬레이션/테스트용 mock 도구로 폴백합니다.
+            self._tools = self._get_fallback_mock_tools()
+            return self._tools
+
+        session = self._session
+        try:
+            result = await session.list_tools()
+            discovered: List[MCPToolDefinition] = []
+            for t in result.tools:
+                input_schema = getattr(t, "inputSchema", getattr(t, "input_schema", {}))
+                if hasattr(input_schema, "model_dump"):
+                    input_schema = input_schema.model_dump()
+                elif not isinstance(input_schema, dict):
+                    input_schema = dict(input_schema) if input_schema else {}
+
+                discovered.append(
+                    MCPToolDefinition(
+                        server_name=self.server_name,
+                        name=t.name,
+                        description=t.description or "",
+                        input_schema=input_schema,
+                    )
+                )
+            self._tools = discovered
+            self._is_available = True
+            logger.info(f"Discovered {len(discovered)} tools from MCP server '{self.server_name}'")
+            return self._tools
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Tool discovery failed for MCP server '{self.server_name}': {e}")
+            await self.close()
+            self._is_available = False
             self._tools = self._get_fallback_mock_tools()
             return self._tools
 
@@ -150,30 +285,55 @@ class MCPClientConnection:
         return []
 
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """Executes a tool on this MCP server."""
-        if self._is_available:
-            server_params = self._get_server_params()
-            try:
-                async with stdio_client(server_params) as (read_stream, write_stream):
-                    async with ClientSession(read_stream, write_stream) as session:
-                        await session.initialize()
-                        res = await session.call_tool(tool_name, arguments=arguments)
-                        # Extract content from response
-                        if hasattr(res, "content"):
-                            texts = []
-                            for item in res.content:
-                                if hasattr(item, "text"):
-                                    texts.append(item.text)
-                                else:
-                                    texts.append(str(item))
-                            return "\n".join(texts)
-                        return str(res)
-            except Exception as e:
-                logger.error(f"Error executing tool '{tool_name}' on '{self.server_name}': {e}")
-                return f"Error executing tool '{tool_name}': {str(e)}"
+        """유지 중인 세션으로 도구를 실행합니다. 세션이 끊겼으면 1회 재연결합니다."""
+        if not self._is_available:
+            # Execute fallback simulation if server unavailable
+            return self._simulate_tool_execution(tool_name, arguments)
 
-        # Execute fallback simulation if server unavailable
+        for attempt in (1, 2):
+            session = self._session
+            if session is None:
+                if not await self.connect():
+                    return self._simulate_tool_execution(tool_name, arguments)
+                session = self._session
+                if session is None:
+                    return self._simulate_tool_execution(tool_name, arguments)
+
+            try:
+                res = await session.call_tool(tool_name, arguments=arguments)
+                return self._extract_result_text(res)
+            except Exception as e:  # noqa: BLE001
+                # 세션이 죽은 경우에만 재시도합니다. 도구 자체가 실패한 것이라면
+                # 재실행이 부작용(파일 쓰기 등)을 두 번 일으킬 수 있습니다.
+                if attempt == 1 and self._is_session_dead(e):
+                    logger.warning(
+                        f"MCP session for '{self.server_name}' dropped during "
+                        f"'{tool_name}'; reconnecting once ({type(e).__name__})"
+                    )
+                    await self.close()
+                    continue
+                # 호출자(MCPManager)가 'error' 상태로 보고할 수 있도록 전파합니다.
+                logger.error(
+                    f"Error executing tool '{tool_name}' on '{self.server_name}': "
+                    f"{type(e).__name__}: {e}"
+                )
+                raise
+
         return self._simulate_tool_execution(tool_name, arguments)
+
+    @staticmethod
+    def _extract_result_text(res: Any) -> str:
+        """CallToolResult 에서 텍스트 콘텐츠를 뽑아냅니다."""
+        if hasattr(res, "content"):
+            texts = []
+            for item in res.content:
+                if hasattr(item, "text"):
+                    texts.append(item.text)
+                else:
+                    texts.append(str(item))
+            return "\n".join(texts)
+        return str(res)
+
 
     def _simulate_tool_execution(self, tool_name: str, arguments: Dict[str, Any]) -> str:
         """Simulates tool execution locally for offline/test environments."""

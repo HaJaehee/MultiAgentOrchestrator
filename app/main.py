@@ -44,6 +44,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("Shutting down Multi-Agent Orchestrator Platform...")
 
+    # 유지 중인 MCP 세션과 서버 프로세스를 정리합니다.
+    await mcp_mgr.shutdown()
+    logger.info("MCP sessions closed.")
+
 
 # 1. Create FastAPI Application
 server = FastAPI(
