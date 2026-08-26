@@ -22,12 +22,12 @@ def test_tool_definition_to_openai():
 async def test_mcp_manager_discovery_and_execution():
     server_configs = {
         "filesystem": MCPServerConfig(
-            command="npx",
-            args=["-y", "@modelcontextprotocol/server-filesystem", "./workspace"],
+            command="node",
+            args=["./mcp_node/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", "./workspace"],
         ),
         "search": MCPServerConfig(
-            command="npx",
-            args=["-y", "@modelcontextprotocol/server-brave-search"],
+            command="python",
+            args=["-m", "duckduckgo_mcp_server"],
         ),
     }
     manager = MCPManager(server_configs)

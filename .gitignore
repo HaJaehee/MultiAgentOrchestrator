@@ -34,6 +34,9 @@ htmlcov/
 *.sqlite3
 *.log
 workspace/
+# MCP 서버 설치본 (npm install / git clone 으로 로컬에 생성)
+mcp_node/
+mcp_sandbox/
 
 # --- Editors & OS ---
 .vscode/

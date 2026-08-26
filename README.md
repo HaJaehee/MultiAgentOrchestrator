@@ -11,7 +11,8 @@
    - 시스템 기동 시 `conf.toml` 설정 파일로부터 에이전트 풀(Agent Pool)과 MCP 서버를 동적으로 등록.
    - `${OPENAI_API_KEY}`, `${ANTHROPIC_API_KEY}` 등 환경 변수 동적 치환 지원.
 2. **Model Context Protocol (MCP) 내장 호스트 & 도구 연동**:
-   - Filesystem, Web Search 등 외부 MCP 서버와 JSON-RPC stdio 통신.
+   - Filesystem · Memory(지식 그래프) · Git · Python 코드 실행 샌드박스 MCP 서버와 JSON-RPC stdio 통신.
+   - 공식 레퍼런스 서버(Node/Python)와 자체 샌드박스를 **번들로 동봉**하여 폐쇄망에서도 도구 사용 가능.
    - 도구 검색 및 Function Calling 스키마 자동 변환, 실행 결과(Observation) 피드백.
 3. **다양한 LLM 프로바이더 추상화 (LiteLLM)**:
    - OpenAI (`gpt-4o`), Anthropic (`claude-3-5-sonnet`), Google (`gemini-1.5-pro`), Ollama 등 통합 지원.
@@ -64,10 +65,14 @@ graph TD
 ```
 MultiAgentOrchestrator/
 ├── conf.example.toml         # 설정 템플릿 (저장소에 커밋되는 원본)
+├── package_offline.py        # 폐쇄망 배포 번들 패키징 (런타임 + MCP 서버 동봉)
 ├── conf.toml                 # 실제 시스템 설정 파일 (로컬 전용, .gitignore 대상)
 ├── .env.example              # 환경 변수 템플릿
 ├── requirements.txt          # 파이썬 의존성 패키지
 ├── README.md                 # 프로젝트 문서
+├── mcp_node/                 # 공식 Node MCP 서버 (npm install 로 생성, .gitignore 대상)
+├── mcp_sandbox/              # AirgappedPySandbox (git clone 으로 생성, .gitignore 대상)
+├── workspace/                # 에이전트 공용 작업 공간 (.gitignore 대상)
 ├── app/
 │   ├── main.py               # FastAPI + NiceGUI 실행 엔트리포인트
 │   ├── config.py             # TOML 로더, 환경변수 치환 및 Pydantic 검증
@@ -195,6 +200,68 @@ mcp_server = "sequential_thinking"  # mcp 모드에서 사용할 MCP 서버 키
 
 에이전트 블록의 `[agents.<key>.sequential_thinking]` 은 전역 값과 **키 단위로 병합**되므로,
 바꾸고 싶은 항목만 적으면 나머지는 `[llm.sequential_thinking]` 값을 그대로 사용합니다.
+
+### MCP 도구 구성 `[mcp_servers.*]`
+
+기본 구성에는 아래 서버가 등록되어 있습니다. 모든 서버는 진입점을 `node` / `python` 으로
+**직접** 실행합니다 — `npx` 는 패키지가 로컬에 없으면 npm 레지스트리에 접속하므로 폐쇄망에서
+동작하지 않습니다.
+
+| 서버 | 조달 | 툴 | 기본값 | 역할 |
+|------|------|----|--------|------|
+| `filesystem` | Node (공식) | 14 | 활성 | 공용 작업 공간 파일 I/O. 지정 디렉터리 밖 경로는 서버가 차단 |
+| `memory` | Node (공식) | 9 | 활성 | 합의된 사실을 지식 그래프로 축적 (컨텍스트가 잘려도 보존) |
+| `git` | Python (공식) | 12 | 활성 | 산출물 버전 관리. 라운드별 변화를 diff 로 추적 |
+| `sandbox` | Python ([AirgappedPySandbox](https://github.com/HaJaehee/AirgappedPySandbox)) | 5 | 활성 | Python 코드 실제 실행. 에이전트의 주장을 실행으로 판정 |
+| `sequential_thinking` | Node (공식) | 1 | 비활성 | `mode = "mcp"` 를 쓸 때만 필요 |
+| `fetch` | Python (공식) | 1 | 비활성 | URL 조회. **폐쇄망에서는 켜지 마세요** |
+
+> `@modelcontextprotocol/server-brave-search` 는 공식 레포에서 `servers-archived` 로 이관되어
+> 더 이상 유지보수되지 않으므로 기본 구성에서 제외했습니다. 검색이 필요하면 `conf.example.toml`
+> 하단의 DuckDuckGo / SearXNG 예시를 참고하세요.
+
+기본 도구 배분은 다음과 같습니다. Critic 에게 `sandbox` 를 주는 것이 핵심으로, 코드를 직접
+실행해 반박할 수 있어야 검증 역할이 실질적으로 동작합니다.
+
+| 에이전트 | 도구 |
+|----------|------|
+| `orchestrator` | `filesystem`, `memory` |
+| `architect` | `filesystem`, `memory`, `fetch` |
+| `coder` | `filesystem`, `sandbox`, `git` |
+| `critic` | `filesystem`, `sandbox`, `git`, `memory` |
+
+#### 개발 PC 준비 (최초 1회, 인터넷 필요)
+
+```bash
+# Node MCP 서버 (순수 JS — 네이티브 애드온 없음)
+npm install --omit=dev --prefix ./mcp_node \
+  @modelcontextprotocol/server-filesystem \
+  @modelcontextprotocol/server-memory \
+  @modelcontextprotocol/server-sequential-thinking
+
+# Python MCP 서버
+pip install mcp-server-git mcp-server-fetch
+
+# 코드 실행 샌드박스
+git clone --depth 1 https://github.com/HaJaehee/AirgappedPySandbox ./mcp_sandbox
+pip install -r ./mcp_sandbox/requirements-server.txt
+```
+
+#### 실행 경로 재정의
+
+`command` / `args` 도 환경변수 치환을 지원하므로, 개발 PC와 폐쇄망 배포 번들이 `conf.toml`
+하나를 그대로 공유합니다. 값을 비워두면 괄호 안의 기본값이 쓰입니다.
+
+| 변수 | 기본값 | 용도 |
+|------|--------|------|
+| `NODE_BIN` | `node` | Node 실행기 |
+| `PYTHON_BIN` | `python` | Python 실행기 |
+| `MCP_NODE_HOME` | `./mcp_node` | Node MCP 서버 설치 위치 |
+| `MCP_SANDBOX_HOME` | `./mcp_sandbox` | 샌드박스 서버 위치 |
+| `WORKSPACE_DIR` | `./workspace` | 에이전트 공용 작업 공간 |
+| `SANDBOX_KERNEL_PYTHON` | `PYTHON_BIN` | 샌드박스 커널 인터프리터 |
+
+폐쇄망 번들에서는 `run_offline.bat` / `run_offline.ps1` 이 위 값을 자동으로 채웁니다.
 
 ### 로컬 / 사내 엔드포인트 예시
 
