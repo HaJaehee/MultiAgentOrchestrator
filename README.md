@@ -20,16 +20,20 @@
    - 사내 OpenAI 호환 게이트웨이 · vLLM · LM Studio · Ollama 등 **API 키 없는 로컬 엔드포인트도 그대로 사용 가능**.
    - **Sequential Thinking(단계적 사고)** 을 `prompt` / `native` / `mcp` 3가지 모드로 에이전트별 설정.
    - API 키·엔드포인트가 모두 없는 개발/테스트 환경에서도 즉각 구동 가능한 지능형 Fallback 시뮬레이터 내장.
-4. **멀티 에이전트 토론 & 상태 머신 오케스트레이션**:
+4. **세션별 페르소나 & 시스템 프롬프트 (첫 대화 시 고정)**:
+   - `/personas/{session_id}` 편집 페이지에서 에이전트의 이름·역할·시스템 프롬프트를 세션마다 다르게 지정.
+   - 첫 유저 메시지가 기록되는 순간 전 에이전트의 페르소나가 DB 에 스냅샷되고 잠깁니다.
+   - 세션을 나중에 다시 열면 그때 저장된 페르소나로 이어서 토론합니다 (`conf.toml` 이 바뀌었어도 유지).
+5. **멀티 에이전트 토론 & 상태 머신 오케스트레이션**:
    - **Master Orchestrator**: 목표 분해, 발언자 선정, 토론 중재, 합의 검증 및 최종 산출물 합성.
    - **3가지 토론 전략**: 자유 토론 (`free_debate`), 순차 검증 (`sequential_review`), 디베이트 (`adversarial_debate`).
    - 무한 루프 방지를 위한 `max_rounds` 및 `is_consensus_reached` 종료 보장.
-5. **반응형 모던 Web GUI (FastAPI + NiceGUI)**:
+6. **반응형 모던 Web GUI (FastAPI + NiceGUI)**:
    - **좌측 사이드바**: 세션 히스토리, 신규 생성(`+ New Chat`), 이름 변경, 삭제.
    - **상단 제어 패널**: 에이전트 온/오프 토글, 라운드 제한 슬라이더, 전략 선택, 세션별 커스텀 지침.
    - **메인 토론 피드**: 에이전트별 색상/아바타 구분 대화창, 접이식(Accordion) MCP 도구 호출 로그.
    - **우측 산출물 뷰어**: 최종 종합 보고서(Markdown), 소스코드(Code), Mermaid 아키텍처 다이어그램 탭 및 원클릭 복사/다운로드.
-6. **SQLite 영구 저장소 (SQLAlchemy Async)**:
+7. **SQLite 영구 저장소 (SQLAlchemy Async)**:
    - 세션, 메시지, 도구 호출 기록, 최종 아티팩트 영구 보존.
 
 ---
@@ -77,13 +81,14 @@ MultiAgentOrchestrator/
 │   ├── main.py               # FastAPI + NiceGUI 실행 엔트리포인트
 │   ├── config.py             # TOML 로더, 환경변수 치환 및 Pydantic 검증
 │   ├── database/             # SQLite & SQLAlchemy 비동기 ORM
-│   │   ├── models.py         # Session, Message, ToolCallRecord, Artifact 모델
+│   │   ├── models.py         # Session, Message, ToolCallRecord, Artifact, SessionAgent 모델
 │   │   └── session.py        # Async Engine 및 세션 관리
 │   ├── mcp/                  # MCP Host & Tool Integration
 │   │   ├── client.py         # Stdio MCP Client 프로세스 관리자
 │   │   └── manager.py        # 도구 검색 및 Function Calling 디스패치
 │   ├── agents/               # 에이전트 및 LLM 계층
 │   │   ├── base.py           # Agent 모델 및 UI 스타일 매핑
+│   │   ├── personas.py       # 세션별 페르소나 해석·저장·고정
 │   │   ├── llm.py            # LiteLLM 호출기, Tool 루프 및 Fallback
 │   │   └── pool.py           # 동적 에이전트 풀 레지스트리
 │   ├── orchestration/        # 멀티 에이전트 토론 상태 머신
@@ -92,6 +97,7 @@ MultiAgentOrchestrator/
 │   │   └── engine.py         # 오케스트레이션 엔진 & 산출물 합성기
 │   └── ui/                   # NiceGUI 반응형 웹 UI
 │       ├── app.py            # UI 페이지 레이아웃 및 리액티브 바인딩
+│       ├── personas_page.py  # /personas/{session_id} 페르소나 편집 페이지
 │       ├── theme.py          # Quasar CSS 스타일 & 컬러 팔레트
 │       └── components/       # UI 컴포넌트
 │           ├── sidebar.py    # 세션 히스토리 사이드바
@@ -100,6 +106,7 @@ MultiAgentOrchestrator/
 │           └── artifact_viewer.py # 탭형 산출물 뷰어 (Code, Markdown, Mermaid)
 └── tests/                    # 자동화 테스트 스위트
     ├── test_config.py
+    ├── test_personas.py       # 페르소나 편집 → 고정 → 재개 수명주기
     ├── test_llm_settings.py   # [llm] 상속, 엔드포인트/단계적 사고 설정
     ├── test_db.py
     ├── test_mcp.py
@@ -200,6 +207,30 @@ mcp_server = "sequential_thinking"  # mcp 모드에서 사용할 MCP 서버 키
 
 에이전트 블록의 `[agents.<key>.sequential_thinking]` 은 전역 값과 **키 단위로 병합**되므로,
 바꾸고 싶은 항목만 적으면 나머지는 `[llm.sequential_thinking]` 값을 그대로 사용합니다.
+
+### 에이전트 페르소나 (세션별 오버라이드)
+
+`conf.toml` 의 `[agents.*]` 는 **서버 전역 기본값**입니다. 세션마다 다른 인격으로 토론시키려고
+서버를 재기동할 필요는 없습니다.
+
+로스터 패널의 **페르소나 편집** 버튼 → `/personas/{session_id}` 에서 에이전트별로
+**이름 · 역할 · 시스템 프롬프트**를 고칠 수 있습니다. 모델·엔드포인트·도구 권한은 운영 설정이라
+`conf.toml` 에 남습니다.
+
+| 시점 | 상태 | 동작 |
+|------|------|------|
+| 세션 생성 ~ 첫 메시지 직전 | 🟢 편집 가능 | 저장분은 이 세션에만 적용. 손대지 않은 에이전트는 `conf.toml` 기본값 |
+| 첫 유저 메시지 | 🔒 고정 | 그 시점의 유효값이 **전 에이전트**에 대해 `session_agents` 에 기록되고 `personas_locked = true` |
+| 세션 재개 | 🔒 고정 유지 | 저장된 값을 그대로 사용. 그 사이 `conf.toml` 이 바뀌어도 세션은 잠글 때의 인격을 유지 |
+
+토론 도중 인격이 바뀌면 앞선 발언과 뒤의 발언이 서로 다른 화자에서 나오게 되어 기록을 해석할 수
+없습니다. 그래서 첫 메시지 이후로는 UI 가 읽기 전용이 되고, 서버 측에서도 저장 요청을 거부합니다
+(`PersonasLockedError`). 다른 페르소나로 토론하려면 새 세션을 시작하세요.
+
+"기본값과 다름" 뱃지는 **행의 존재가 아니라 값 비교**로 판정합니다. 세션을 잠글 때 손대지 않은
+에이전트까지 전부 스냅샷되므로, 행이 있다는 것만으로는 유저가 수정했는지 알 수 없기 때문입니다.
+
+현재 페르소나와 잠금 여부는 `GET /api/sessions/{session_id}/personas` 로도 확인할 수 있습니다.
 
 ### MCP 도구 구성 `[mcp_servers.*]`
 

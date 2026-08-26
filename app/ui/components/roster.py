@@ -33,6 +33,10 @@ class AgentRosterControl:
         self.custom_instr_input: Optional[ui.textarea] = None
         self.expansion: Optional[ui.expansion] = None
         self.summary_badge: Optional[ui.badge] = None
+        self.session_id: Optional[str] = None
+        self.personas_locked: bool = False
+        self.persona_button: Optional[ui.button] = None
+        self.persona_badge: Optional[ui.badge] = None
         self.mcp_row: Optional[ui.row] = None
         self.mcp_badge: Optional[ui.badge] = None
         self.mcp_reconnect_btn: Optional[ui.button] = None
@@ -49,8 +53,18 @@ class AgentRosterControl:
             with ui.column().classes("w-full p-2 gap-3"):
                 # 1. Agent Selection Cards
                 with ui.row().classes("w-full items-center justify-between"):
-                    ui.label("토론 참여 에이전트 선택").classes("text-xs font-bold text-slate-300")
-                    self.summary_badge = ui.badge("4 Agents Active", color="indigo-7").props("dense text-xs")
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label("토론 참여 에이전트 선택").classes("text-xs font-bold text-slate-300")
+                        self.persona_badge = ui.badge("고정됨", color="amber-8").props("dense text-[9px]")
+                        self.persona_badge.set_visibility(False)
+                    with ui.row().classes("items-center gap-2"):
+                        self.persona_button = (
+                            ui.button("페르소나 편집", icon="badge", on_click=self._open_persona_editor)
+                            .props("flat dense color=indigo-4")
+                            .classes("text-[11px]")
+                        )
+                        self.summary_badge = ui.badge("4 Agents Active", color="indigo-7").props("dense text-xs")
+                self._refresh_persona_controls()
 
                 with ui.row().classes("w-full gap-2 flex-wrap"):
                     for ag in self.agent_pool.list_all():
@@ -147,6 +161,30 @@ class AgentRosterControl:
                 f"{f'{agent.sequential_thinking.mode} (max {agent.sequential_thinking.max_steps} steps)' if agent.sequential_thinking.enabled else 'disabled'}\n"
                 f"mcp: {', '.join(agent.allowed_mcp_servers) or '-'}"
             ).classes("whitespace-pre-line text-[10px]")
+
+    def _open_persona_editor(self) -> None:
+        if not self.session_id:
+            ui.notify("먼저 세션을 선택하거나 새로 만드세요.", type="warning", position="bottom-right")
+            return
+        ui.navigate.to(f"/personas/{self.session_id}")
+
+    def _refresh_persona_controls(self) -> None:
+        """잠금 상태에 따라 버튼 문구와 뱃지를 갱신합니다."""
+        if self.persona_badge:
+            self.persona_badge.set_visibility(self.personas_locked)
+        if self.persona_button:
+            if self.personas_locked:
+                self.persona_button.set_text("페르소나 보기")
+                self.persona_button.props("icon=lock")
+                self.persona_button.tooltip("토론이 시작되어 고정되었습니다. 값은 확인할 수 있습니다.")
+            else:
+                self.persona_button.set_text("페르소나 편집")
+                self.persona_button.props("icon=badge")
+                self.persona_button.tooltip("첫 메시지를 보내기 전까지 이름·역할·시스템 프롬프트를 수정할 수 있습니다")
+
+    def set_personas_locked(self, locked: bool) -> None:
+        self.personas_locked = locked
+        self._refresh_persona_controls()
 
     def refresh_mcp_status(self) -> None:
         """conf.toml 의 MCP 서버별 연결 상태를 칩으로 다시 그립니다."""
@@ -261,14 +299,25 @@ class AgentRosterControl:
             keys = ["orchestrator"] + keys
         return keys
 
-    def load_from_session(self, active_keys: List[str], strategy: str, max_rounds: int, instructions: str) -> None:
+    def load_from_session(
+        self,
+        active_keys: List[str],
+        strategy: str,
+        max_rounds: int,
+        instructions: str,
+        session_id: Optional[str] = None,
+        personas_locked: bool = False,
+    ) -> None:
         for k in self.agent_pool.list_all():
             self.selected_agents[k.key] = (k.key in active_keys) if active_keys else True
         self.strategy_name = strategy
         self.max_rounds = max_rounds
         self.custom_instructions = instructions
+        self.session_id = session_id
+        self.personas_locked = personas_locked
 
         self._update_summary_badge()
+        self._refresh_persona_controls()
         if self.strategy_select:
             self.strategy_select.value = strategy
         if self.rounds_slider:

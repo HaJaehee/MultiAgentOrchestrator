@@ -2,6 +2,7 @@ import contextlib
 import logging
 from typing import AsyncGenerator
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from nicegui import app as nicegui_app, ui
 import uvicorn
 from app.agents.pool import get_agent_pool
@@ -9,6 +10,7 @@ from app.config import get_config
 from app.database.session import init_db
 from app.mcp.manager import get_mcp_manager
 from app.ui.app import create_ui
+from app.ui.personas_page import create_personas_page
 
 # Logging Configuration
 logging.basicConfig(
@@ -92,6 +94,30 @@ async def list_agents():
     ]
 
 
+@server.get("/api/sessions/{session_id}/personas")
+async def session_personas(session_id: str):
+    """세션에서 실제로 쓰이는 에이전트 페르소나와 잠금 여부."""
+    from sqlalchemy import select
+
+    from app.agents.personas import effective_personas
+    from app.agents.pool import get_agent_pool
+    from app.database.models import SessionModel
+    from app.database.session import get_session_factory
+
+    async with get_session_factory()() as db:
+        result = await db.execute(select(SessionModel).where(SessionModel.id == session_id))
+        session_model = result.scalar_one_or_none()
+        if session_model is None:
+            return JSONResponse({"detail": "session not found"}, status_code=404)
+        personas = await effective_personas(db, session_id, get_agent_pool())
+
+    return {
+        "session_id": session_id,
+        "personas_locked": bool(session_model.personas_locked),
+        "agents": [p.model_dump() for p in personas.values()],
+    }
+
+
 @server.get("/api/mcp")
 async def mcp_status():
     """MCP 서버별 연결 상태. conf.toml 에서 비활성화한 서버도 함께 보고합니다."""
@@ -115,6 +141,7 @@ from app.ui.theme import FAVICON_SVG
 
 # 2. Build NiceGUI Application
 create_ui()
+create_personas_page()
 ui.run_with(
     server,
     title="Multi-Agent Orchestrator Platform",

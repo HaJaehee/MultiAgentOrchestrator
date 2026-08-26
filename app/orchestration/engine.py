@@ -7,6 +7,7 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional
 from sqlalchemy import select
 from app.agents.base import Agent
 from app.agents.llm import LLMCaller
+from app.agents.personas import prepare_agents_for_turn
 from app.agents.pool import AgentPool, get_agent_pool
 from app.database.models import ArtifactModel, MessageModel, SessionModel, ToolCallRecordModel
 from app.database.session import get_session_factory
@@ -61,8 +62,14 @@ class OrchestratorEngine:
             if "orchestrator" not in active_keys:
                 active_keys = ["orchestrator"] + active_keys
 
-            active_agents = self.agent_pool.get_active(active_keys)
-            orchestrator_agent = self.agent_pool.get_orchestrator()
+            # 세션 페르소나를 적용합니다. 첫 턴이면 이 시점에 기록되고 잠깁니다.
+            active_agents = await prepare_agents_for_turn(
+                db, session_model, self.agent_pool, active_keys
+            )
+            orchestrator_agent = next(
+                (a for a in active_agents if a.key == "orchestrator"),
+                self.agent_pool.get_orchestrator(),
+            )
 
             # 2. Initialize Debate State
             state = DebateState(

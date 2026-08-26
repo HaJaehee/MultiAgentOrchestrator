@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from typing import Any, List, Optional
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, JSON
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, JSON, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -22,6 +22,8 @@ class SessionModel(Base):
     max_rounds: Mapped[int] = mapped_column(Integer, default=3)
     active_agents: Mapped[List[str]] = mapped_column(JSON, default=list)
     custom_instructions: Mapped[str] = mapped_column(Text, default="")
+    # 첫 유저 메시지가 기록되는 순간 True 가 되며, 이후 페르소나 수정이 금지됩니다.
+    personas_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
@@ -33,6 +35,9 @@ class SessionModel(Base):
     )
     tool_calls: Mapped[List["ToolCallRecordModel"]] = relationship(
         "ToolCallRecordModel", back_populates="session", cascade="all, delete-orphan", order_by="ToolCallRecordModel.created_at", lazy="selectin"
+    )
+    agent_personas: Mapped[List["SessionAgentModel"]] = relationship(
+        "SessionAgentModel", back_populates="session", cascade="all, delete-orphan", order_by="SessionAgentModel.agent_key", lazy="selectin"
     )
 
 
@@ -84,3 +89,26 @@ class ArtifactModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     session: Mapped["SessionModel"] = relationship("SessionModel", back_populates="artifacts")
+
+
+class SessionAgentModel(Base):
+    """세션별 에이전트 페르소나 / 시스템 프롬프트.
+
+    첫 유저 메시지 전에는 유저가 편집한 값을 담는 초안이고, 첫 메시지가 기록되는
+    순간 그 시점의 유효값(초안이 없으면 conf.toml 기본값)이 모든 에이전트에 대해
+    기록되고 세션이 잠깁니다. 이후 세션을 다시 열면 여기 저장된 값이 사용됩니다.
+    """
+
+    __tablename__ = "session_agents"
+    __table_args__ = (UniqueConstraint("session_id", "agent_key", name="uq_session_agent"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    agent_key: Mapped[str] = mapped_column(String(50))
+    name: Mapped[str] = mapped_column(String(100), default="")
+    role: Mapped[str] = mapped_column(String(150), default="")
+    system_prompt: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    session: Mapped["SessionModel"] = relationship("SessionModel", back_populates="agent_personas")

@@ -1,6 +1,18 @@
+import logging
 from typing import AsyncGenerator
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from app.database.models import Base
+
+logger = logging.getLogger(__name__)
+
+# create_all 은 기존 테이블에 컬럼을 추가하지 않습니다. 이미 만들어진 DB 를 쓰는
+# 배포본을 위해, 나중에 도입된 컬럼만 최소한으로 채워 넣습니다.
+_ADDED_COLUMNS = {
+    "sessions": {
+        "personas_locked": "BOOLEAN NOT NULL DEFAULT 0",
+    },
+}
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
@@ -22,9 +34,27 @@ def get_session_factory(db_url: str = "sqlite+aiosqlite:///./multiagent.db") -> 
     return _sessionmaker
 
 
+async def _add_missing_columns(conn) -> None:
+    """기존 DB 에 없는 컬럼을 추가합니다 (SQLite 기준, 멱등)."""
+    for table, columns in _ADDED_COLUMNS.items():
+        exists = await conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name=:t"), {"t": table}
+        )
+        if exists.first() is None:
+            continue  # create_all 이 방금 만든 최신 스키마
+        result = await conn.execute(text(f"PRAGMA table_info({table})"))
+        present = {row[1] for row in result}
+        for column, ddl in columns.items():
+            if column not in present:
+                await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+                logger.info(f"Migrated schema: added {table}.{column}")
+
+
 async def init_db(db_url: str = "sqlite+aiosqlite:///./multiagent.db") -> None:
     engine = get_engine(db_url)
     async with engine.begin() as conn:
+        if engine.dialect.name == "sqlite":
+            await _add_missing_columns(conn)
         await conn.run_sync(Base.metadata.create_all)
 
 

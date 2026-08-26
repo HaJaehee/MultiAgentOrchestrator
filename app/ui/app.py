@@ -40,6 +40,7 @@ def create_ui() -> None:
             sid = await create_new_session_db()
             current_session_id = sid
             sidebar.current_session_id = sid
+            roster_control.set_personas_locked(False)
             await load_session_state(sid)
 
         async def on_config_changed() -> None:
@@ -62,6 +63,7 @@ def create_ui() -> None:
             if not current_session_id:
                 current_session_id = await create_new_session_db(title=prompt[:30])
                 sidebar.current_session_id = current_session_id
+                roster_control.session_id = current_session_id
 
             # Save latest config before running
             await on_config_changed()
@@ -85,6 +87,8 @@ def create_ui() -> None:
                     artifact_viewer.render_artifacts(event.get("artifacts", []))
                 elif etype == "turn_completed":
                     chat_feed.set_busy(False, "토론 완료 및 최종 아티팩트 합성 완료", "Done")
+                    # 첫 턴에서 페르소나가 고정되었으므로 편집 버튼을 잠금 상태로 바꿉니다.
+                    roster_control.set_personas_locked(True)
                     await sidebar.refresh_list()
 
             try:
@@ -163,6 +167,8 @@ def create_ui() -> None:
                         strategy=s_obj.strategy or "free_debate",
                         max_rounds=s_obj.max_rounds or 3,
                         instructions=s_obj.custom_instructions or "",
+                        session_id=sid,
+                        personas_locked=bool(s_obj.personas_locked),
                     )
 
                 # Load messages
