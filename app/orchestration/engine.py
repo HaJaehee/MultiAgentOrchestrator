@@ -83,6 +83,27 @@ class OrchestratorEngine:
                 status="planning",
             )
 
+            # 이전 턴의 대화 기록을 DB에서 로드하여 대화 맥락을 보존합니다.
+            stmt_prev = (
+                select(MessageModel)
+                .where(MessageModel.session_id == session_id)
+                .order_by(MessageModel.created_at)
+            )
+            res_prev = await db.execute(stmt_prev)
+            prev_db_msgs = res_prev.scalars().all()
+            for pm in prev_db_msgs:
+                state.messages.append(
+                    DebateMessage(
+                        id=pm.id,
+                        sender_key=pm.sender_key,
+                        sender_name=pm.sender_name,
+                        sender_role=pm.sender_role,
+                        content=pm.content,
+                        round_number=pm.round_number,
+                        msg_type=pm.msg_type,
+                    )
+                )
+
             # 3. Record User Message in DB
             user_msg_id = str(uuid.uuid4())
             user_msg_db = MessageModel(
@@ -122,15 +143,51 @@ class OrchestratorEngine:
             if on_event:
                 await on_event({"type": "status_changed", "status": "planning", "speaker": orchestrator_agent.name})
 
-            orch_plan_prompt = [
-                {"role": "user", "content": f"[User Request]: {user_prompt}\n\n위 요청을 분석하고 이번 토론의 핵심 목표, 접근 방향, 각 에이전트(Architect, Coder, Critic)에게 부여할 발언 지침을 작성하세요."}
-            ]
-
-            orch_plan_text, orch_tools = await self.llm_caller.call_agent(
-                orchestrator_agent, orch_plan_prompt, custom_instructions
-            )
+            if len(state.messages) > 1:
+                history_snippets = []
+                for m in state.messages[:-1]:
+                    history_snippets.append(f"{m.sender_name}({m.sender_role}): {m.content[:250]}")
+                history_text = "\n".join(history_snippets[-6:])
+                orch_plan_prompt = [
+                    {"role": "user", "content": (
+                        f"[이전 대화 맥락]:\n{history_text}\n\n"
+                        f"[신규 User Request]:\n{user_prompt}\n\n"
+                        "위의 이전 세션 논의 맥락과 새로운 사용자 요청을 종합 분석하여 이번 토론의 핵심 목표, "
+                        "접근 방향, 각 에이전트에게 부여할 발언 지침을 작성하세요."
+                    )}
+                ]
+            else:
+                orch_plan_prompt = [
+                    {"role": "user", "content": f"[User Request]: {user_prompt}\n\n위 요청을 분석하고 이번 토론의 핵심 목표, 접근 방향, 각 에이전트(Architect, Coder, Critic)에게 부여할 발언 지침을 작성하세요."}
+                ]
 
             plan_msg_id = str(uuid.uuid4())
+            if on_event:
+                await on_event({
+                    "type": "message_stream_start",
+                    "message": {
+                        "id": plan_msg_id,
+                        "sender_key": orchestrator_agent.key,
+                        "sender_name": orchestrator_agent.name,
+                        "sender_role": orchestrator_agent.role,
+                        "content": "",
+                        "round_number": 0,
+                        "msg_type": "orchestrator",
+                    },
+                })
+
+            async def _stream_plan_chunk(delta: str):
+                if on_event:
+                    await on_event({
+                        "type": "message_stream_chunk",
+                        "message_id": plan_msg_id,
+                        "delta": delta,
+                    })
+
+            orch_plan_text, orch_tools = await self.llm_caller.call_agent(
+                orchestrator_agent, orch_plan_prompt, custom_instructions, on_chunk=_stream_plan_chunk
+            )
+
             plan_msg_db = MessageModel(
                 id=plan_msg_id,
                 session_id=session_id,
@@ -213,11 +270,33 @@ class OrchestratorEngine:
                                 "tool_call": tool_data,
                             })
 
+                    msg_id = str(uuid.uuid4())
+                    if on_event:
+                        await on_event({
+                            "type": "message_stream_start",
+                            "message": {
+                                "id": msg_id,
+                                "sender_key": agent.key,
+                                "sender_name": agent.name,
+                                "sender_role": agent.role,
+                                "content": "",
+                                "round_number": round_num,
+                                "msg_type": "agent",
+                            },
+                        })
+
+                    async def _stream_agent_chunk(delta: str, current_mid=msg_id):
+                        if on_event:
+                            await on_event({
+                                "type": "message_stream_chunk",
+                                "message_id": current_mid,
+                                "delta": delta,
+                            })
+
                     response_text, tool_logs = await self.llm_caller.call_agent(
-                        agent, agent_context, custom_instructions, on_tool_call=handle_tool_call
+                        agent, agent_context, custom_instructions, on_tool_call=handle_tool_call, on_chunk=_stream_agent_chunk
                     )
 
-                    msg_id = str(uuid.uuid4())
                     msg_db = MessageModel(
                         id=msg_id,
                         session_id=session_id,
@@ -260,9 +339,32 @@ class OrchestratorEngine:
                     "speaker": orchestrator_agent.name,
                 })
 
+            synth_msg_id = str(uuid.uuid4())
+            if on_event:
+                await on_event({
+                    "type": "message_stream_start",
+                    "message": {
+                        "id": synth_msg_id,
+                        "sender_key": orchestrator_agent.key,
+                        "sender_name": orchestrator_agent.name,
+                        "sender_role": orchestrator_agent.role,
+                        "content": "",
+                        "round_number": state.current_round + 1,
+                        "msg_type": "orchestrator",
+                    },
+                })
+
+            async def _stream_synth_chunk(delta: str):
+                if on_event:
+                    await on_event({
+                        "type": "message_stream_chunk",
+                        "message_id": synth_msg_id,
+                        "delta": delta,
+                    })
+
             synth_prompt = self._build_synthesis_prompt(state)
             synth_text, synth_tools = await self.llm_caller.call_agent(
-                orchestrator_agent, synth_prompt, custom_instructions
+                orchestrator_agent, synth_prompt, custom_instructions, on_chunk=_stream_synth_chunk
             )
 
             synth_msg_id = str(uuid.uuid4())
@@ -332,21 +434,25 @@ class OrchestratorEngine:
         context: List[Dict[str, Any]] = []
         context.append({
             "role": "user",
-            "content": f"[User Goal]: {state.user_prompt}\n\n[Debate Progress]: Round {state.current_round} of {state.max_rounds}."
+            "content": f"[User Goal / Current Request]:\n{state.user_prompt}\n\n[Debate Progress]: Round {state.current_round} of {state.max_rounds}."
         })
 
         for msg in state.messages:
             if msg.sender_key == "user":
-                continue
-            role_label = f"[{msg.sender_name} ({msg.sender_role})]"
-            context.append({
-                "role": "assistant" if msg.sender_key == agent.key else "user",
-                "content": f"{role_label}:\n{msg.content}"
-            })
+                context.append({
+                    "role": "user",
+                    "content": f"[User]:\n{msg.content}"
+                })
+            else:
+                role_label = f"[{msg.sender_name} ({msg.sender_role})]"
+                context.append({
+                    "role": "assistant" if msg.sender_key == agent.key else "user",
+                    "content": f"{role_label}:\n{msg.content}"
+                })
 
         context.append({
             "role": "user",
-            "content": f"이제 {agent.name}({agent.role})님의 차례입니다. 앞선 논의와 피드백을 반영하여 발언하고 필요시 도구를 활용해 주세요."
+            "content": f"이제 {agent.name}({agent.role})님의 차례입니다. 앞선 전체 논의 맥락과 직전 발언들을 충실히 반영하여 전문적인 의견을 발언하고 필요시 도구를 활용해 주세요."
         })
         return context
 
@@ -354,7 +460,8 @@ class OrchestratorEngine:
         """Constructs prompt for orchestrator final consensus & artifact generation."""
         transcript_lines = []
         for msg in state.messages:
-            transcript_lines.append(f"### {msg.sender_name} ({msg.sender_role}):\n{msg.content}\n")
+            prefix = "### [User]" if msg.sender_key == "user" else f"### {msg.sender_name} ({msg.sender_role})"
+            transcript_lines.append(f"{prefix}:\n{msg.content}\n")
         full_transcript = "\n".join(transcript_lines)
 
         prompt = (

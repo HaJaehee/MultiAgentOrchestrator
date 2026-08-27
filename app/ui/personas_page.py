@@ -20,6 +20,7 @@ from app.agents.personas import (
     save_persona,
 )
 from app.agents.pool import get_agent_pool
+from app.config import update_agent_persona_in_conf_file
 from app.database.models import MessageModel, SessionModel
 from app.database.session import get_session_factory
 from app.ui.theme import CUSTOM_CSS, FAVICON_SVG
@@ -109,7 +110,7 @@ def create_personas_page() -> None:
                                 "text-sm font-bold text-slate-100"
                             )
                             ui.label(
-                                "저장한 값은 이 세션에만 적용됩니다. conf.toml 의 전역 기본값은 바뀌지 않습니다. "
+                                "저장한 값은 conf.toml 및 이 세션에 즉시 반영됩니다. "
                                 "토론을 시작하면 이 시점의 값이 DB 에 기록되어 세션을 다시 열어도 그대로 사용됩니다."
                             ).classes("text-[11px] text-slate-400 leading-relaxed")
 
@@ -157,9 +158,15 @@ def create_personas_page() -> None:
                     )
                     return
 
+            try:
+                update_agent_persona_in_conf_file(agent_key, name, role, prompt)
+                pool.reload()
+            except Exception as exc:
+                logger.warning(f"conf.toml 업데이트 실패: {exc}")
+
             fields["badge"].set_text("기본값과 다름")
             fields["badge"].set_visibility(True)
-            ui.notify(f"'{name}' 페르소나를 저장했습니다.", type="positive", position="bottom-right")
+            ui.notify(f"'{name}' 페르소나를 저장하고 conf.toml 에 반영했습니다.", type="positive", position="bottom-right")
 
         async def _handle_reset(agent_key: str) -> None:
             async with session_factory() as db:

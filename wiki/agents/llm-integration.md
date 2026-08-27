@@ -32,9 +32,9 @@ flowchart LR
 
 ---
 
-## 2. The Multi-Turn Tool Calling Loop
+## 2. The Multi-Turn Tool Calling Loop & Real-Time Streaming
 
-When an agent has access to MCP tools, [`_run_litellm_loop()`](file:///d:/MultiAgentOrchestrator/app/agents/llm.py#L199-L270) runs an autonomous observation-thought loop up to `max_tool_iterations` (default: 5):
+When an agent has access to MCP tools, [`_run_litellm_loop()`](file:///d:/MultiAgentOrchestrator/app/agents/llm.py#L199-L270) runs an autonomous observation-thought loop up to `max_tool_iterations` (default: 20):
 
 ```mermaid
 sequenceDiagram
@@ -42,15 +42,16 @@ sequenceDiagram
     participant LLM as LiteLLM Model
     participant MCP as MCPManager
 
-    Caller->>LLM: Prompt + Tools Schema
+    Caller->>LLM: Prompt + Tools Schema (stream=True)
+    LLM-->>Caller: Stream Token Chunks (on_chunk -> UI)
     LLM-->>Caller: Assistant Message (tool_calls)
     
-    loop Until No Tool Calls or Max Iterations Reached
+    loop Until No Tool Calls or Max Iterations Reached (Max: 20)
         Caller->>MCP: execute_tool(fn_name, args)
         MCP-->>Caller: Observation Output (status: success/error)
         Caller->>Caller: Append Tool Response to Context
         Caller->>LLM: Re-prompt with Observation Context
-        LLM-->>Caller: Assistant Message
+        LLM-->>Caller: Stream Token Chunks & Assistant Message
     end
 
     Caller-->>Caller: Return Final Text & Tool Logs
@@ -58,7 +59,8 @@ sequenceDiagram
 
 ### Key Behaviors:
 1. **Observation Feedback**: The tool output is appended to the message context with `role: "tool"`. The LLM observes the real output (or error message) and refines its reasoning in the next iteration.
-2. **Real-Time Streaming**: As each tool executes, the `on_tool_call` asynchronous callback dispatches events to the UI, rendering an accordion widget in the chat feed before the agent's text response finishes generating.
+2. **Incremental Token Streaming**: Using `acompletion(stream=True)` and `litellm.stream_chunk_builder`, partial word tokens are streamed to `on_chunk`, dynamically rendering in the UI while tools are accumulating.
+3. **Tool Execution Streaming**: As each tool executes, the `on_tool_call` asynchronous callback dispatches events to the UI, rendering an accordion widget in the chat feed before the agent's text response finishes generating.
 
 ---
 

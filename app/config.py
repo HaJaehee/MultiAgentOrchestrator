@@ -94,6 +94,14 @@ class AppConfig(BaseModel):
     )
     debug: bool = Field(default=True, description="Debug mode")
 
+    @field_validator("port", mode="before")
+    @classmethod
+    def _coerce_port(cls, v: Any) -> int:
+        if isinstance(v, str):
+            v = v.strip()
+            return int(v) if v else 8000
+        return int(v)
+
 
 class MCPServerConfig(BaseModel):
     command: str = Field(description="Command to execute MCP server, e.g. npx or python")
@@ -207,7 +215,7 @@ class LLMConfig(BaseModel):
     )
     extra_headers: Optional[Dict[str, str]] = Field(default=None, description="Extra HTTP headers")
     extra_body: Optional[Dict[str, Any]] = Field(default=None, description="Extra JSON body fields")
-    max_tool_iterations: Optional[int] = Field(default=None, ge=1, le=20)
+    max_tool_iterations: Optional[int] = Field(default=None, ge=1, le=50)
     sequential_thinking: SequentialThinkingConfig = Field(default_factory=SequentialThinkingConfig)
     fallback_to_simulation: bool = Field(
         default=True,
@@ -245,7 +253,7 @@ class AgentConfig(BaseModel):
     )
     extra_headers: Dict[str, str] = Field(default_factory=dict, description="Extra HTTP headers")
     extra_body: Dict[str, Any] = Field(default_factory=dict, description="Extra JSON body fields")
-    max_tool_iterations: int = Field(default=5, ge=1, le=20, description="Max MCP tool-loop iterations per turn")
+    max_tool_iterations: int = Field(default=20, ge=1, le=50, description="Max MCP tool-loop iterations per turn")
     allowed_mcp_servers: List[str] = Field(
         default_factory=list, description="List of MCP server keys this agent can access"
     )
@@ -359,3 +367,105 @@ def get_config(reload: bool = False, config_path: str | Path = "conf.toml") -> R
     if _config is None or reload:
         _config = load_config(config_path)
     return _config
+
+
+def update_agent_persona_in_conf_file(
+    agent_key: str,
+    name: str,
+    role: str,
+    system_prompt: str,
+    config_path: str | Path = "conf.toml",
+) -> None:
+    """Updates name, role, and system_prompt for [agents.<agent_key>] in conf.toml."""
+    path = Path(config_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Configuration file not found: {path.resolve()}")
+
+    content = path.read_text(encoding="utf-8")
+
+    # Format system prompt for TOML (use multiline string if contains newlines)
+    clean_prompt = system_prompt.strip()
+    if "\n" in clean_prompt:
+        escaped_prompt = clean_prompt.replace('"""', r'\"\"\"')
+        prompt_repr = f'"""{escaped_prompt}"""'
+    else:
+        escaped_prompt = clean_prompt.replace("\\", "\\\\").replace('"', r'\"')
+        prompt_repr = f'"{escaped_prompt}"'
+
+    escaped_name = name.strip().replace("\\", "\\\\").replace('"', r'\"')
+    escaped_role = role.strip().replace("\\", "\\\\").replace('"', r'\"')
+
+    target_header = f"[agents.{agent_key}]"
+
+    lines = content.splitlines(keepends=True)
+    in_section = False
+    section_start = -1
+    section_end = len(lines)
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == target_header:
+            in_section = True
+            section_start = i
+            continue
+        if in_section and stripped.startswith("[") and stripped.endswith("]"):
+            section_end = i
+            break
+
+    if section_start == -1:
+        new_section = (
+            f"\n\n{target_header}\n"
+            f'name = "{escaped_name}"\n'
+            f'role = "{escaped_role}"\n'
+            f"system_prompt = {prompt_repr}\n"
+        )
+        content += new_section
+    else:
+        section_lines = lines[section_start:section_end]
+        found_name = False
+        found_role = False
+        found_prompt = False
+
+        new_section_lines = []
+        skip_multiline_prompt = False
+
+        for sline in section_lines:
+            stripped = sline.strip()
+            if skip_multiline_prompt:
+                if '"""' in stripped or "'''" in stripped:
+                    skip_multiline_prompt = False
+                continue
+
+            if re.match(r"^name\s*=", stripped):
+                new_section_lines.append(f'name = "{escaped_name}"\n')
+                found_name = True
+            elif re.match(r"^role\s*=", stripped):
+                new_section_lines.append(f'role = "{escaped_role}"\n')
+                found_role = True
+            elif re.match(r"^system_prompt\s*=", stripped):
+                new_section_lines.append(f"system_prompt = {prompt_repr}\n")
+                found_prompt = True
+                if stripped.startswith('system_prompt = """') and stripped.count('"""') == 1:
+                    skip_multiline_prompt = True
+                elif stripped.startswith("system_prompt = '''") and stripped.count("'''") == 1:
+                    skip_multiline_prompt = True
+            else:
+                new_section_lines.append(sline)
+
+        insertions = []
+        if not found_name:
+            insertions.append(f'name = "{escaped_name}"\n')
+        if not found_role:
+            insertions.append(f'role = "{escaped_role}"\n')
+        if not found_prompt:
+            insertions.append(f"system_prompt = {prompt_repr}\n")
+
+        if insertions:
+            new_section_lines = [new_section_lines[0]] + insertions + new_section_lines[1:]
+
+        lines = lines[:section_start] + new_section_lines + lines[section_end:]
+        content = "".join(lines)
+
+    path.write_text(content, encoding="utf-8")
+    get_config(reload=True, config_path=config_path)
+

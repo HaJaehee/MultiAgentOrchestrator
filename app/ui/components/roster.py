@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import logging
-from typing import Callable, Coroutine, Dict, List, Optional
+from typing import Any, Callable, Coroutine, Dict, List, Optional
 from nicegui import ui
 from app.agents.base import Agent
 from app.agents.pool import AgentPool, get_agent_pool
@@ -40,6 +42,8 @@ class AgentRosterControl:
         self.mcp_row: Optional[ui.row] = None
         self.mcp_badge: Optional[ui.badge] = None
         self.mcp_reconnect_btn: Optional[ui.button] = None
+        self.cards_row: Optional[ui.row] = None
+        self.current_personas: Optional[Dict[str, Any]] = None
 
     def build_ui(self) -> ui.expansion:
         # Expansion defaulted to open as requested
@@ -71,7 +75,8 @@ class AgentRosterControl:
                         self.summary_badge = ui.badge("4 Agents Active", color="indigo-7").props("dense text-xs")
                 self._refresh_persona_controls()
 
-                with ui.row().classes("w-full gap-2 flex-wrap"):
+                self.cards_row = ui.row().classes("w-full gap-2 flex-wrap")
+                with self.cards_row:
                     for ag in self.agent_pool.list_all():
                         self._build_agent_card(ag)
 
@@ -126,9 +131,26 @@ class AgentRosterControl:
 
         return self.expansion
 
-    def _build_agent_card(self, agent: Agent) -> None:
+    def refresh_agent_cards(self, personas: Optional[Dict[str, Any]] = None) -> None:
+        """에이전트 카드 목록을 현재 페르소나 및 풀 상태로 다시 그립니다."""
+        if self.cards_row is None:
+            return
+        if personas is not None:
+            self.current_personas = personas
+        self.agent_pool = get_agent_pool()
+        self.cards_row.clear()
+        with self.cards_row:
+            for ag in self.agent_pool.list_all():
+                p = self.current_personas.get(ag.key) if self.current_personas else None
+                self._build_agent_card(ag, persona=p)
+
+    def _build_agent_card(self, agent: Agent, persona: Optional[Any] = None) -> None:
         is_orchestrator = (agent.key == "orchestrator")
         is_active = self.selected_agents.get(agent.key, True)
+
+        display_name = persona.name if (persona and getattr(persona, "name", None)) else agent.name
+        display_role = persona.role if (persona and getattr(persona, "role", None)) else agent.role
+        is_customized = getattr(persona, "is_customized", False) if persona else False
 
         card_cls = "p-2 rounded-lg border flex-grow max-w-[240px] min-w-[180px] transition-all "
         card_cls += "bg-slate-800/90 border-indigo-500/60" if is_active else "bg-slate-900/60 border-slate-800 opacity-50"
@@ -138,8 +160,11 @@ class AgentRosterControl:
                 with ui.row().classes("items-center gap-2 min-w-0"):
                     ui.avatar(agent.avatar, color=agent.color, text_color="white", size="xs")
                     with ui.column().classes("gap-0 min-w-0"):
-                        ui.label(agent.name).classes("text-xs font-bold truncate")
-                        ui.label(agent.role).classes("text-[9px] text-slate-400 truncate")
+                        with ui.row().classes("items-center gap-1 no-wrap"):
+                            ui.label(display_name).classes("text-xs font-bold truncate")
+                            if is_customized:
+                                ui.badge("수정됨", color="indigo-7").props("dense text-[8px]")
+                        ui.label(display_role).classes("text-[9px] text-slate-400 truncate")
 
                 if is_orchestrator:
                     ui.badge("필수", color="indigo-9").props("dense text-[9px]")
@@ -312,7 +337,9 @@ class AgentRosterControl:
         instructions: str,
         session_id: Optional[str] = None,
         personas_locked: bool = False,
+        personas: Optional[Dict[str, Any]] = None,
     ) -> None:
+        self.agent_pool = get_agent_pool()
         for k in self.agent_pool.list_all():
             self.selected_agents[k.key] = (k.key in active_keys) if active_keys else True
         self.strategy_name = strategy
@@ -320,7 +347,10 @@ class AgentRosterControl:
         self.custom_instructions = instructions
         self.session_id = session_id
         self.personas_locked = personas_locked
+        if personas is not None:
+            self.current_personas = personas
 
+        self.refresh_agent_cards(self.current_personas)
         self._update_summary_badge()
         self._refresh_persona_controls()
         if self.strategy_select:

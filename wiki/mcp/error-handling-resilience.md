@@ -58,6 +58,10 @@ When a tool invocation fails because the underlying stdio process died:
 - [`MCPClientConnection.call_tool()`](file:///d:/MultiAgentOrchestrator/app/mcp/client.py) detects the broken pipe and attempts **exactly one automatic reconnection**.
 - If reconnection succeeds, the call proceeds.
 - If a tool invocation fails logically (`isError: true` with a live server), **no retry is attempted**. Automatically retrying side-effecting operations (such as file appending or git commits) could cause duplicate operations or state corruption.
+- **Process Teardown & Windows Safety**: The client tracks `_process_pid` from the stdio context. During teardown or shutdown, the child process is terminated explicitly before awaiting the owner task, ensuring Windows process handles and I/O pipes close cleanly without hanging or leaving orphan processes.
+- **App Crash Isolation & Watcher Exclusion**:
+  - `(Exception, BaseException)` blocks wrap tool execution and client teardown to prevent unhandled `BaseExceptionGroup` instances from crashing the host process.
+  - Uvicorn's file watcher explicitly excludes `workspace/`, `*.db*`, and `.git/` so that file operations performed by sandbox or filesystem tools do not trigger false hot-reloads and application restarts.
 
 ---
 

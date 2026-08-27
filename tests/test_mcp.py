@@ -98,6 +98,23 @@ async def test_session_is_reused_across_tool_calls():
     assert manager.clients == {}, "shutdown 후에도 클라이언트가 남아 있습니다"
 
 
+def _is_process_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        import ctypes
+        handle = ctypes.windll.kernel32.OpenProcess(0x0400, False, pid)
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 @pytest.mark.asyncio
 async def test_shutdown_terminates_server_process():
     """shutdown 이후에는 서버 프로세스가 실제로 종료되어야 한다."""
@@ -109,9 +126,7 @@ async def test_shutdown_terminates_server_process():
     await manager.shutdown()
 
     for _ in range(50):  # 프로세스 정리까지 최대 5초 대기
-        try:
-            os.kill(pid, 0)
-        except OSError:
+        if not _is_process_alive(pid):
             break
         await asyncio.sleep(0.1)
     else:
@@ -131,7 +146,7 @@ async def test_reconnects_after_server_process_dies():
         out, _ = await manager.execute_tool("stateful__bump", {})
         old_pid = int(_field(out, "pid"))
 
-        os.kill(old_pid, signal.SIGKILL)
+        os.kill(old_pid, getattr(signal, "SIGKILL", signal.SIGTERM))
         await asyncio.sleep(0.5)
 
         out2, status2 = await manager.execute_tool("stateful__bump", {})

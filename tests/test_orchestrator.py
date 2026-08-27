@@ -42,12 +42,13 @@ def test_debate_strategies_sequencing():
 
 @pytest.mark.asyncio
 async def test_orchestrator_engine_turn_e2e():
+    import uuid
     db_url = "sqlite+aiosqlite:///:memory:"
     await init_db(db_url)
     session_factory = get_session_factory(db_url)
 
     # Create session in DB
-    sid = "test-session-e2e"
+    sid = f"test-session-e2e-{uuid.uuid4().hex[:8]}"
     async with session_factory() as db:
         session = SessionModel(
             id=sid,

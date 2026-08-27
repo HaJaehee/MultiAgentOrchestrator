@@ -1,0 +1,158 @@
+import asyncio
+import os
+import sys
+import tempfile
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from app.config import AppConfig, load_config, update_agent_persona_in_conf_file
+from app.agents.base import Agent
+from app.agents.pool import AgentPool
+from app.agents.llm import LLMCaller
+from app.database.models import MessageModel, SessionModel
+from app.database.session import get_session_factory
+from app.mcp.client import _handle_list_roots, MCPClientConnection
+from app.orchestration.engine import OrchestratorEngine
+from app.orchestration.state import DebateState
+
+
+def test_persona_persistence_in_conf_file():
+    sample_conf = """
+[app]
+host = "127.0.0.1"
+port = 8000
+
+[agents.orchestrator]
+name = "Lead Orchestrator"
+role = "Orchestrator"
+system_prompt = "Coordinate team."
+
+[agents.coder]
+name = "Original Coder"
+role = "Developer"
+description = "Old description"
+system_prompt = "Write code."
+"""
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".toml") as tmp:
+        tmp.write(sample_conf)
+        tmp_path = tmp.name
+
+    try:
+        update_agent_persona_in_conf_file(
+            agent_key="coder",
+            name="New Lead Developer",
+            role="Tech Lead",
+            system_prompt="Architect and code.",
+            config_path=tmp_path,
+        )
+
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            updated = f.read()
+
+        assert "New Lead Developer" in updated
+        assert "Tech Lead" in updated
+        assert "Architect and code." in updated
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def test_host_and_port_precedence_hierarchy():
+    # 1. Test .env resolution into conf.toml structure
+    with patch.dict(os.environ, {"APP_HOST": "192.168.1.100", "APP_PORT": "9090"}):
+        cfg = load_config("conf.toml")
+        assert cfg.app.host == "192.168.1.100"
+        assert cfg.app.port == 9090
+
+    # 2. Test fallback to defaults when .env not set
+    with patch.dict(os.environ, {}, clear=True):
+        cfg_default = load_config("conf.example.toml")
+        assert cfg_default.app.host == "127.0.0.1"
+        assert cfg_default.app.port == 8000
+
+
+@pytest.mark.asyncio
+async def test_mcp_roots_capability():
+    res = await _handle_list_roots()
+    assert len(res.roots) > 0
+    assert res.roots[0].name == "workspace"
+    assert str(res.roots[0].uri).startswith("file://")
+
+
+@pytest.mark.asyncio
+async def test_context_retention_across_turns():
+    import uuid
+    from app.database.session import init_db
+    await init_db()
+    session_factory = get_session_factory()
+    session_id = f"test_retention_{uuid.uuid4().hex[:8]}"
+
+    async with session_factory() as db:
+        sess = SessionModel(id=session_id, title="Test Retention Session", max_rounds=1)
+        db.add(sess)
+        m1 = MessageModel(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            sender_key="user",
+            sender_name="User",
+            sender_role="Client",
+            content="첫 번째 질문입니다. 프로젝트의 이름은 'Alpha'로 결정되었습니다.",
+            round_number=0,
+            msg_type="user",
+        )
+        m2 = MessageModel(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            sender_key="architect",
+            sender_name="Architect",
+            sender_role="System Architect",
+            content="네, 프로젝트 Alpha의 아키텍처를 준비하겠습니다.",
+            round_number=1,
+            msg_type="agent",
+        )
+        db.add(m1)
+        db.add(m2)
+        await db.commit()
+
+    engine = OrchestratorEngine()
+    events = []
+
+    async def on_event(ev):
+        events.append(ev)
+
+    state = await engine.run_turn(
+        session_id=session_id,
+        user_prompt="두 번째 질문: Alpha 프로젝트의 다음 마일스톤은 무엇인가요?",
+        on_event=on_event,
+    )
+
+    # Verify that previous messages were loaded into state.messages
+    sender_contents = [m.content for m in state.messages]
+    assert any("프로젝트의 이름은 'Alpha'로 결정되었습니다" in c for c in sender_contents)
+    assert any("Alpha 프로젝트의 다음 마일스톤은 무엇인가요" in c for c in sender_contents)
+
+
+@pytest.mark.asyncio
+async def test_streaming_chunks_invoked():
+    agent = Agent(
+        key="coder",
+        name="Coder",
+        role="Engineer",
+        model="offline-simulator",
+        api_base=None,
+        api_key=None,
+    )
+    llm_caller = LLMCaller()
+
+    streamed_chunks = []
+
+    async def on_chunk(chunk: str):
+        streamed_chunks.append(chunk)
+
+    messages = [{"role": "user", "content": "비동기 서버 코드를 작성해주세요."}]
+    content, logs = await llm_caller.call_agent(agent, messages, on_chunk=on_chunk)
+
+    assert len(content) > 0
+    assert len(streamed_chunks) > 0
+    assert "".join(streamed_chunks).strip() == content.strip()

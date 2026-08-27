@@ -20,6 +20,7 @@ class ChatFeed:
         self.input_field: Optional[ui.input] = None
         self.send_button: Optional[ui.button] = None
         self.is_busy: bool = False
+        self._active_streams: Dict[str, Dict[str, Any]] = {}
 
     def build_ui(self) -> ui.column:
         # flex-nowrap 없이는 내용이 카드보다 커질 때 입력 바가 다음 열로 줄바꿈되어
@@ -89,13 +90,69 @@ class ChatFeed:
             self.round_badge.set_text(round_info)
 
     def clear(self) -> None:
+        self._active_streams.clear()
         if self.message_container:
             self.message_container.clear()
             with self.message_container:
                 self._render_empty_placeholder()
 
+    def start_streaming_message(self, msg: Dict[str, Any]) -> None:
+        """Starts a streaming message card in the feed."""
+        if not self.message_container:
+            return
+        msg_id = msg.get("id", "")
+        if not msg_id:
+            return
+
+        # If placeholder was present, remove it
+        if len(self.message_container.default_slot.children) == 1 and not hasattr(msg, "get"):
+            self.message_container.clear()
+
+        if msg_id in self._active_streams:
+            return
+
+        with self.message_container:
+            info = self._render_streaming_card(msg)
+            self._active_streams[msg_id] = info
+
+        if self.scroll_area:
+            self.scroll_area.scroll_to(percent=1.0)
+
+    def append_stream_chunk(self, msg_id: str, delta: str) -> None:
+        """Appends a text chunk to an actively streaming message card."""
+        info = self._active_streams.get(msg_id)
+        if not info:
+            return
+        info["content"] += delta
+        info["markdown"].set_content(info["content"])
+        if self.scroll_area:
+            self.scroll_area.scroll_to(percent=1.0)
+
+    def finalize_streaming_message(self, msg: Dict[str, Any]) -> None:
+        """Finalizes a streaming card, updating final content and adding tool calls if present."""
+        msg_id = msg.get("id", "")
+        info = self._active_streams.pop(msg_id, None)
+        if info:
+            final_content = msg.get("content", info["content"])
+            info["markdown"].set_content(final_content)
+            tool_calls = msg.get("tool_calls", [])
+            if tool_calls and info.get("tool_container"):
+                with info["tool_container"]:
+                    for tc in tool_calls:
+                        self._render_tool_accordion(tc)
+        else:
+            self.append_message(msg)
+
+        if self.scroll_area:
+            self.scroll_area.scroll_to(percent=1.0)
+
     def append_message(self, msg: Dict[str, Any]) -> None:
         if not self.message_container:
+            return
+
+        msg_id = msg.get("id", "")
+        if msg_id and msg_id in self._active_streams:
+            self.finalize_streaming_message(msg)
             return
 
         # If placeholder was present, remove it
@@ -111,6 +168,7 @@ class ChatFeed:
     def render_all(self, messages: List[Dict[str, Any]]) -> None:
         if not self.message_container:
             return
+        self._active_streams.clear()
         self.message_container.clear()
         if not messages:
             with self.message_container:
@@ -123,6 +181,45 @@ class ChatFeed:
 
         if self.scroll_area:
             self.scroll_area.scroll_to(percent=1.0)
+
+    def _render_streaming_card(self, msg: Dict[str, Any]) -> Dict[str, Any]:
+        sender_key = msg.get("sender_key", "agent")
+        sender_name = msg.get("sender_name", "Agent")
+        sender_role = msg.get("sender_role", "")
+        content = msg.get("content", "")
+        msg_type = msg.get("msg_type", "agent")
+        round_num = msg.get("round_number", 0)
+
+        style = AGENT_STYLE_MAP.get(sender_key, AGENT_STYLE_MAP["user"])
+        avatar_icon = style["avatar"]
+
+        is_user = (msg_type == "user" or sender_key == "user")
+        is_orchestrator = (msg_type == "orchestrator" or sender_key == "orchestrator")
+
+        card_bg = (
+            "bg-blue-950/40 border-blue-800/60" if is_user
+            else ("bg-indigo-950/50 border-indigo-500/70" if is_orchestrator else "bg-slate-900/90 border-slate-800")
+        )
+
+        with ui.card().classes(f"w-full p-3.5 rounded-xl border {card_bg} shadow-md") as card:
+            with ui.row().classes("w-full items-center justify-between mb-1.5"):
+                with ui.row().classes("items-center gap-2"):
+                    ui.avatar(avatar_icon, color=style["color"], text_color="white", size="sm")
+                    with ui.column().classes("gap-0"):
+                        with ui.row().classes("items-center gap-2"):
+                            ui.label(sender_name).classes("text-sm font-bold text-slate-100")
+                            if sender_role:
+                                ui.badge(sender_role, color=style["color"]).props("dense text-[10px]")
+
+                if round_num > 0:
+                    ui.badge(f"Round {round_num}", color="slate-700").props("dense text-[10px]")
+
+            with ui.column().classes("w-full prose prose-invert max-w-none text-sm text-slate-200"):
+                md = ui.markdown(content)
+
+            tool_container = ui.column().classes("w-full mt-2 gap-1")
+
+        return {"card": card, "markdown": md, "content": content, "tool_container": tool_container}
 
     def _render_message_card(self, msg: Dict[str, Any]) -> None:
         sender_key = msg.get("sender_key", "agent")

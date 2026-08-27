@@ -81,6 +81,10 @@ def create_ui() -> None:
                     r = event.get("round", 1)
                     mr = event.get("max_rounds", 3)
                     chat_feed.set_busy(True, f"Round {r}/{mr} 전문가 토론 진행 중...", f"Round {r}/{mr}")
+                elif etype == "message_stream_start":
+                    chat_feed.start_streaming_message(event.get("message", {}))
+                elif etype == "message_stream_chunk":
+                    chat_feed.append_stream_chunk(event.get("message_id", ""), event.get("delta", ""))
                 elif etype == "message_added":
                     chat_feed.append_message(event.get("message", {}))
                 elif etype == "artifacts_synthesized":
@@ -171,6 +175,8 @@ def create_ui() -> None:
                 res_s = await db.execute(stmt_s)
                 s_obj = res_s.scalar_one_or_none()
                 if s_obj:
+                    from app.agents.personas import effective_personas
+                    personas = await effective_personas(db, sid, roster_control.agent_pool)
                     roster_control.load_from_session(
                         active_keys=s_obj.active_agents or [],
                         strategy=s_obj.strategy or "free_debate",
@@ -178,6 +184,7 @@ def create_ui() -> None:
                         instructions=s_obj.custom_instructions or "",
                         session_id=sid,
                         personas_locked=bool(s_obj.personas_locked),
+                        personas=personas,
                     )
 
                 # Load messages

@@ -73,6 +73,7 @@ class LLMCaller:
         messages: List[Dict[str, Any]],
         custom_instructions: str = "",
         on_tool_call: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        on_chunk: Optional[Callable[[str], Any]] = None,
     ) -> Tuple[str, List[Dict[str, Any]]]:
         """
         Executes a turn for the given agent.
@@ -89,7 +90,7 @@ class LLMCaller:
         # Real endpoint if an API URL, an API key, or a keyless local runtime is configured
         if agent.is_live:
             try:
-                content, logs = await self._run_litellm_loop(agent, formatted_messages, tools, on_tool_call)
+                content, logs = await self._run_litellm_loop(agent, formatted_messages, tools, on_tool_call, on_chunk=on_chunk)
                 return self._apply_show_steps(agent, content), logs
             except Exception as e:
                 detail = (
@@ -107,7 +108,7 @@ class LLMCaller:
             )
 
         # Fallback Simulation Mode
-        return await self._run_simulated_turn(agent, formatted_messages, tools, on_tool_call)
+        return await self._run_simulated_turn(agent, formatted_messages, tools, on_tool_call, on_chunk=on_chunk)
 
     def _apply_show_steps(self, agent: Agent, content: str) -> str:
         """Strips the reasoning steps when sequential_thinking.show_steps is disabled."""
@@ -203,6 +204,7 @@ class LLMCaller:
         tools: List[Dict[str, Any]],
         on_tool_call: Optional[Callable[[Dict[str, Any]], Any]] = None,
         max_tool_iterations: Optional[int] = None,
+        on_chunk: Optional[Callable[[str], Any]] = None,
     ) -> Tuple[str, List[Dict[str, Any]]]:
         tool_logs: List[Dict[str, Any]] = []
         current_messages = list(messages)
@@ -210,9 +212,34 @@ class LLMCaller:
 
         for iteration in range(iterations):
             kwargs = self.build_completion_kwargs(agent, current_messages, tools)
-            response = await litellm.acompletion(**kwargs)
-            choice = response.choices[0]
-            message = choice.message
+            try:
+                response = await litellm.acompletion(**kwargs, stream=True)
+                chunks = []
+                async for chunk in response:
+                    chunks.append(chunk)
+                    content_delta = (
+                        chunk.choices[0].delta.content
+                        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content
+                        else None
+                    )
+                    if content_delta and on_chunk:
+                        if asyncio.iscoroutinefunction(on_chunk):
+                            await on_chunk(content_delta)
+                        else:
+                            on_chunk(content_delta)
+                complete_response = litellm.stream_chunk_builder(chunks, messages=current_messages)
+                choice = complete_response.choices[0]
+                message = choice.message
+            except Exception as exc:
+                logger.debug(f"Streaming completion failed or not supported ({exc}); falling back to standard completion")
+                response = await litellm.acompletion(**kwargs)
+                choice = response.choices[0]
+                message = choice.message
+                if message.content and on_chunk:
+                    if asyncio.iscoroutinefunction(on_chunk):
+                        await on_chunk(message.content)
+                    else:
+                        on_chunk(message.content)
 
             # Check for tool calls
             tool_calls = getattr(message, "tool_calls", None)
@@ -260,6 +287,7 @@ class LLMCaller:
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]],
         on_tool_call: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        on_chunk: Optional[Callable[[str], Any]] = None,
     ) -> Tuple[str, List[Dict[str, Any]]]:
         """Generates contextual simulated response and mock tool calls when LLM API keys are absent."""
         await asyncio.sleep(0.6)  # Simulate network latency
@@ -357,5 +385,15 @@ class LLMCaller:
             )
         else:
             response_content = f"[{agent.name} 발언]\n요청 사항 **「{user_prompt}」**에 대해 전문적인 관점에서 검토 및 의견을 제출합니다."
+
+        if on_chunk:
+            words = response_content.split(" ")
+            for i, w in enumerate(words):
+                piece = w + (" " if i < len(words) - 1 else "")
+                if asyncio.iscoroutinefunction(on_chunk):
+                    await on_chunk(piece)
+                else:
+                    on_chunk(piece)
+                await asyncio.sleep(0.015)
 
         return response_content, tool_logs

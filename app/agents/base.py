@@ -33,7 +33,7 @@ class Agent(BaseModel):
     drop_params: bool = True
     extra_headers: Dict[str, str] = Field(default_factory=dict)
     extra_body: Dict[str, Any] = Field(default_factory=dict)
-    max_tool_iterations: int = 5
+    max_tool_iterations: int = 20
     allowed_mcp_servers: List[str] = Field(default_factory=list)
     sequential_thinking: SequentialThinkingConfig = Field(default_factory=SequentialThinkingConfig)
     system_prompt: str = ""

@@ -44,19 +44,20 @@ flowchart TD
 ## 2. Phase Breakdown
 
 ### Phase 1: Planning & Goal Decomposition
-1. The user's input is saved as a `MessageModel` with `sender_key = "user"` and `round_number = 0`.
-2. The engine invokes the **Master Orchestrator** with a planning prompt.
-3. The Orchestrator deconstructs the request, identifies system constraints, and assigns specific responsibilities to each participating specialist (Architect, Coder, Critic).
-4. The plan is streamed to the UI and committed to the database.
+1. **Multi-Turn Context Restoration**: At the start of a turn, the engine loads all previous `MessageModel` records for the session from SQLite into `state.messages`. This ensures previous user prompts and agent remarks are fully restored.
+2. The user's input is saved as a `MessageModel` with `sender_key = "user"` and `round_number = 0`.
+3. The engine invokes the **Master Orchestrator** with a planning prompt (which incorporates a summary of past session history if multiple turns have occurred).
+4. The Orchestrator deconstructs the request, identifies system constraints, and assigns specific responsibilities to each participating specialist (Architect, Coder, Critic).
+5. The plan is streamed incrementally to the UI and committed to the database.
 
 ### Phase 2: Multi-Round Specialist Debate Loop
 For each round $r \in [1, \text{max\_rounds}]$:
 1. The active strategy (e.g. `sequential_review`) determines the speaker order.
 2. For each agent in the speaker list:
-   - [`_build_context_for_agent()`](file:///d:/MultiAgentOrchestrator/app/orchestration/engine.py#L330-L352) creates a structured discussion transcript labeled by speaker name and role.
-   - The agent executes its turn using [`LLMCaller.call_agent()`](file:///d:/MultiAgentOrchestrator/app/agents/llm.py).
+   - [`_build_context_for_agent()`](file:///d:/MultiAgentOrchestrator/app/orchestration/engine.py#L330-L352) constructs a structured discussion transcript labeled by speaker name and role, including past user questions (`[User]: ...`) and prior agent remarks to guarantee full conversation continuity.
+   - The engine emits `message_stream_start` and streams response tokens via `message_stream_chunk` events in real time.
    - If the agent calls MCP tools (e.g. reading files or executing code in the sandbox), every tool invocation is stored in the database (`ToolCallRecordModel`) and streamed to the UI as a real-time event.
-   - The agent's final text response is saved in the database (`MessageModel`) and appended to the debate feed.
+   - Once completed, the agent's full text response is finalized in the database (`MessageModel`) and emitted via `message_added`.
 
 ### Phase 3: Consensus & Synthesis
 1. Once all debate rounds conclude, the engine transitions to `status = "synthesizing"`.
@@ -82,7 +83,9 @@ async def on_event(event: Dict[str, Any]) -> None:
 | :--- | :--- | :--- |
 | `status_changed` | `status`, `speaker`, `round` | Updates progress banner in the chat header. |
 | `round_started` | `round`, `max_rounds` | Displays round transition notifications. |
-| `message_added` | `message` dictionary | Appends new color-coded message bubble to feed. |
+| `message_stream_start` | `msg_id`, `sender_key`, `sender_name`, `sender_role` | Creates an in-flight streaming message card in the chat feed. |
+| `message_stream_chunk` | `message_id`, `delta` | Appends streaming token chunks to the active markdown message card. |
+| `message_added` | `message` dictionary | Finalizes or appends color-coded message bubble to feed. |
 | `tool_executed` | `agent_key`, `agent_name`, `tool_call` | Appends collapsible accordion item showing input & output. |
 | `artifacts_synthesized` | `artifacts` list | Populates code, markdown, and Mermaid tabs in Artifact Viewer. |
 | `turn_completed` | `status: "completed"` | Re-enables user input and marks personas locked. |

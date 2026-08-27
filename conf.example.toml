@@ -4,8 +4,8 @@
 # 읽어 쓰므로, 포트를 바꾸려면 여기(또는 .env 의 APP_PORT)만 고치면 됩니다.
 # ============================================================================
 [app]
-host = "${APP_HOST:-127.0.0.1}"
-port = "${APP_PORT:-8000}"
+host = "${APP_HOST:-${HOST:-127.0.0.1}}"
+port = "${APP_PORT:-${PORT:-8000}}"
 db_url = "${APP_DB_URL:-sqlite+aiosqlite:///./multiagent.db}"
 debug = true
 
@@ -48,7 +48,7 @@ max_context_window = 128000
 timeout = 120          # 요청 타임아웃(초)
 num_retries = 2        # 실패 시 재시도 횟수
 drop_params = true     # 엔드포인트가 지원하지 않는 파라미터는 조용히 제거 (로컬 모델 호환성↑)
-max_tool_iterations = 5  # 한 턴에서 허용하는 MCP 도구 호출 루프 횟수
+max_tool_iterations = 20  # 한 턴에서 허용하는 MCP 도구 호출 루프 횟수
 
 # 실제 LLM 호출이 실패했을 때 오프라인 시뮬레이터로 대체할지 여부.
 # false 로 두면 인증/URL 오류가 그대로 화면에 표시되어 설정 문제를 바로 알 수 있습니다.
@@ -134,7 +134,7 @@ enabled = true
 [mcp_servers.sandbox]
 command = "${PYTHON_BIN:-python}"
 args = ["${MCP_SANDBOX_HOME:-./mcp_sandbox}/server.py"]
-env = { SANDBOX_WORKSPACE = "${WORKSPACE_DIR:-./workspace}", SANDBOX_KERNEL_PYTHON = "${SANDBOX_KERNEL_PYTHON:-${PYTHON_BIN:-python}}", SANDBOX_EXEC_TIMEOUT = "${SANDBOX_EXEC_TIMEOUT:-60}", SANDBOX_MAX_NAMESPACES = "${SANDBOX_MAX_NAMESPACES:-8}" }
+env = { SANDBOX_WORKSPACE = "${WORKSPACE_DIR:-./workspace}", SANDBOX_KERNEL_PYTHON = "${SANDBOX_KERNEL_PYTHON:-${PYTHON_BIN:-python}}", SANDBOX_EXEC_TIMEOUT = "${SANDBOX_EXEC_TIMEOUT:-60}", SANDBOX_MAX_NAMESPACES = "${SANDBOX_MAX_NAMESPACES:-8}", PYTHONIOENCODING = "utf-8", PYTHONUTF8 = "1" }
 enabled = true
 
 # --- sequential_thinking = "mcp" 모드를 쓸 때만 활성화하세요 ----------------

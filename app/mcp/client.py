@@ -2,17 +2,33 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import sys
 import threading
 from collections import deque
 
 import anyio
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+import mcp.types as types
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+
+async def _handle_list_roots(context: Any = None) -> types.ListRootsResult:
+    """Provides MCP Roots capability so servers (like filesystem) recognize allowed root directories."""
+    workspace_dir = Path(os.environ.get("WORKSPACE_DIR", "./workspace")).resolve()
+    return types.ListRootsResult(
+        roots=[
+            types.Root(
+                uri=types.AnyUrl(workspace_dir.as_uri()),
+                name="workspace",
+            )
+        ]
+    )
 
 
 class MCPToolError(Exception):
@@ -78,6 +94,8 @@ class _StderrTee:
             with os.fdopen(read_fd, "r", encoding="utf-8", errors="replace") as stream:
                 for line in stream:
                     stripped = line.rstrip()
+                    if "does not support MCP Roots" in stripped:
+                        continue
                     if stripped:
                         if len(self._head) < self._head_limit:
                             self._head.append(stripped)
@@ -163,6 +181,7 @@ class MCPClientConnection:
         self._shutdown: Optional[asyncio.Event] = None
         self._connect_error: Optional[BaseException] = None
         self._stderr_tail: str = ""
+        self._process_pid: Optional[int] = None
         # connect / teardown 직렬화 (도구 호출 자체는 동시 실행 가능)
         self._lock = asyncio.Lock()
 
@@ -209,11 +228,20 @@ class MCPClientConnection:
         tee = _StderrTee()
         connected = False
         try:
-            async with stdio_client(self._get_server_params(), errlog=tee.handle) as (
+            cm = stdio_client(self._get_server_params(), errlog=tee.handle)
+            async with cm as (
                 read_stream,
                 write_stream,
             ):
-                async with ClientSession(read_stream, write_stream) as session:
+                gen = getattr(cm, "gen", None)
+                frame = gen.ag_frame if gen else None
+                proc = frame.f_locals.get("process") if frame else None
+                self._process_pid = getattr(proc, "pid", None)
+                async with ClientSession(
+                    read_stream,
+                    write_stream,
+                    list_roots_callback=_handle_list_roots,
+                ) as session:
                     await session.initialize()
                     self._session = session
                     self._connect_error = None
@@ -222,7 +250,7 @@ class MCPClientConnection:
                     self._ready.set()
                     # 종료 요청이 올 때까지 프로세스를 유지합니다.
                     await self._shutdown.wait()
-        except Exception as e:  # noqa: BLE001 - 기동 실패는 모두 폴백으로 흡수
+        except (Exception, BaseException) as e:  # noqa: BLE001 - 기동 실패는 모두 폴백으로 흡수
             self._connect_error = e
         finally:
             # 기동에 실패했을 때만 stderr 를 회수합니다 (정상 종료 경로는 대기 없이 닫음).
@@ -275,24 +303,31 @@ class MCPClientConnection:
     async def _teardown_locked(self) -> None:
         """호출자가 `self._lock` 을 들고 있어야 합니다."""
         task, self._owner_task = self._owner_task, None
-        if task is None:
-            self._session = None
-            self._ready = None
-            self._shutdown = None
-            return
+        proc_pid = self._process_pid
+        self._process_pid = None
 
         if self._shutdown is not None:
             self._shutdown.set()
-        try:
-            await asyncio.wait_for(task, timeout=SHUTDOWN_TIMEOUT)
-        except asyncio.TimeoutError:
-            logger.warning(f"MCP server '{self.server_name}' did not shut down cleanly; cancelled")
-        except Exception:  # noqa: BLE001 - 종료 경로의 오류는 무시
-            pass
-        finally:
-            self._session = None
-            self._ready = None
-            self._shutdown = None
+
+        # 자식 프로세스를 먼저 종료하여 I/O 파이프와 task 가 즉시 정리되도록 합니다.
+        if proc_pid is not None:
+            try:
+                os.kill(proc_pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+            except OSError:
+                pass
+
+        if task is not None:
+            try:
+                await asyncio.wait_for(task, timeout=SHUTDOWN_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(f"MCP server '{self.server_name}' did not shut down cleanly; cancelled")
+                task.cancel()
+            except (Exception, BaseException):  # noqa: BLE001 - 종료 경로의 오류는 무시
+                pass
+
+        self._session = None
+        self._ready = None
+        self._shutdown = None
 
     def _is_session_dead(self, exc: BaseException) -> bool:
         """예외가 '세션이 끊겼다'는 신호인지 판정합니다.
@@ -425,7 +460,7 @@ class MCPClientConnection:
                 return text
             except MCPToolError:
                 raise
-            except Exception as e:  # noqa: BLE001
+            except (Exception, BaseException) as e:  # noqa: BLE001
                 # 세션이 죽은 경우에만 재시도합니다. 도구 자체가 실패한 것이라면
                 # 재실행이 부작용(파일 쓰기 등)을 두 번 일으킬 수 있습니다.
                 if attempt == 1 and self._is_session_dead(e):

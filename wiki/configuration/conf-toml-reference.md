@@ -57,7 +57,7 @@ Defines system-wide defaults. Any agent that does not explicitly set an attribut
 | `timeout` | `float` | `120.0` | HTTP request timeout in seconds. |
 | `num_retries` | `int` | `2` | Number of automatic retries on network/rate-limit failure. |
 | `drop_params` | `bool` | `true` | Silently drops unsupported parameters for local model compatibility. |
-| `max_tool_iterations`| `int` | `5` | Maximum number of consecutive tool-call loops per agent turn. |
+| `max_tool_iterations`| `int` | `20` | Maximum number of consecutive tool-call loops per agent turn. |
 | `fallback_to_simulation`| `bool`| `true` | When `true`, uses offline simulator if real LLM fails. When `false`, bubbles errors. |
 | `extra_headers` | `dict` | `{}` | Custom HTTP headers sent with every LLM request (e.g. gateway auth). |
 | `extra_body` | `dict` | `{}` | Custom JSON body fields sent with requests. |
@@ -129,3 +129,26 @@ def is_live(self) -> bool:
 - **Live Execution**: If `api_base`, `api_key`, or a local provider prefix (`ollama/`, `lm_studio/`) is present, real network requests are dispatched via LiteLLM.
 - **Keyless Local Endpoints**: When connecting to local servers without an API key (e.g. `vLLM` or `LM Studio` at `http://localhost:1234/v1`), LiteLLM requires a non-empty key parameter. The caller automatically injects a placeholder (`sk-no-key-required`) so local calls succeed.
 - **Offline Simulation Fallback**: If an agent lacks credentials/endpoint or if a live call fails and `fallback_to_simulation = true`, the built-in heuristic simulator creates contextual responses and mock tool outputs, ensuring end-to-end functionality in isolated test environments.
+
+---
+
+## 4. Configuration Precedence & Override Hierarchy
+
+The platform applies settings through a strictly defined 3-tier precedence hierarchy:
+
+```text
+Environment Variables (.env) ──> conf.toml ──> Command-Line Arguments (CLI)
+      (Lowest precedence)         (Base)              (Highest precedence)
+```
+
+1. **`.env` Environment Variables**:
+   Variables defined in `.env` (or inherited from the parent shell) provide base configuration defaults and sensitive credentials.
+2. **`conf.toml` File Configuration**:
+   References environment variables via syntax such as `host = "${APP_HOST:-${HOST:-127.0.0.1}}"` and `port = "${APP_PORT:-${PORT:-8000}}"`. If the environment variable exists, it is substituted; otherwise, the default fallback is used.
+3. **Command-Line Parameters (`app.main`)**:
+   CLI arguments (`--host`, `--port`, `--config`, `--reload`, `--no-reload`) supersede any values found in both `.env` and `conf.toml`. For example:
+   ```bash
+   python -m app.main --host 0.0.0.0 --port 9000 --config custom_conf.toml
+   ```
+   binds to `0.0.0.0:9000` regardless of values defined in `.env` or `custom_conf.toml`.
+

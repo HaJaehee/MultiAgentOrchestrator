@@ -35,6 +35,7 @@ The web application workspace is organized into four primary UI components in [a
 
 ### 1.2. Agent Roster Control ([app/ui/components/roster.py](file:///d:/MultiAgentOrchestrator/app/ui/components/roster.py))
 - **Agent Toggle Cards**: Allows users to include or exclude specific specialists (e.g. toggling the Critic off for faster brainstorming). The Master Orchestrator is fixed and always enabled.
+- **Dynamic Live Refresh**: Rendered inside a reactive container (`cards_row`). When personas are updated via the persona editor or config reloads, `update_agents()` and `refresh_agent_cards()` dynamically update card labels and roles without a page reload.
 - **Configuration Tooltips**: Hovering over an agent card reveals its configured model, endpoint URL, and sequential thinking mode.
 - **Strategy Dropdown**: Selects between `free_debate`, `sequential_review`, and `adversarial_debate`.
 - **Max Rounds Slider**: Sets the maximum debate depth ($1$ to $10$ rounds).
@@ -44,6 +45,7 @@ The web application workspace is organized into four primary UI components in [a
 
 ### 1.3. Chat & Debate Feed ([app/ui/components/chat_feed.py](file:///d:/MultiAgentOrchestrator/app/ui/components/chat_feed.py))
 - **Color-Coded Message Timeline**: Displays user prompts, orchestrator guidance, and specialist contributions with distinct avatars, roles, and colors.
+- **Real-Time Token Streaming**: Supports incremental token streaming (`start_streaming_message`, `append_stream_chunk`, and `finalize_streaming_message`). Agent messages stream directly into reactive markdown cards as LLM completion chunks arrive.
 - **Folding Tool Accordions**: Each MCP tool call (input arguments and execution outputs) renders inside an expandable Quasar accordion, preserving timeline readability.
 - **Status & Progress Banner**: Shows real-time speaker indicators (e.g. `[Senior Python Engineer] 발언 및 분석 중...`) and round counters during execution.
 - **Input Bar**: Auto-expanding message textarea with submit shortcuts (`Enter` / `Ctrl+Enter`).

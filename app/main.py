@@ -152,14 +152,39 @@ ui.run_with(
 
 
 def start():
-    cfg = get_config()
+    import argparse
+    parser = argparse.ArgumentParser(description="Multi-Agent Orchestrator Platform")
+    parser.add_argument("--host", type=str, default=None, help="Host to bind (overrides conf.toml and .env)")
+    parser.add_argument("--port", type=int, default=None, help="Port to bind (overrides conf.toml and .env)")
+    parser.add_argument("--config", type=str, default="conf.toml", help="Path to config file")
+    parser.add_argument("--reload", action="store_true", default=None, help="Enable auto-reload")
+    parser.add_argument("--no-reload", action="store_true", default=False, help="Disable auto-reload")
+    args, _ = parser.parse_known_args()
+
+    cfg = get_config(config_path=args.config)
+    host = args.host if args.host is not None else cfg.app.host
+    port = args.port if args.port is not None else cfg.app.port
+
+    # Keep cfg.app in sync with actual bound host/port
+    cfg.app.host = host
+    cfg.app.port = port
+
+    do_reload = cfg.app.debug
+    if args.no_reload:
+        do_reload = False
+    elif args.reload:
+        do_reload = True
+
     uvicorn.run(
         "app.main:server",
-        host=cfg.app.host,
-        port=cfg.app.port,
-        reload=cfg.app.debug,
+        host=host,
+        port=port,
+        reload=do_reload,
+        reload_dirs=["app"] if do_reload else None,
+        reload_excludes=["workspace", "workspace/*", "*.db*", "*.db-wal", "*.db-shm", "mcp_sandbox/*", ".git/*"] if do_reload else None,
     )
 
 
 if __name__ == "__main__":
     start()
+

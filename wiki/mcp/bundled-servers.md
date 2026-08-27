@@ -22,6 +22,7 @@ The platform comes pre-configured with a suite of official and open-source MCP s
 ### 2.1. Filesystem Server (`filesystem`)
 - **Execution**: Direct Node.js entrypoint (`dist/index.js`).
 - **Scope**: Strictly restricted to `./workspace`. Any attempt to access files outside this path is rejected at the protocol layer.
+- **MCP Roots Capability**: The host registers a `list_roots_callback` returning `file:///.../workspace`, declaring client Roots support to eliminate "Client does not support MCP Roots" fallback warnings.
 - **Key Tools**:
   - `read_text_file`: Inspects code or configuration files.
   - `write_file`: Creates new files in the workspace.
@@ -41,7 +42,9 @@ The platform comes pre-configured with a suite of official and open-source MCP s
 ### 2.3. Git Versioning Server (`git`)
 - **Execution**: Python module (`-m mcp_server_git --repository ./workspace`).
 - **Prerequisite**: Requires `./workspace` to be an initialized git repository.
-- **Workspace Auto-Init**: [`ensure_workspace()`](file:///d:/MultiAgentOrchestrator/app/mcp/manager.py#L14-L56) checks for `./workspace/.git` upon startup. If missing, it initializes the repository with `git init`, creates a `.gitkeep`, and creates the initial commit automatically.
+- **Corporate Intranet & Git Discovery**: [`find_git_executable()`](file:///d:/MultiAgentOrchestrator/app/mcp/manager.py) locates git across custom enterprise paths (e.g. `C:\Program Files\Git\cmd\git.exe` or `%LOCALAPPDATA%\Programs\Git\cmd\git.exe`).
+- **Safe Directory Protection**: Executes `git config --global --add safe.directory "*"` automatically to prevent `fatal: detected dubious ownership in repository` errors in containerized or shared drive environments.
+- **Workspace Auto-Init**: [`ensure_workspace()`](file:///d:/MultiAgentOrchestrator/app/mcp/manager.py) checks for `./workspace/.git` upon startup. If missing, it initializes the repository with `git init`, creates a `.gitkeep`, and creates the initial commit automatically.
 - **Key Tools**:
   - `git_status`: Checks working tree changes.
   - `git_diff`: Inspects modifications introduced during a debate round.
@@ -51,6 +54,8 @@ The platform comes pre-configured with a suite of official and open-source MCP s
 ### 2.4. Python Code Execution Sandbox (`sandbox`)
 - **Repository**: [HaJaehee/AirgappedPySandbox](https://github.com/HaJaehee/AirgappedPySandbox)
 - **Execution**: Embedded stateful IPython execution daemon.
+- **Resilience & Default Namespace**: All sandbox tools default to `namespace="default"`, preventing tool call failures when LLMs omit the namespace argument. CLI argument parsing uses standard `--` prefixes instead of unicode em-dashes (`\u2014`).
+- **Offline Kernel Requirements**: Core data science libraries (`requirements-kernel.txt`: `ipykernel`, `pandas`, `numpy`, `matplotlib`, `seaborn`, `scipy`, `sympy`) are pre-packaged into offline bundle wheels.
 - **Why It Matters**: Prevents hallucination by allowing the Coder to verify implementations and empowering the Critic to test hypotheses and security boundaries with real code executions.
 - **Key Tools**:
   - `execute_python_code`: Runs code snippets in an isolated namespace; maintains variables and imports across calls.

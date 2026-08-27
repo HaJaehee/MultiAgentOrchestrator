@@ -52,7 +52,14 @@ This guarantees that all installed MCP components maintain full API compatibilit
 ### 2.3. Zero-Dependency Node Runtime
 The official Node MCP servers (`filesystem`, `memory`, `sequential-thinking`) are compiled into pure JavaScript (`dist/index.js`) without native C++ addons.
 
-Therefore, the bundle does **not** include npm, npx, or development toolchains. It downloads and bundles solely the standalone `node.exe` executable (~70 MB), ensuring a minimal footprint.
+### 2.4. Sandbox Kernel Library Packaging
+The Python code execution sandbox (`AirgappedPySandbox`) runs user and agent scripts within an IPython kernel. In an air-gapped environment without internet access, attempting to import common data science packages inside the sandbox would fail.
+`package_offline.py` inspects `mcp_sandbox/requirements-kernel.txt` and downloads wheels for:
+- `ipykernel`, `pandas`, `numpy`, `matplotlib`, `seaborn`, `scipy`, `sympy`
+These wheels are stored in `wheels/` and installed by `install_wheels_offline.bat`.
+
+### 2.5. Workspace Pre-initialization
+The packager automatically initializes `workspace/` as an empty Git repository (`git init`), commits `.gitkeep`, and configures local `user.name` and `user.email`. This ensures the `mcp-server-git` server starts up immediately without "not a git repository" errors.
 
 ---
 
@@ -69,8 +76,13 @@ set "MCP_NODE_HOME=%BUNDLE_ROOT%mcp_node"
 set "MCP_SANDBOX_HOME=%BUNDLE_ROOT%mcp_sandbox"
 set "WORKSPACE_DIR=%BUNDLE_ROOT%workspace"
 set "SANDBOX_KERNEL_PYTHON=%PYTHON_BIN%"
+set "PYTHONIOENCODING=utf-8"
+set "PYTHONUTF8=1"
 
-"%PYTHON_BIN%" -m app.main
+"%PYTHON_BIN%" -m app.main %*
 ```
 
-Because paths are injected via environment variables, [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml) requires **zero manual adjustments** when moving between environments.
+### Parameter Forwarding & Encoding
+- **CLI Parameter Forwarding**: Both `run_offline.ps1` (`$args`) and `run_offline.bat` (`%*`) pass all command-line arguments directly to `app.main`. Users can run `.\run_offline.ps1 --port 9000` to override the bound port dynamically.
+- **UTF-8 BOM Protection**: `run_offline.ps1` is saved with UTF-8 BOM (`utf-8-sig`) and configures `[Console]::OutputEncoding = UTF8`, preventing PowerShell parser errors on Korean Windows systems.
+- **Zero Configuration Drift**: Because paths and settings are injected via environment variables, [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml) requires **zero manual adjustments** when moving between environments.

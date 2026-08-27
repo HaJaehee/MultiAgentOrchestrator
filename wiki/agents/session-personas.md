@@ -110,3 +110,18 @@ Clients can query session persona statuses programmatically:
   ]
 }
 ```
+
+---
+
+## 5. Global Persona Configuration Sync (`conf.toml` Persistence)
+
+Starting from the latest enhancement, editing an agent's persona on the Web UI (`/personas/{session_id}`) not only updates the draft persona in SQLite for the session, but also persists the updated baseline directly into `conf.toml`:
+
+### Workflow
+1. **Targeted TOML Modification**:
+   [`update_agent_persona_in_conf_file()`](file:///d:/MultiAgentOrchestrator/app/config.py) parses the existing `conf.toml` file, preserving existing formatting, multiline prompts, and comments. It locates `[agents.<agent_key>]` and updates `name`, `role`, and `system_prompt`.
+2. **In-Memory Pool Reloading**:
+   After writing to disk, `get_config(reload=True)` re-reads the configuration, and `get_agent_pool().reload()` refreshes all in-memory `Agent` instances.
+3. **Reactive UI Synchronization**:
+   The main debate page's [`AgentRosterControl`](file:///d:/MultiAgentOrchestrator/app/ui/components/roster.py) dynamically updates its roster cards via `update_agents()`, ensuring that modified agent names and roles appear immediately without requiring a full browser refresh.
+

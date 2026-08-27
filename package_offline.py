@@ -118,6 +118,21 @@ def stage_sources() -> None:
     workspace = STAGING_DIR / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / ".gitkeep").touch()
+    try:
+        git_bin = shutil.which("git")
+        if git_bin:
+            subprocess.run([git_bin, "init", "-q", str(workspace)], check=True, capture_output=True)
+            subprocess.run([git_bin, "-C", str(workspace), "config", "user.name", "multiagent"], check=False, capture_output=True)
+            subprocess.run([git_bin, "-C", str(workspace), "config", "user.email", "multiagent@localhost"], check=False, capture_output=True)
+            subprocess.run([git_bin, "-C", str(workspace), "add", ".gitkeep"], check=True, capture_output=True)
+            subprocess.run(
+                [git_bin, "-C", str(workspace), "-c", "user.name=multiagent",
+                 "-c", "user.email=multiagent@localhost", "commit", "-q", "-m", "workspace 초기화"],
+                check=False, capture_output=True,
+            )
+            print("      workspace 를 git 저장소로 초기화 완료.")
+    except Exception as exc:
+        print(f"      [경고] workspace git 초기화 실패: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +150,7 @@ def stage_sandbox(sandbox_src: str | None) -> Path | None:
     candidates += [
         ROOT_DIR.parent / "AirgappedPySandbox",
         ROOT_DIR.parent / "airgappedpysandbox",
+        ROOT_DIR / "dist" / "MultiAgentOrchestrator_bundle" / "mcp_sandbox",
     ]
 
     source = next((c for c in candidates if (c / "server.py").exists()), None)
@@ -178,6 +194,9 @@ def _requirements_fingerprint(sandbox_source: Path | None) -> str:
         req = sandbox_source / "requirements-server.txt"
         if req.exists():
             parts.append(req.read_text(encoding="utf-8"))
+        req_kernel = sandbox_source / "requirements-kernel.txt"
+        if req_kernel.exists():
+            parts.append(req_kernel.read_text(encoding="utf-8"))
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
@@ -236,6 +255,9 @@ def collect_wheels(sandbox_source: Path | None) -> None:
         req = sandbox_source / "requirements-server.txt"
         if req.exists():
             pip_download(["-r", str(req)], "샌드박스 MCP 서버 의존성 (jupyter_client / ipykernel)")
+        req_kernel = sandbox_source / "requirements-kernel.txt"
+        if req_kernel.exists():
+            pip_download(["-r", str(req_kernel)], "샌드박스 커널 필수 의존성 (requirements-kernel.txt)")
 
     marker.write_text(fingerprint, encoding="utf-8")
     print(f"      총 {len(list(staging_wheels.glob('*.whl')))}개 wheel 수집 완료.")
@@ -340,6 +362,9 @@ def install_into_runtime(sandbox_source: Path | None) -> bool:
         req = sandbox_source / "requirements-server.txt"
         if req.exists():
             targets.append(["-r", str(req)])
+        req_kernel = sandbox_source / "requirements-kernel.txt"
+        if req_kernel.exists():
+            targets.append(["-r", str(req_kernel)])
 
     for spec in targets:
         label = spec[1] if spec[0] == "-r" else ", ".join(spec)
@@ -460,7 +485,7 @@ def write_launchers(has_node: bool, has_sandbox: bool) -> None:
         "for /f \"usebackq delims=\" %%i in (`\"%PYTHON_BIN%\" -c \"from app.config import get_config;c=get_config().app;print(f'http://{c.host}:{c.port}')\"`) do set \"APP_URL=%%i\"\r\n"
         "if not defined APP_URL set \"APP_URL=conf.toml 의 [app] 참조\"\r\n\r\n"
         "echo [*] 내장 포터블 파이썬 런타임으로 서버를 시작합니다 (%APP_URL%)...\r\n"
-        "\"%PYTHON_BIN%\" -m app.main\r\n\r\n"
+        "\"%PYTHON_BIN%\" -m app.main %*\r\n\r\n"
         "pause\r\n"
     )
     write("run_offline.bat", bat)
@@ -500,7 +525,7 @@ def write_launchers(has_node: bool, has_sandbox: bool) -> None:
         "    & $env:PYTHON_BIN -c \"from app.config import get_config;c=get_config().app;print(f'http://{c.host}:{c.port}')\"\r\n"
         "} catch { \"conf.toml 의 [app] 참조\" }\r\n\r\n"
         "Write-Host \"[*] 내장 파이썬 런타임으로 서버를 시작합니다 ($AppUrl)...\" -ForegroundColor Green\r\n"
-        "& $env:PYTHON_BIN -m app.main\r\n"
+        "& $env:PYTHON_BIN -m app.main $args\r\n"
     )
     write("run_offline.ps1", ps1)
 
@@ -523,7 +548,12 @@ def write_launchers(has_node: bool, has_sandbox: bool) -> None:
         "echo [*] MCP 서버 패키지(fetch / git / 샌드박스 커널)를 설치합니다...\r\n"
         "\"%TARGET_PY%\" -m pip install --no-index --find-links=.\\wheels %PIP_C% "
         "--upgrade --no-warn-script-location "
-        "mcp-server-fetch mcp-server-git jupyter_client ipykernel\r\n\r\n"
+        "mcp-server-fetch mcp-server-git jupyter_client ipykernel\r\n"
+        "if exist \"%~dp0mcp_sandbox\\requirements-kernel.txt\" (\r\n"
+        "    echo [*] 샌드박스 커널 필수 라이브러리를 설치합니다...\r\n"
+        "    \"%TARGET_PY%\" -m pip install --no-index --find-links=.\\wheels %PIP_C% "
+        "--upgrade --no-warn-script-location -r \"%~dp0mcp_sandbox\\requirements-kernel.txt\"\r\n"
+        ")\r\n\r\n"
         "echo [*] 필수 모듈 검증...\r\n"
         "\"%TARGET_PY%\" -c \"import nicegui, litellm, mcp.server.fastmcp, mcp_server_git, "
         "jupyter_client, ipykernel; print('  전부 정상')\"\r\n"

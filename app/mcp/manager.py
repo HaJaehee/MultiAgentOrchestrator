@@ -11,6 +11,37 @@ from app.mcp.client import MCPClientConnection, MCPToolDefinition, MCPToolError
 logger = logging.getLogger(__name__)
 
 
+def find_git_executable() -> Optional[str]:
+    """Finds git executable from PATH or standard Windows installation locations."""
+    which_git = shutil.which("git")
+    if which_git:
+        return which_git
+
+    candidates = [
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "cmd" / "git.exe",
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "git.exe",
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Git" / "cmd" / "git.exe",
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Git" / "bin" / "git.exe",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Git" / "cmd" / "git.exe",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Git" / "bin" / "git.exe",
+        Path(__file__).resolve().parent.parent.parent / "git_runtime" / "cmd" / "git.exe",
+        Path(__file__).resolve().parent.parent.parent / "git_runtime" / "bin" / "git.exe",
+    ]
+    for c in candidates:
+        try:
+            if c.is_file():
+                git_dir = str(c.parent)
+                current_path = os.environ.get("PATH", "")
+                if git_dir not in current_path:
+                    os.environ["PATH"] = f"{git_dir};{current_path}"
+                os.environ["GIT_PYTHON_GIT_EXECUTABLE"] = str(c)
+                logger.info(f"Auto-detected Git executable at: {c}")
+                return str(c)
+        except Exception:
+            continue
+    return None
+
+
 def ensure_workspace(path: str) -> None:
     """에이전트 공용 작업 공간을 만들고, 없으면 git 저장소로 초기화합니다.
 
@@ -18,41 +49,74 @@ def ensure_workspace(path: str) -> None:
     repository" 로 기동에 실패합니다. 작업 공간은 앱이 소유하는 디렉터리이고
     git 서버가 기본 활성이므로, 여기서 만들어 둡니다.
     """
-    workspace = Path(path).expanduser()
+    workspace = Path(path).expanduser().resolve()
     try:
         workspace.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         logger.warning(f"Could not create workspace '{workspace}': {e}")
         return
 
-    if (workspace / ".git").exists():
-        return
-    if shutil.which("git") is None:
+    git_bin = find_git_executable()
+    if not git_bin:
         logger.warning(
-            f"git not found on PATH; '{workspace}' stays a plain directory and "
+            f"git not found on PATH or standard locations; '{workspace}' stays a plain directory and "
             "the git MCP server will fail to start."
         )
         return
 
+    os.environ["GIT_PYTHON_GIT_EXECUTABLE"] = git_bin
+
+    # Configure safe.directory in corporate environments
     try:
         subprocess.run(
-            ["git", "init", "-q", str(workspace)],
+            [git_bin, "config", "--global", "--add", "safe.directory", "*"],
+            capture_output=True, timeout=10, check=False,
+        )
+    except Exception:
+        pass
+
+    if (workspace / ".git").exists():
+        try:
+            subprocess.run(
+                [git_bin, "-C", str(workspace), "config", "user.name", "multiagent"],
+                capture_output=True, timeout=10, check=False,
+            )
+            subprocess.run(
+                [git_bin, "-C", str(workspace), "config", "user.email", "multiagent@localhost"],
+                capture_output=True, timeout=10, check=False,
+            )
+        except Exception:
+            pass
+        return
+
+    try:
+        subprocess.run(
+            [git_bin, "init", "-q", str(workspace)],
             check=True, capture_output=True, timeout=30,
+        )
+        subprocess.run(
+            [git_bin, "-C", str(workspace), "config", "user.name", "multiagent"],
+            check=False, capture_output=True, timeout=10,
+        )
+        subprocess.run(
+            [git_bin, "-C", str(workspace), "config", "user.email", "multiagent@localhost"],
+            check=False, capture_output=True, timeout=10,
         )
         keep = workspace / ".gitkeep"
         keep.touch()
         subprocess.run(
-            ["git", "-C", str(workspace), "add", ".gitkeep"],
+            [git_bin, "-C", str(workspace), "add", ".gitkeep"],
             check=True, capture_output=True, timeout=30,
         )
         subprocess.run(
-            ["git", "-C", str(workspace), "-c", "user.name=multiagent",
+            [git_bin, "-C", str(workspace), "-c", "user.name=multiagent",
              "-c", "user.email=multiagent@localhost", "commit", "-q", "-m", "workspace 초기화"],
             check=True, capture_output=True, timeout=30,
         )
         logger.info(f"Initialized agent workspace as a git repository: {workspace}")
     except (subprocess.SubprocessError, OSError) as e:
         logger.warning(f"Could not initialize git repository at '{workspace}': {e}")
+
 
 
 class MCPManager:
@@ -198,7 +262,7 @@ class MCPManager:
             except MCPToolError as e:
                 # 서버가 보고한 실패 메시지를 그대로 전달합니다 (모델이 읽고 교정).
                 return e.message, "error"
-            except Exception as e:
+            except (Exception, BaseException) as e:
                 return f"Tool execution failed ({type(e).__name__}): {e}", "error"
 
         # Check if qualified name split works e.g. server__tool
@@ -211,7 +275,7 @@ class MCPManager:
                 except MCPToolError as e:
                     # 서버가 보고한 실패 메시지를 그대로 전달합니다 (모델이 읽고 교정).
                     return e.message, "error"
-                except Exception as e:
+                except (Exception, BaseException) as e:
                     return f"Tool execution failed ({type(e).__name__}): {e}", "error"
 
         return f"Unknown tool: '{tool_name}'. Available tools: {list(self._tool_lookup.keys())}", "error"

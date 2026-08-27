@@ -53,8 +53,8 @@ By defaulting `PYTHON_BIN` to `sys.executable`, the child MCP process inherits t
 
 | Environment Variable | Default in conf.toml | Purpose |
 | :--- | :--- | :--- |
-| `APP_HOST` | `127.0.0.1` | Network interface to bind Uvicorn server to. |
-| `APP_PORT` | `8000` | Port for the web interface and REST API. |
+| `APP_HOST` (or `HOST`) | `127.0.0.1` | Network interface to bind Uvicorn server to (`${APP_HOST:-${HOST:-127.0.0.1}}`). |
+| `APP_PORT` (or `PORT`) | `8000` | Port for the web interface and REST API (`${APP_PORT:-${PORT:-8000}}`). |
 
 ### 3.2. Global LLM Gateway & Provider Defaults
 
@@ -97,13 +97,31 @@ By defaulting `PYTHON_BIN` to `sys.executable`, the child MCP process inherits t
 
 ---
 
-## 4. Setting Up Local `.env`
+### 3.5. Windows Console & Process Encoding
+| Environment Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `PYTHONIOENCODING` | `utf-8` | Prevents Windows CP949 encoding crashes on console/stdio pipes. |
+| `PYTHONUTF8` | `1` | Enables PEP 540 UTF-8 mode for all spawned Python subprocesses. |
+
+---
+
+## 4. Setting Up Local `.env` & Override Order
 
 Create a `.env` file in the project root to configure local endpoints without modifying `conf.toml`:
 
 ```bash
-# Example .env for local vLLM or LM Studio setup
+# Example .env for local network or gateway setup
+APP_HOST=0.0.0.0
+APP_PORT=8080
 LLM_API_BASE=http://localhost:1234/v1
 LLM_MODEL=openai/qwen2.5-coder-32b
 LLM_API_KEY=sk-dummy-key
 ```
+
+### Precedence Rule
+Settings are resolved according to the following order:
+```text
+.env (Environment) ──> conf.toml (File Configuration) ──> CLI Command Parameters
+```
+If `.env` specifies `APP_HOST` and `APP_PORT`, `conf.toml` interpolates those values. However, passing explicit CLI flags (e.g. `python -m app.main --host 192.168.1.10 --port 9000`) takes the highest precedence and overrides both `.env` and `conf.toml`.
+
