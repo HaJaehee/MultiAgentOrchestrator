@@ -1,0 +1,109 @@
+# Environment Variables & Dynamic Resolution
+
+The Multi-Agent Orchestrator Platform features a dynamic environment variable substitution engine in [app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py#L41-L86). It allows a single [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml) to be shared seamlessly between local developer workstations, staging servers, and air-gapped production bundles without modification.
+
+---
+
+## 1. Variable Substitution Syntax
+
+The configuration loader parses all strings recursively, supporting standard shell-style parameter expansion:
+
+| Syntax | Description | Example |
+| :--- | :--- | :--- |
+| `${VAR}` | Replaced with the value of environment variable `VAR`. If unset, resolves to `""`. | `api_key = "${OPENAI_API_KEY}"` |
+| `${VAR:-default}` | If `VAR` is unset or empty, replaced with literal `default`. | `port = "${APP_PORT:-8000}"` |
+| `${A:-${B:-fallback}}` | **Nested Evaluation**: Evaluates variable `A`. If unset, falls back to evaluating variable `B`. If `B` is also unset, uses `fallback`. | `model = "${CODER_MODEL:-${LLM_MODEL:-openai/gpt-4o}}"` |
+
+### Blank-to-None Conversion & Inheritance Protection
+In standard TOML parsers, an unresolved variable like `${CODER_API_BASE}` resolves to an empty string `""`. If treated as a string, this empty value would overwrite the global `[llm].api_base` setting with blank credentials.
+
+To prevent this, [app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py#L255-L261) uses a Pydantic `before` validator (`_blank_to_none`):
+```python
+@field_validator("api_key", "api_base", "api_version", "provider", mode="before")
+@classmethod
+def _blank_to_none(cls, v: Any) -> Any:
+    if isinstance(v, str) and not v.strip():
+        return None
+    return v
+```
+Any variable that resolves to empty or whitespace is converted to `None`, allowing the agent to inherit the global `[llm]` value cleanly.
+
+---
+
+## 2. Automatic Python Interpreter Binding
+
+Python-based MCP servers (e.g. `mcp-server-git` and `AirgappedPySandbox`) must run with the **exact same Python interpreter** as the application itself:
+
+```python
+# app/config.py lines 37-39
+if not os.environ.get("PYTHON_BIN"):
+    os.environ["PYTHON_BIN"] = sys.executable
+```
+
+### Why this is critical:
+If `conf.toml` defaulted to PATH `python`, launching MCP servers inside a virtual environment (`.venv`) or a portable air-gapped bundle would invoke the system's global Python interpreter instead. The server would immediately crash with `ModuleNotFoundError: No module named 'mcp_server_git'`.
+
+By defaulting `PYTHON_BIN` to `sys.executable`, the child MCP process inherits the virtualenv, installed packages, and standard libraries of the host application automatically.
+
+---
+
+## 3. Environment Variables Reference Table
+
+### 3.1. Application & Network
+
+| Environment Variable | Default in conf.toml | Purpose |
+| :--- | :--- | :--- |
+| `APP_HOST` | `127.0.0.1` | Network interface to bind Uvicorn server to. |
+| `APP_PORT` | `8000` | Port for the web interface and REST API. |
+
+### 3.2. Global LLM Gateway & Provider Defaults
+
+| Environment Variable | Default in conf.toml | Purpose |
+| :--- | :--- | :--- |
+| `LLM_MODEL` | `openai/gpt-4o` | Default model identifier for all agents. |
+| `LLM_API_BASE` | `""` (Inherits provider default) | URL of OpenAI-compatible proxy, vLLM, Ollama, or LM Studio. |
+| `LLM_API_KEY` | `""` (or `${OPENAI_API_KEY}`) | Global API authentication token. |
+| `LLM_API_VERSION` | `""` | API version string for Azure OpenAI. |
+| `LLM_PROVIDER` | `""` | Explicit LiteLLM provider override. |
+
+### 3.3. Per-Agent Model Overrides
+
+| Environment Variable | Fallback Chain | Purpose |
+| :--- | :--- | :--- |
+| `ORCHESTRATOR_MODEL` | `${LLM_MODEL:-openai/gpt-4o}` | Model for Master Orchestrator. |
+| `ORCHESTRATOR_API_BASE` | `${LLM_API_BASE}` | Custom endpoint for Master Orchestrator. |
+| `ARCHITECT_MODEL` | `${LLM_MODEL:-anthropic/claude-3-5-sonnet-20241022}` | Model for System Architect. |
+| `ARCHITECT_API_BASE` | `${LLM_API_BASE}` | Custom endpoint for System Architect. |
+| `CODER_MODEL` | `${LLM_MODEL:-openai/gpt-4o}` | Model for Senior Python Engineer. |
+| `CODER_API_BASE` | `${LLM_API_BASE}` | Custom endpoint for Senior Python Engineer. |
+| `CRITIC_MODEL` | `${LLM_MODEL:-google/gemini-1.5-pro}` | Model for Security & Quality Critic. |
+| `CRITIC_API_BASE` | `${LLM_API_BASE}` | Custom endpoint for Security & Quality Critic. |
+| `OPENAI_API_KEY` | - | Standard OpenAI API Key. |
+| `ANTHROPIC_API_KEY` | - | Standard Anthropic API Key. |
+| `GEMINI_API_KEY` | - | Standard Google Gemini API Key. |
+
+### 3.4. MCP Server Paths & Execution
+
+| Environment Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `NODE_BIN` | `node` | Node.js binary path. In portable bundles: `node_runtime\node.exe`. |
+| `PYTHON_BIN` | `sys.executable` | Python binary path. In portable bundles: `python_runtime\python.exe`. |
+| `MCP_NODE_HOME` | `./mcp_node` | Path where Node MCP server npm modules are located. |
+| `MCP_SANDBOX_HOME` | `./mcp_sandbox` | Path to the AirgappedPySandbox repository checkout. |
+| `WORKSPACE_DIR` | `./workspace` | Root folder for agent filesystem I/O and git commits. |
+| `SANDBOX_KERNEL_PYTHON`| `PYTHON_BIN` | Python interpreter used for the IPython code sandbox execution kernel. |
+| `SANDBOX_EXEC_TIMEOUT` | `60` | Execution timeout in seconds for code evaluation. |
+| `SANDBOX_MAX_NAMESPACES`| `8` | Maximum concurrent isolated kernel sessions in the sandbox. |
+
+---
+
+## 4. Setting Up Local `.env`
+
+Create a `.env` file in the project root to configure local endpoints without modifying `conf.toml`:
+
+```bash
+# Example .env for local vLLM or LM Studio setup
+LLM_API_BASE=http://localhost:1234/v1
+LLM_MODEL=openai/qwen2.5-coder-32b
+LLM_API_KEY=sk-dummy-key
+```
