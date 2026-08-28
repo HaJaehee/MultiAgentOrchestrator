@@ -119,6 +119,9 @@ def create_ui() -> None:
                 roster_control.set_personas_locked(True)
                 await sidebar.refresh_list()
             elif etype == "run_finished":
+                # 토론이 끝났으므로 MCP 서버 구성을 다시 만질 수 있습니다. 상태가
+                # 확정되는 시점이 여기라, 잠금 해제도 여기서 알립니다.
+                roster_control.refresh_mcp_lock()
                 status = event.get("status")
                 if status == "failed":
                     error = event.get("error") or "알 수 없는 오류"
@@ -240,6 +243,8 @@ def create_ui() -> None:
                 return
 
             chat_feed.set_busy(True, run.status_text, run.round_info)
+            # 이 대화가 도구를 쓰기 시작했습니다. MCP 구성은 여기서부터 잠깁니다.
+            roster_control.refresh_mcp_lock()
             attach_to_run(run)
             if run.status != "running":
                 chat_feed.set_busy(False, run.status_text, run.round_info)
@@ -415,6 +420,8 @@ def create_ui() -> None:
                 chat_feed.render_all(formatted_msgs, streaming_ids=streaming_ids)
             if formatted_arts:
                 artifact_viewer.render_artifacts(formatted_arts)
+
+            roster_control.refresh_mcp_lock()
 
             if running:
                 chat_feed.set_busy(run.busy, run.status_text, run.round_info)

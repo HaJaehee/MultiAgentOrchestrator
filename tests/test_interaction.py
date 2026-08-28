@@ -202,6 +202,46 @@ async def test_runner_queues_interjections_and_tells_the_screens():
     )
 
 
+# --------------------------------------------------------------- 잠금 창
+
+
+@pytest.mark.asyncio
+async def test_running_sessions_marks_the_window_where_mcp_config_is_locked():
+    """MCP 서버 구성을 잠글 창을 정하는 것이 이 목록입니다.
+
+    토론이 도는 동안은 그 도구들이 쓰이는 중이라 서버를 내리거나 다시 띄우면
+    안 됩니다. 창이 닫히는 시점은 최종 아티팩트가 나온 뒤여야 합니다.
+    """
+    sid = await _make_session(max_rounds=1)
+    runner = DebateRunner(_engine(llm_caller=FakeLLMCaller()))
+    assert runner.running_sessions() == []
+
+    run = runner.start(sid, "설계해줘")
+    assert runner.running_sessions() == [sid]
+
+    await run.task
+    assert run.snapshot()["artifacts"], "아티팩트가 나오기 전에 잠금이 풀리면 안 됩니다"
+    assert runner.running_sessions() == []
+
+
+@pytest.mark.asyncio
+async def test_stopped_debate_also_releases_the_lock():
+    """사용자가 정지시킨 토론도 합성까지 마친 뒤 잠금을 풉니다."""
+    sid = await _make_session(max_rounds=3, strategy="sequential_review")
+
+    holder: Dict[str, Any] = {}
+    caller = HookedCaller(after="architect", hook=lambda: holder["run"].request_stop())
+    runner = DebateRunner(_engine(llm_caller=caller))
+
+    run = runner.start(sid, "설계해줘")
+    holder["run"] = run
+    assert runner.running_sessions() == [sid]
+
+    await run.task
+    assert run.snapshot()["artifacts"]
+    assert runner.running_sessions() == []
+
+
 # --------------------------------------------------------------- TurnControl 단위
 
 

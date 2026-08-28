@@ -255,6 +255,14 @@ class DebateRunner:
         run = self._runs.get(session_id)
         return run is not None and run.status == "running"
 
+    def running_sessions(self) -> List[str]:
+        """지금 토론이 돌고 있는 대화의 id.
+
+        MCP 서버 구성처럼 프로세스 전체에 걸리는 설정을 화면에서 잠글지 판단할
+        때 씁니다. 돌고 있는 토론이 하나라도 있으면 그 도구를 쓰는 중입니다.
+        """
+        return [sid for sid, run in self._runs.items() if run.status == "running"]
+
     def running_elsewhere(self, session_id: str) -> List[TurnRun]:
         """이 세션이 아닌 다른 세션에서 돌고 있는 토론."""
         return [r for sid, r in self._runs.items()

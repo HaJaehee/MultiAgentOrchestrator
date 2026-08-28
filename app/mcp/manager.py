@@ -236,6 +236,22 @@ class MCPManager:
         logger.info(f"MCP workspace switched to: {target}")
         return target
 
+    async def reload_from_config(self) -> Dict[str, Any]:
+        """conf.toml 을 다시 읽어 서버 목록을 지금 작업 공간으로 다시 띄웁니다.
+
+        화면에서 서버를 추가·삭제하거나 켜고 끈 뒤에 부릅니다. 살아 있는 서버만
+        골라 손대지 않고 전부 다시 띄웁니다. 서버 프로세스는 명령·인자·환경을
+        기동 시점에 받고, 어느 것이 바뀌었는지는 설정 파일 쪽 사정이라 여기서
+        정확히 알 수 없기 때문입니다. 이 동작은 토론이 하나도 돌고 있지 않을
+        때만 허용되므로(그 판단은 UI 가 합니다) 중간에 도구가 사라지는 일은
+        없습니다.
+
+        돌려주는 값은 다시 띄운 뒤의 연결 상태 요약입니다.
+        """
+        self.server_configs = get_config().mcp_servers_for_workspace(self.workspace)
+        await self.initialize()
+        return self.connection_status()
+
     async def initialize(self) -> None:
         """Initializes all configured MCP clients and discovers tools.
 

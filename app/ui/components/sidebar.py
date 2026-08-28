@@ -100,7 +100,15 @@ class SessionSidebar:
                                     # 다른 화면에 있어도 토론은 계속됩니다. 어느 세션이
                                     # 돌고 있는지 목록에서 바로 보이게 합니다.
                                     ui.spinner("dots", size="xs", color="indigo-4")
-                                ui.label(s.title or "Untitled Debate").classes("text-xs font-semibold truncate")
+                                # 이름 변경은 오른쪽 연필 버튼과 제목 더블클릭 둘 다로 됩니다.
+                                # 버튼은 카드 폭이 좁을 때 눈에 잘 띄지 않습니다.
+                                title_label = ui.label(s.title or "Untitled Debate").classes(
+                                    "text-xs font-semibold truncate"
+                                )
+                                title_label.on(
+                                    "dblclick", lambda _, s_obj=s: self._show_rename_dialog(s_obj)
+                                )
+                                title_label.tooltip("더블클릭하면 이름을 바꿉니다")
                             
                             with ui.row().classes("w-full items-center justify-between mt-1 text-xs text-slate-400"):
                                 date_str = s.created_at.strftime("%m-%d %H:%M") if s.created_at else ""
@@ -114,7 +122,7 @@ class SessionSidebar:
                             ui.button(
                                 icon="edit",
                                 on_click=lambda _, s_obj=s: self._show_rename_dialog(s_obj),
-                            ).props("flat round dense size=xs color=grey-4").tooltip("이름 변경")
+                            ).props("flat round dense size=xs color=grey-4").tooltip("이름 변경 (제목 더블클릭도 같습니다)")
                             
                             ui.button(
                                 icon="delete",

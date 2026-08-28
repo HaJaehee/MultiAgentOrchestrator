@@ -516,11 +516,207 @@ def update_agent_persona_in_conf_file(
         content = "".join(lines)
 
     path.write_text(content, encoding="utf-8")
+    reload_config_if_active(path)
 
-    # 방금 쓴 파일이 **지금 앱이 쓰고 있는 설정일 때만** 다시 읽습니다.
-    # 조건 없이 다시 읽으면, 다른 파일을 고쳤을 뿐인데 전역 설정이 그 파일로
-    # 갈아끼워집니다. 그 뒤의 에이전트 풀·MCP 서버 목록이 통째로 바뀝니다.
+
+def reload_config_if_active(path: Path) -> bool:
+    """방금 쓴 파일이 **지금 앱이 쓰고 있는 설정일 때만** 다시 읽습니다.
+
+    조건 없이 다시 읽으면, 다른 파일을 고쳤을 뿐인데 전역 설정이 그 파일로
+    갈아끼워집니다. 그 뒤의 에이전트 풀·MCP 서버 목록이 통째로 바뀝니다.
+    """
     active = active_config_path()
-    if active is not None and path.resolve() == active:
+    if active is not None and Path(path).resolve() == active:
         get_config(reload=True, config_path=path)
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# [mcp_servers.*] 편집
+#
+# MCP 서버 구성은 배포 설정입니다. 대화별로 갈리는 값(작업 공간 등)과 달리 이
+# 파일이 정본이고, 화면에서 바꾼 것도 여기 남아야 다음 기동에서 살아납니다.
+#
+# tomllib 로 읽어 다시 쓰지 않고 줄 단위로 고칩니다. conf.toml 의 절반은 어떤
+# 서버가 무엇을 하고 왜 꺼져 있는지를 적어 둔 주석이고, 파이썬 표준 라이브러리에는
+# TOML 기록기가 없어 통째로 다시 쓰면 그 주석이 전부 사라집니다.
+# ---------------------------------------------------------------------------
+
+# TOML 의 bare key. 따옴표가 필요한 이름은 받지 않습니다 (서버 이름은 도구
+# 이름의 접두사로도 쓰이므로 단순해야 합니다).
+BARE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
+
+
+def _toml_string(value: str) -> str:
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _toml_array(values: List[str]) -> str:
+    if not values:
+        return "[]"
+    single_line = "[" + ", ".join(_toml_string(v) for v in values) + "]"
+    if len(single_line) <= 96:
+        return single_line
+    body = "".join(f"    {_toml_string(v)},\n" for v in values)
+    return f"[\n{body}]"
+
+
+def _toml_inline_table(mapping: Dict[str, str]) -> str:
+    items = ", ".join(f"{key} = {_toml_string(val)}" for key, val in mapping.items())
+    return "{ " + items + " }"
+
+
+def _find_toml_section(lines: List[str], header: str) -> tuple[int, int]:
+    """`header` 섹션이 차지하는 줄 범위 `[start, end)`. 없으면 `(-1, -1)`.
+
+    끝 경계는 다음 섹션 헤더 앞의 주석·빈 줄을 제외합니다. 이 파일에서 주석은
+    항상 뒤따르는 섹션을 설명하므로, 그것까지 지우거나 그 사이에 끼워 넣으면
+    남의 설명이 사라지거나 엉뚱한 서버에 붙습니다.
+    """
+    start = -1
+    for i, line in enumerate(lines):
+        if line.strip() == header:
+            start = i
+            break
+    if start == -1:
+        return -1, -1
+
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        stripped = lines[j].strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            end = j
+            break
+
+    while end - 1 > start:
+        prev = lines[end - 1].strip()
+        if prev == "" or prev.startswith("#"):
+            end -= 1
+        else:
+            break
+    return start, end
+
+
+def _mcp_section_header(server_name: str) -> str:
+    if not BARE_KEY_PATTERN.fullmatch(server_name or ""):
+        raise ValueError(
+            f"MCP 서버 이름 '{server_name}' 을 쓸 수 없습니다. "
+            f"영문/숫자/밑줄/하이픈만 쓰고 숫자나 하이픈으로 시작하지 마세요."
+        )
+    return f"[mcp_servers.{server_name}]"
+
+
+def set_mcp_server_enabled_in_conf_file(
+    server_name: str,
+    enabled: bool,
+    config_path: str | Path = "conf.toml",
+) -> None:
+    """[mcp_servers.<name>] 의 enabled 값을 바꿉니다."""
+    path = Path(config_path)
+    header = _mcp_section_header(server_name)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+    start, end = _find_toml_section(lines, header)
+    if start == -1:
+        raise KeyError(f"conf.toml 에 {header} 섹션이 없습니다.")
+
+    value = "true" if enabled else "false"
+    for i in range(start + 1, end):
+        if re.match(r"^\s*enabled\s*=", lines[i]):
+            lines[i] = f"enabled = {value}\n"
+            break
+    else:
+        lines.insert(end, f"enabled = {value}\n")
+
+    path.write_text("".join(lines), encoding="utf-8")
+    reload_config_if_active(path)
+
+
+def add_mcp_server_to_conf_file(
+    server_name: str,
+    command: str,
+    args: Optional[List[str]] = None,
+    env: Optional[Dict[str, str]] = None,
+    enabled: bool = True,
+    config_path: str | Path = "conf.toml",
+) -> None:
+    """새 [mcp_servers.<name>] 섹션을 추가합니다.
+
+    마지막 MCP 서버 섹션 바로 뒤에 넣습니다. 파일 끝에 붙여도 TOML 로는
+    같지만, 설정 파일은 사람이 읽는 문서이기도 하므로 같은 무리에 둡니다.
+    """
+    path = Path(config_path)
+    header = _mcp_section_header(server_name)
+    command = (command or "").strip()
+    if not command:
+        raise ValueError("실행 명령(command)은 비워 둘 수 없습니다.")
+
+    args = [a for a in (args or []) if a.strip() != ""]
+    env = env or {}
+    for key in env:
+        if not BARE_KEY_PATTERN.fullmatch(key):
+            raise ValueError(f"환경변수 이름 '{key}' 을 쓸 수 없습니다.")
+
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    if _find_toml_section(lines, header)[0] != -1:
+        raise ValueError(f"'{server_name}' 서버가 이미 conf.toml 에 있습니다.")
+
+    insert_at = None
+    for line in list(lines):
+        stripped = line.strip()
+        if stripped.startswith("[mcp_servers.") and stripped.endswith("]"):
+            _, section_end = _find_toml_section(lines, stripped)
+            insert_at = section_end if insert_at is None else max(insert_at, section_end)
+
+    block = [
+        f"{header}\n",
+        f"command = {_toml_string(command)}\n",
+        f"args = {_toml_array(args)}\n",
+    ]
+    if env:
+        block.append(f"env = {_toml_inline_table(env)}\n")
+    block.append(f"enabled = {'true' if enabled else 'false'}\n")
+
+    if insert_at is None:
+        # MCP 서버 섹션이 하나도 없는 설정. 파일 끝에 붙입니다.
+        tail = "" if not lines or lines[-1].endswith("\n") else "\n"
+        lines = lines + [tail + "\n"] + block
+    else:
+        lines = lines[:insert_at] + ["\n"] + block + lines[insert_at:]
+
+    path.write_text("".join(lines), encoding="utf-8")
+    reload_config_if_active(path)
+
+
+def remove_mcp_server_from_conf_file(
+    server_name: str,
+    config_path: str | Path = "conf.toml",
+) -> None:
+    """[mcp_servers.<name>] 섹션을 지웁니다.
+
+    섹션 위에 붙은 설명 주석은 남깁니다. 사람이 쓴 글을 지우는 것은 되돌릴 수
+    없고, 같은 서버를 다시 추가할 때 그대로 쓸 수 있는 정보이기 때문입니다.
+    """
+    path = Path(config_path)
+    header = _mcp_section_header(server_name)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+    start, end = _find_toml_section(lines, header)
+    if start == -1:
+        raise KeyError(f"conf.toml 에 {header} 섹션이 없습니다.")
+
+    remaining = lines[:start] + lines[end:]
+
+    # 섹션 앞뒤의 빈 줄이 이어 붙어 두 줄이 되거나, 파일 끝에 빈 줄만 남는 경우를
+    # 정리합니다. 지웠다 다시 추가하기를 반복해도 파일이 늘어지지 않습니다.
+    while start > 0 and not remaining[start - 1].strip() and (
+        start >= len(remaining) or not remaining[start].strip()
+    ):
+        del remaining[start - 1]
+        start -= 1
+
+    path.write_text("".join(remaining), encoding="utf-8")
+    reload_config_if_active(path)
 
