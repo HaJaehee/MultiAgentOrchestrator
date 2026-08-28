@@ -9,12 +9,13 @@ import pytest
 from app.config import AppConfig, load_config, update_agent_persona_in_conf_file
 from app.agents.base import Agent
 from app.agents.pool import AgentPool
-from app.agents.llm import LLMCaller
+from app.agents.llm import LLMCaller, LLMUnavailableError
 from app.database.models import MessageModel, SessionModel
 from app.database.session import get_session_factory
 from app.mcp.client import _handle_list_roots, MCPClientConnection
 from app.orchestration.engine import OrchestratorEngine
 from app.orchestration.state import DebateState
+from tests.fake_llm import FakeLLMCaller
 
 
 def test_persona_persistence_in_conf_file():
@@ -115,7 +116,7 @@ async def test_context_retention_across_turns():
         db.add(m2)
         await db.commit()
 
-    engine = OrchestratorEngine()
+    engine = OrchestratorEngine(llm_caller=FakeLLMCaller())
     events = []
 
     async def on_event(ev):
@@ -135,15 +136,8 @@ async def test_context_retention_across_turns():
 
 @pytest.mark.asyncio
 async def test_streaming_chunks_invoked():
-    agent = Agent(
-        key="coder",
-        name="Coder",
-        role="Engineer",
-        model="offline-simulator",
-        api_base=None,
-        api_key=None,
-    )
-    llm_caller = LLMCaller()
+    agent = Agent(key="coder", name="Coder", role="Engineer", model="fake/model")
+    llm_caller = FakeLLMCaller()
 
     streamed_chunks = []
 
@@ -156,3 +150,15 @@ async def test_streaming_chunks_invoked():
     assert len(content) > 0
     assert len(streamed_chunks) > 0
     assert "".join(streamed_chunks).strip() == content.strip()
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_agent_raises_instead_of_faking_an_answer():
+    """엔드포인트가 없으면 답을 지어내지 말고 실패해야 합니다."""
+    agent = Agent(
+        key="coder", name="Coder", role="Engineer",
+        model="openai/gpt-4o", api_base=None, api_key="",
+    )
+    with pytest.raises(LLMUnavailableError) as excinfo:
+        await LLMCaller().call_agent(agent, [{"role": "user", "content": "안녕"}])
+    assert "api_base" in str(excinfo.value)

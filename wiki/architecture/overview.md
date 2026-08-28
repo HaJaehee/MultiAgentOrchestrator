@@ -110,7 +110,7 @@ flowchart TD
 - Stores complete conversation history, tool invocation parameters and outputs, extracted artifacts, and locked agent personas.
 
 ### 4.4. Agent & LLM Layer ([app/agents/](file:///d:/MultiAgentOrchestrator/app/agents/))
-- **Base Agent Model** ([base.py](file:///d:/MultiAgentOrchestrator/app/agents/base.py)): Defines runtime metadata, UI badge colors, icons, and connection modes (live vs. simulation).
+- **Base Agent Model** ([base.py](file:///d:/MultiAgentOrchestrator/app/agents/base.py)): Defines runtime metadata, UI badge colors, icons, and connection modes (live vs. unconfigured).
 - **Agent Pool Registry** ([pool.py](file:///d:/MultiAgentOrchestrator/app/agents/pool.py)): Holds active agent instances loaded from configuration.
 - **Session Personas** ([personas.py](file:///d:/MultiAgentOrchestrator/app/agents/personas.py)): Coordinates session-specific overrides and the freeze/lock mechanism.
 - **LLM Caller** ([llm.py](file:///d:/MultiAgentOrchestrator/app/agents/llm.py)): Wraps LiteLLM `acompletion`, injects system prompts, manages multi-turn tool loops up to `max_tool_iterations`, and provides an offline fallback simulator.

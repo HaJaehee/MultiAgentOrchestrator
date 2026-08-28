@@ -18,7 +18,7 @@ class DebateMessage(BaseModel):
     sender_role: str
     content: str
     round_number: int = 0
-    msg_type: str = "agent"  # 'user', 'orchestrator', 'agent', 'system'
+    msg_type: str = "agent"  # 'user', 'orchestrator', 'agent', 'system', 'error'
     tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
 
 
@@ -33,6 +33,9 @@ class DebateState(BaseModel):
     messages: List[DebateMessage] = Field(default_factory=list)
     tool_records: List[Dict[str, Any]] = Field(default_factory=list)
     is_consensus_reached: bool = False
+    # LLM 응답을 받지 못해 이번 턴에서 발언하지 못한 에이전트. 합성 프롬프트와
+    # 요약 아티팩트가 "없는 의견"을 있는 것처럼 다루지 않도록 여기에 남깁니다.
+    failed_agent_keys: List[str] = Field(default_factory=list)
     artifacts: List[ArtifactItem] = Field(default_factory=list)
     status: str = "idle"  # 'idle', 'planning', 'debating', 'synthesizing', 'completed', 'error'
     current_speaker: Optional[str] = None

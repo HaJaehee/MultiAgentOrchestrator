@@ -12,8 +12,13 @@ class ArtifactViewer:
     def __init__(self):
         self.artifacts: List[Dict[str, Any]] = []
         self.container: Optional[ui.card] = None
-        self.tabs: Optional[ui.tabs] = None
-        self.tab_panels: Optional[ui.tab_panels] = None
+        self.content_column: Optional[ui.column] = None
+        self.count_badge: Optional[ui.badge] = None
+
+    @property
+    def alive(self) -> bool:
+        """토론은 백그라운드에서 계속되므로, 버려진 화면에 늦은 이벤트가 옵니다."""
+        return self.content_column is not None and not self.content_column.is_deleted
 
     def build_ui(self) -> ui.card:
         with ui.card().classes(
@@ -40,12 +45,12 @@ class ArtifactViewer:
             ui.label("멀티 에이전트 토론이 종료되면 최종 보고서, 다이어그램, 코드가 이곳에 렌더링됩니다.").classes("text-xs max-w-xs mt-1")
 
     def render_artifacts(self, artifacts: List[Dict[str, Any]]) -> None:
-        self.artifacts = artifacts
-        if hasattr(self, "count_badge") and self.count_badge:
-            self.count_badge.set_text(f"{len(artifacts)} Items")
-
-        if not self.content_column:
+        if not self.alive:
             return
+
+        self.artifacts = artifacts
+        if self.count_badge is not None and not self.count_badge.is_deleted:
+            self.count_badge.set_text(f"{len(artifacts)} Items")
 
         self.content_column.clear()
 
@@ -69,7 +74,11 @@ class ArtifactViewer:
 
                     ui.tab(name=f"tab_{i}", label=title[:18] + ("..." if len(title) > 18 else ""), icon=icon)
 
-            with ui.tab_panels(tabs, value="tab_0").classes("w-full flex-grow bg-transparent p-0 mt-2 min-h-0 overflow-hidden flex flex-col"):
+            # keep-alive 를 켜면 Quasar 가 이전 패널을 DOM 에 남겨 두 패널이 겹쳐
+            # 보입니다. 끄면 탭을 열 때마다 Mermaid 가 다시 렌더되는데, 그 편이 낫습니다.
+            with ui.tab_panels(tabs, value="tab_0").classes(
+                "w-full flex-grow bg-transparent p-0 mt-2 min-h-0 overflow-hidden flex flex-col"
+            ):
                 for i, art in enumerate(artifacts):
                     with ui.tab_panel(f"tab_{i}").classes("p-1 w-full h-full flex flex-col"):
                         self._render_artifact_item(art)
@@ -102,10 +111,7 @@ class ArtifactViewer:
             # Body based on type (Scrolls vertically)
             with ui.scroll_area().classes("w-full flex-grow min-h-0 p-3 bg-slate-950/80 border border-slate-800 rounded-lg"):
                 if art_type == "mermaid":
-                    try:
-                        ui.mermaid(content).classes("w-full")
-                    except Exception:
-                        ui.code(content, language="mermaid")
+                    self._render_mermaid(content)
                 elif art_type == "code":
                     ui.code(content, language=language).classes("w-full text-xs")
                 elif art_type == "json":
@@ -113,6 +119,48 @@ class ArtifactViewer:
                 else:
                     with ui.column().classes("prose prose-invert max-w-none text-xs text-slate-200"):
                         ui.markdown(content)
+
+    def _render_mermaid(self, content: str) -> None:
+        """Mermaid 다이어그램. 렌더링에 실패하면 그 사실과 원본을 같이 보여줍니다.
+
+        LLM 이 만든 다이어그램은 문법이 어긋나는 일이 잦은데, 예전에는 그때 화면이
+        그냥 비어서 "다이어그램이 안 나온다" 로만 보였습니다. 무엇이 틀렸는지
+        보여야 프롬프트든 다이어그램이든 고칠 수 있습니다.
+        """
+        if not (content or "").strip():
+            ui.label("다이어그램 내용이 비어 있습니다.").classes("text-xs text-slate-500")
+            return
+
+        with ui.column().classes("w-full gap-2") as wrapper:
+            error_box = ui.column().classes("w-full gap-1")
+            error_box.set_visibility(False)
+
+            def on_error(e) -> None:
+                if wrapper.is_deleted or error_box.is_deleted:
+                    return
+                reason = ""
+                args = getattr(e, "args", None)
+                if isinstance(args, dict):
+                    reason = str(args.get("message") or args.get("str") or "")
+                error_box.clear()
+                with error_box:
+                    with ui.row().classes("items-center gap-1.5"):
+                        ui.icon("error_outline", size="xs").classes("text-rose-400")
+                        ui.label("Mermaid 문법 오류로 다이어그램을 그리지 못했습니다.").classes(
+                            "text-xs font-semibold text-rose-300"
+                        )
+                    if reason:
+                        ui.label(reason).classes("text-[10px] text-rose-400/80 whitespace-pre-line")
+                    ui.label("아래는 모델이 생성한 원본입니다.").classes("text-[10px] text-slate-500")
+                    ui.code(content, language="mermaid").classes("w-full text-xs")
+                error_box.set_visibility(True)
+
+            try:
+                diagram = ui.mermaid(content).classes("w-full")
+                diagram.on("error", on_error)
+            except Exception as exc:  # noqa: BLE001 - 문법 오류로 뷰어가 죽으면 안 됩니다
+                logger.warning(f"Mermaid rendering failed: {exc}")
+                ui.code(content, language="mermaid").classes("w-full text-xs")
 
     def _copy_to_clipboard(self, text: str) -> None:
         ui.run_javascript(f"navigator.clipboard.writeText({json.dumps(text)});")

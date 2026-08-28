@@ -5,6 +5,7 @@ from app.database.models import SessionModel
 from app.database.session import get_session_factory, init_db
 from app.orchestration.engine import OrchestratorEngine
 from app.orchestration.state import DebateState
+from tests.fake_llm import FakeLLMCaller
 from app.orchestration.strategies import (
     AdversarialDebateStrategy,
     FreeDebateStrategy,
@@ -60,7 +61,7 @@ async def test_orchestrator_engine_turn_e2e():
         db.add(session)
         await db.commit()
 
-    engine = OrchestratorEngine()
+    engine = OrchestratorEngine(llm_caller=FakeLLMCaller())
 
     events = []
     async def capture_event(ev):

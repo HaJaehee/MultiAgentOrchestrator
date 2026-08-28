@@ -23,6 +23,7 @@ from app.agents.pool import get_agent_pool
 from app.config import update_agent_persona_in_conf_file
 from app.database.models import MessageModel, SessionModel
 from app.database.session import get_session_factory
+from app.orchestration.runner import get_debate_runner
 from app.ui.theme import CUSTOM_CSS, FAVICON_SVG
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,22 @@ def create_personas_page() -> None:
                 ui.badge("편집 가능 (토론 시작 전)", color="green-7").props("dense")
 
         with ui.column().classes("w-full max-w-4xl mx-auto p-4 gap-4"):
+            # ---------------- 진행 중 안내 ----------------
+            if get_debate_runner().is_running(session_id):
+                with ui.card().classes(
+                    "w-full bg-indigo-950/40 border border-indigo-700/60 p-3 rounded-xl"
+                ):
+                    with ui.row().classes("items-center gap-2 no-wrap"):
+                        ui.spinner("dots", size="sm", color="indigo-4")
+                        with ui.column().classes("gap-0.5"):
+                            ui.label("이 세션의 토론이 백그라운드에서 진행 중입니다.").classes(
+                                "text-sm font-bold text-indigo-200"
+                            )
+                            ui.label(
+                                "이 화면에 들어와도 토론은 중단되지 않습니다. "
+                                "토론 화면으로 돌아가면 그동안 오간 발언이 이어서 표시됩니다."
+                            ).classes("text-[11px] text-indigo-300/80 leading-relaxed")
+
             # ---------------- 안내 배너 ----------------
             if locked:
                 with ui.card().classes(

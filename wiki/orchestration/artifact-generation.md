@@ -38,8 +38,24 @@ flowchart LR
 ### 2.2. Architecture Diagrams (`mermaid`)
 - **Type**: `mermaid`
 - **Title**: `시스템 아키텍처 다이어그램 #1`, `#2`, etc.
-- **Extraction Pattern**: Blocks fenced with ` ```mermaid ... ``` `.
-- **Rendering**: Rendered into interactive SVG diagrams via NiceGUI's embedded Mermaid.js renderer.
+- **Extraction Pattern**: Blocks fenced with ` ```mermaid ... ``` `, plus three fallbacks
+  that exist because the diagram tab kept coming up empty:
+  - **Unterminated fences** are extracted to end of text. A synthesis report truncated by
+    `max_tokens` mid-diagram used to yield no artifact at all, since the old regex needed
+    a matching closing fence.
+  - **Unlabelled blocks** whose first line starts with a diagram keyword (`graph`,
+    `flowchart`, `sequenceDiagram`, …) are treated as Mermaid.
+  - **Transcript fallback**: if the synthesis report contains no diagram, the most recent
+    diagram in the debate transcript is promoted to an artifact, titled with its author.
+    Models routinely draw the architecture during the debate and omit it from the summary.
+- **Normalisation**: [`normalize_mermaid()`](file:///d:/MultiAgentOrchestrator/app/orchestration/engine.py)
+  normalises line endings and quotes bracket labels containing parentheses
+  (`A[결제 (Payment)]` → `A["결제 (Payment)"]`), the most common way an LLM-authored diagram
+  fails to parse. Shape syntax (`[(cylinder)]`, `[[subroutine]]`, `[/parallelogram/]`) is
+  left alone.
+- **Rendering**: Rendered into interactive SVG diagrams via NiceGUI's embedded Mermaid.js
+  renderer. If Mermaid rejects the source anyway, the viewer catches the renderer's `error`
+  event and shows the parse error plus the raw source instead of a blank panel.
 - **Supported Diagrams**: Flowcharts (`graph TD/LR`), Sequence Diagrams (`sequenceDiagram`), State Diagrams (`stateDiagram-v2`), and Entity-Relationship Diagrams (`erDiagram`).
 
 ### 2.3. Executable Code Files (`code`)

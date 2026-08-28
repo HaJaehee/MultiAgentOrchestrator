@@ -18,7 +18,7 @@ wiki/
 ├── agents/
 │   ├── agent-pool-and-roles.md            # AgentPool registry, built-in specialist personas & styling
 │   ├── session-personas.md                # Dynamic session persona lifecycle, drafts & freeze/locking
-│   └── llm-integration.md                 # LiteLLM multi-provider abstraction, tool loops & simulation
+│   └── llm-integration.md                 # LiteLLM multi-provider abstraction, tool loops & failure handling
 ├── mcp/
 │   ├── overview-and-protocol.md           # Stdio MCP host/client architecture & persistent sessions
 │   ├── bundled-servers.md                 # Filesystem, Memory, Git, Sandbox, and Sequential Thinking

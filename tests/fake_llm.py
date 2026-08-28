@@ -1,0 +1,85 @@
+"""테스트용 LLM 스텁.
+
+예전에는 제품 코드에 내장 시뮬레이터가 있어서 테스트가 그걸 그대로 썼습니다.
+그 시뮬레이터는 실제 엔드포인트가 500 을 돌려줄 때도 그럴듯한 페르소나 발언을
+지어내 토론 전체를 오염시켰기 때문에 제거했습니다. 테스트 대역은 테스트에 둡니다.
+"""
+
+import asyncio
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from app.agents.base import Agent
+from app.agents.llm import LLMUnavailableError
+
+
+ARCHITECT_REPLY = """### 아키텍처 제안
+
+```mermaid
+graph TD
+    Client[Client] --> API[FastAPI Controller]
+    API --> Core[Domain Core Engine]
+    Core --> Repo[(Storage Repository)]
+```
+"""
+
+SYNTHESIS_REPLY = """## 최종 합의 요약
+
+세 전문가의 의견을 통합했습니다.
+
+```mermaid
+flowchart LR
+    A[요청] --> B[오케스트레이터]
+    B --> C[전문가 토론]
+    C --> D[합성 산출물]
+```
+
+```python
+async def main() -> None:
+    print("ok")
+```
+"""
+
+
+class FakeLLMCaller:
+    """`LLMCaller` 와 같은 시그니처로 결정적인 응답을 돌려줍니다."""
+
+    def __init__(self, *, fail_keys: Optional[List[str]] = None, replies: Optional[Dict[str, str]] = None):
+        # 이 키를 가진 에이전트는 엔드포인트가 죽은 것처럼 굴게 합니다.
+        self.fail_keys = set(fail_keys or ())
+        self.replies = replies or {}
+        self.calls: List[str] = []
+
+    def _reply_for(self, agent: Agent, messages: List[Dict[str, Any]]) -> str:
+        if agent.key in self.replies:
+            return self.replies[agent.key]
+        last = messages[-1]["content"] if messages else ""
+        if "최종 합의 보고서" in last:
+            return SYNTHESIS_REPLY
+        if agent.key == "architect":
+            return ARCHITECT_REPLY
+        return f"### [{agent.name}] 의견\n\n{agent.role} 관점에서 검토했습니다."
+
+    async def call_agent(
+        self,
+        agent: Agent,
+        messages: List[Dict[str, Any]],
+        custom_instructions: str = "",
+        on_tool_call: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        on_chunk: Optional[Callable[[str], Any]] = None,
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        self.calls.append(agent.key)
+        if agent.key in self.fail_keys:
+            raise LLMUnavailableError(agent, "APIConnectionError: 500 Internal Server Error")
+
+        content = self._reply_for(agent, messages)
+        if on_chunk:
+            for piece in _in_pieces(content):
+                if asyncio.iscoroutinefunction(on_chunk):
+                    await on_chunk(piece)
+                else:
+                    on_chunk(piece)
+        return content, []
+
+
+def _in_pieces(text: str, size: int = 40) -> List[str]:
+    return [text[i:i + size] for i in range(0, len(text), size)] or [""]

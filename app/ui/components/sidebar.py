@@ -5,6 +5,7 @@ from nicegui import ui
 from sqlalchemy import desc, select, delete
 from app.database.models import ArtifactModel, MessageModel, SessionModel, ToolCallRecordModel
 from app.database.session import get_session_factory
+from app.orchestration.runner import get_debate_runner
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +78,12 @@ class SessionSidebar:
                 ui.label("생성된 세션이 없습니다.").classes("text-sm text-slate-500 italic p-2")
             return
 
+        runner = get_debate_runner()
+
         with self.container:
             for s in sessions:
                 is_active = (s.id == self.current_session_id)
+                is_running = runner.is_running(s.id)
                 card_classes = (
                     "w-full p-2.5 rounded-lg transition-all box-border "
                     + ("bg-indigo-950/90 border-2 border-indigo-400 text-white shadow-lg" if is_active else "bg-slate-800/70 hover:bg-slate-800 text-slate-300 border border-slate-700/60")
@@ -91,7 +95,12 @@ class SessionSidebar:
                         with ui.column().classes("flex-grow cursor-pointer gap-0 min-w-0 mr-1").on(
                             "click", lambda _, sid=s.id: self._select_session(sid)
                         ):
-                            ui.label(s.title or "Untitled Debate").classes("text-xs font-semibold truncate w-full")
+                            with ui.row().classes("w-full items-center gap-1.5 no-wrap"):
+                                if is_running:
+                                    # 다른 화면에 있어도 토론은 계속됩니다. 어느 세션이
+                                    # 돌고 있는지 목록에서 바로 보이게 합니다.
+                                    ui.spinner("dots", size="xs", color="indigo-4")
+                                ui.label(s.title or "Untitled Debate").classes("text-xs font-semibold truncate")
                             
                             with ui.row().classes("w-full items-center justify-between mt-1 text-xs text-slate-400"):
                                 date_str = s.created_at.strftime("%m-%d %H:%M") if s.created_at else ""
@@ -148,6 +157,10 @@ class SessionSidebar:
             ui.label("이 세션과 모든 대화 내역 및 산출물이 삭제됩니다. 계속하시겠습니까?").classes("text-sm text-slate-300 mb-4")
 
             async def do_delete():
+                # 이 세션의 토론이 백그라운드에서 돌고 있으면 먼저 세웁니다.
+                # 그러지 않으면 방금 지운 세션에 발언을 기록하려다 실패합니다.
+                get_debate_runner().forget(session_id)
+
                 async with self.session_factory() as db:
                     await db.execute(delete(ToolCallRecordModel).where(ToolCallRecordModel.session_id == session_id))
                     await db.execute(delete(MessageModel).where(MessageModel.session_id == session_id))

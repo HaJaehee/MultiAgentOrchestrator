@@ -43,7 +43,10 @@ class Agent(BaseModel):
 
     @property
     def is_live(self) -> bool:
-        """True when the agent has enough connection info to reach a real LLM endpoint."""
+        """True when the agent has enough connection info to reach a real LLM endpoint.
+
+        False 면 발언 차례에 `LLMUnavailableError` 가 올라옵니다. 대체 응답은 없습니다.
+        """
         if self.api_base:
             return True
         if self.api_key and self.api_key.strip():
@@ -55,7 +58,7 @@ class Agent(BaseModel):
         """Short human-readable endpoint description for the UI."""
         if self.api_base:
             return self.api_base
-        return "provider default endpoint" if self.is_live else "simulation (no endpoint/key)"
+        return "provider default endpoint" if self.is_live else "no endpoint configured"
 
     @classmethod
     def from_config(cls, key: str, cfg: AgentConfig) -> "Agent":

@@ -79,9 +79,18 @@ When `show_steps = false`, [`_apply_show_steps()`](file:///d:/MultiAgentOrchestr
 
 ---
 
-## 4. Offline Fallback Simulator
+## 4. Unreachable Endpoints Fail Loudly
 
-When credentials are omitted, or when an external API call fails and `fallback_to_simulation = true`, [`_run_simulated_turn()`](file:///d:/MultiAgentOrchestrator/app/agents/llm.py#L272-L362) simulates realistic multi-agent debate turns:
+There is no offline simulator. When an agent cannot reach its endpoint,
+[`call_agent()`](file:///d:/MultiAgentOrchestrator/app/agents/llm.py) raises
+`LLMUnavailableError` carrying the model, endpoint label, and the underlying error.
 
-- **Role-Aware Content**: Generates contextually relevant text for each role (Architect drafts architecture & schemas; Coder writes Python implementations; Critic analyzes edge cases and OWASP flaws; Orchestrator generates synthesis reports).
-- **Simulated Tool Invocations**: Invokes real or mock filesystem operations and sandbox syntax verifications so that the full UI timeline and artifact viewers are exercised in isolated environments.
+The engine catches it per speaker and records a message with `msg_type="error"` that
+states plainly that the turn produced no response. Those messages are shown in the
+timeline in a distinct colour, are excluded from every later agent's context and from
+the synthesis transcript, and are listed by key in `DebateState.failed_agent_keys`.
+
+This replaced a built-in simulator that invented persona-shaped answers on failure.
+A 500 from the endpoint used to look like a successful debate, and the invented turn
+then fed the next agent's prompt and the final synthesis report. Whatever partial text
+arrived before the connection dropped is kept above the failure notice.

@@ -19,21 +19,26 @@
    - `[llm]` 전역 섹션에서 **API URL(`api_base`), 모델 명, API 버전, provider, timeout/재시도, 커스텀 헤더**를 지정하고 모든 에이전트가 상속.
    - 사내 OpenAI 호환 게이트웨이 · vLLM · LM Studio · Ollama 등 **API 키 없는 로컬 엔드포인트도 그대로 사용 가능**.
    - **Sequential Thinking(단계적 사고)** 을 `prompt` / `native` / `mcp` 3가지 모드로 에이전트별 설정.
-   - API 키·엔드포인트가 모두 없는 개발/테스트 환경에서도 즉각 구동 가능한 지능형 Fallback 시뮬레이터 내장.
-4. **세션별 페르소나 & 시스템 프롬프트 (첫 대화 시 고정)**:
+   - 엔드포인트에 닿지 못하면 **대체 답변을 지어내지 않고** 해당 발언 자리에 연결 실패 사실을 그대로 기록합니다.
+4. **토론은 브라우저와 분리되어 백그라운드에서 진행**:
+   - 페이지를 새로고침하거나 페르소나 화면에 다녀와도 진행 중인 토론이 끊기지 않습니다.
+   - 돌아오면 그동안 오간 발언과 진행률이 이어서 표시되고, 생성 중이던 발언은 이어서 스트리밍됩니다.
+   - 사이드바의 세션 목록과 페르소나 화면에 "진행 중" 표시가 뜹니다.
+
+5. **세션별 페르소나 & 시스템 프롬프트 (첫 대화 시 고정)**:
    - `/personas/{session_id}` 편집 페이지에서 에이전트의 이름·역할·시스템 프롬프트를 세션마다 다르게 지정.
    - 첫 유저 메시지가 기록되는 순간 전 에이전트의 페르소나가 DB 에 스냅샷되고 잠깁니다.
    - 세션을 나중에 다시 열면 그때 저장된 페르소나로 이어서 토론합니다 (`conf.toml` 이 바뀌었어도 유지).
-5. **멀티 에이전트 토론 & 상태 머신 오케스트레이션**:
+6. **멀티 에이전트 토론 & 상태 머신 오케스트레이션**:
    - **Master Orchestrator**: 목표 분해, 발언자 선정, 토론 중재, 합의 검증 및 최종 산출물 합성.
    - **3가지 토론 전략**: 자유 토론 (`free_debate`), 순차 검증 (`sequential_review`), 디베이트 (`adversarial_debate`).
    - 무한 루프 방지를 위한 `max_rounds` 및 `is_consensus_reached` 종료 보장.
-6. **반응형 모던 Web GUI (FastAPI + NiceGUI)**:
+7. **반응형 모던 Web GUI (FastAPI + NiceGUI)**:
    - **좌측 사이드바**: 세션 히스토리, 신규 생성(`+ New Chat`), 이름 변경, 삭제.
    - **상단 제어 패널**: 에이전트 온/오프 토글, 라운드 제한 슬라이더, 전략 선택, 세션별 커스텀 지침.
    - **메인 토론 피드**: 에이전트별 색상/아바타 구분 대화창, 접이식(Accordion) MCP 도구 호출 로그.
    - **우측 산출물 뷰어**: 최종 종합 보고서(Markdown), 소스코드(Code), Mermaid 아키텍처 다이어그램 탭 및 원클릭 복사/다운로드.
-7. **SQLite 영구 저장소 (SQLAlchemy Async)**:
+8. **SQLite 영구 저장소 (SQLAlchemy Async)**:
    - 세션, 메시지, 도구 호출 기록, 최종 아티팩트 영구 보존.
 
 ---
@@ -90,12 +95,13 @@ MultiAgentOrchestrator/
 │   ├── agents/               # 에이전트 및 LLM 계층
 │   │   ├── base.py           # Agent 모델 및 UI 스타일 매핑
 │   │   ├── personas.py       # 세션별 페르소나 해석·저장·고정
-│   │   ├── llm.py            # LiteLLM 호출기, Tool 루프 및 Fallback
+│   │   ├── llm.py            # LiteLLM 호출기, Tool 루프, LLMUnavailableError
 │   │   └── pool.py           # 동적 에이전트 풀 레지스트리
 │   ├── orchestration/        # 멀티 에이전트 토론 상태 머신
 │   │   ├── state.py          # DebateState, DebateMessage, ArtifactItem
 │   │   ├── strategies.py     # 자유 토론, 순차 검증, 디베이트 전략
-│   │   └── engine.py         # 오케스트레이션 엔진 & 산출물 합성기
+│   │   ├── engine.py         # 오케스트레이션 엔진 & 산출물 합성기
+│   │   └── runner.py         # 세션별 백그라운드 토론 태스크 & 재접속 스냅샷
 │   └── ui/                   # NiceGUI 반응형 웹 UI
 │       ├── app.py            # UI 페이지 레이아웃 및 리액티브 바인딩
 │       ├── personas_page.py  # /personas/{session_id} 페르소나 편집 페이지
@@ -151,7 +157,7 @@ LLM_API_BASE=http://localhost:1234/v1     # 사내 게이트웨이 / vLLM / LM S
 LLM_MODEL=openai/qwen2.5-coder-32b        # 모델 명
 LLM_API_KEY=                              # 키가 필요 없는 서버라면 비워두세요
 ```
-*(엔드포인트와 키가 모두 없는 경우에도 내장 시뮬레이터를 통해 모든 UI 및 다자간 토론 기능을 즉시 체험할 수 있습니다)*
+*(엔드포인트가 없으면 에이전트는 발언하지 못하고, 그 자리에 "연결 끊김" 이 기록됩니다. 대체 답변을 지어내지 않습니다.)*
 
 ### 4. 애플리케이션 실행
 ```bash
@@ -198,13 +204,13 @@ timeout = 120            # 요청 타임아웃(초)
 num_retries = 2          # 재시도 횟수
 drop_params = true       # 엔드포인트가 모르는 파라미터 자동 제거 (로컬 모델 호환성)
 max_tool_iterations = 5  # 한 턴에서 허용할 MCP 도구 루프 횟수
-fallback_to_simulation = true  # false 로 두면 연결 오류를 그대로 표면화
 extra_headers = { "X-Org-Id" = "${MY_ORG_ID}" }
 extra_body = { "user" = "multiagent-orchestrator" }
 ```
 
 > **호출 모드 판정**: `api_base` 또는 `api_key` 중 하나라도 설정되어 있으면(또는 모델이 `ollama/`, `ollama_chat/`, `lm_studio/` 로 시작하면) 실제 LLM 을 호출합니다.
-> 둘 다 없을 때만 내장 시뮬레이터로 동작합니다. API 키가 필요 없는 로컬 서버도 그대로 사용할 수 있습니다.
+> 둘 다 없으면 그 에이전트는 발언 차례에 실패하고, 토론 기록에 연결 실패 사실이 남습니다.
+> API 키가 필요 없는 로컬 서버는 `api_base` 만 지정하면 그대로 사용할 수 있습니다.
 
 ### Sequential Thinking (단계적 사고)
 

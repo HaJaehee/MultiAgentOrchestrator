@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import re
@@ -6,7 +5,7 @@ import uuid
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 from sqlalchemy import select
 from app.agents.base import Agent
-from app.agents.llm import LLMCaller
+from app.agents.llm import LLMCaller, LLMUnavailableError
 from app.agents.personas import prepare_agents_for_turn
 from app.agents.pool import AgentPool, get_agent_pool
 from app.database.models import ArtifactModel, MessageModel, SessionModel, ToolCallRecordModel
@@ -18,14 +17,71 @@ logger = logging.getLogger(__name__)
 
 EventCallback = Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]
 
+# 닫는 펜스가 없어도 (max_tokens 로 답변이 잘렸을 때) 마지막 블록을 건집니다.
+# 예전 정규식은 ``` 짝이 맞을 때만 매칭돼서, 다이어그램 도중에 잘린 답변은
+# 아티팩트가 통째로 사라졌습니다.
+CODE_FENCE_RE = re.compile(r"```([a-zA-Z0-9_\-\+]*)[ \t]*\r?\n(.*?)(?:```|\Z)", re.DOTALL)
+
+# 언어 태그 없이 열린 블록이라도 첫 줄이 이 키워드면 Mermaid 로 취급합니다.
+MERMAID_HEADERS = (
+    "graph", "flowchart", "sequencediagram", "classdiagram", "statediagram",
+    "erdiagram", "journey", "gantt", "pie", "gitgraph", "mindmap", "timeline",
+    "quadrantchart", "requirementdiagram", "c4context", "sankey-beta",
+    "block-beta", "architecture-beta", "xychart-beta",
+)
+
+CODE_LANGUAGES = ("python", "py", "typescript", "javascript", "bash", "shell", "json", "toml", "sql")
+
+# `A[결제 서비스 (Payment)]` 처럼 대괄호 라벨 안에 괄호가 들어간 형태. LLM 이 가장 자주
+# 만드는 Mermaid 파싱 오류이고, 따옴표로 감싸면 그대로 통과합니다.
+_PAREN_LABEL_RE = re.compile(r"\[([^\[\]{}\"|]*[()][^\[\]{}\"|]*)\]")
+# 여는 문자 -> 닫는 문자. 이 쌍으로 감싸인 것은 라벨이 아니라 노드 모양입니다.
+_SHAPE_PAIRS = {"(": ")", "[": "]", "/": "/", "\\": "\\", "{": "}"}
+
+
+def normalize_mermaid(content: str) -> str:
+    """LLM 이 흔히 내는 Mermaid 문법 오류를 최소한만 손봅니다.
+
+    다이어그램을 다시 써 주는 것이 아니라, 렌더러가 통째로 거부해서 화면이 비는
+    두 가지 경우만 막습니다: 잘못된 줄바꿈과 따옴표 없는 괄호 라벨.
+    """
+    text = content.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return text
+
+    # ```mermaid 를 잘라낸 뒤 남은 "mermaid" 머리글
+    lines = text.split("\n")
+    if lines[0].strip().lower() == "mermaid":
+        lines = lines[1:]
+
+    out: List[str] = []
+    for line in lines:
+        # `[(...)]`(원통), `[[...]]`(서브루틴), `[/.../]`·`[\...\]`(평행사변형) 같은
+        # 모양 문법은 라벨이 아니라 노드 종류입니다. 따옴표를 씌우면 안 됩니다.
+        def _quote(m: re.Match) -> str:
+            inner = m.group(1)
+            if not inner:
+                return m.group(0)
+            if _SHAPE_PAIRS.get(inner[0]) == inner[-1]:
+                return m.group(0)
+            return f'["{inner.strip()}"]'
+
+        out.append(_PAREN_LABEL_RE.sub(_quote, line))
+    return "\n".join(out).strip()
+
 
 def extract_code_blocks(text: str) -> List[Dict[str, str]]:
     """Extracts markdown code blocks from text."""
-    pattern = re.compile(r"```([a-zA-Z0-9_\-\+]*)\n(.*?)```", re.DOTALL)
     matches = []
-    for match in pattern.finditer(text):
+    for match in CODE_FENCE_RE.finditer(text or ""):
         lang = match.group(1).strip().lower() or "text"
         code = match.group(2).strip()
+        if not code:
+            continue
+        if lang == "text":
+            first = code.split("\n", 1)[0].strip().lower()
+            if any(first.startswith(h) for h in MERMAID_HEADERS):
+                lang = "mermaid"
         matches.append({"language": lang, "code": code})
     return matches
 
@@ -37,6 +93,120 @@ class OrchestratorEngine:
         self.agent_pool = agent_pool or get_agent_pool()
         self.llm_caller = llm_caller or LLMCaller()
         self.session_factory = get_session_factory()
+
+    # ------------------------------------------------------------------ 발언
+
+    @staticmethod
+    def _unavailable_notice(agent: Agent, exc: LLMUnavailableError, streamed: str) -> str:
+        """응답을 받지 못했을 때 화면과 기록에 남는 문구.
+
+        여기서 그럴듯한 대체 발언을 만들어 내면 다음 에이전트의 입력과 최종 합성
+        보고서까지 그 거짓말 위에 쌓입니다. 못 받았다고 적는 편이 낫습니다.
+        """
+        notice = (
+            f"> ⚠️ **연결 끊김 — {agent.name} 의 발언을 받지 못했습니다.**\n"
+            f">\n"
+            f"> - 모델: `{agent.model}`\n"
+            f"> - 엔드포인트: `{exc.endpoint}`\n"
+            f"> - 원인: `{exc.reason}`\n"
+            f">\n"
+            f"> 이 자리에 들어갈 내용을 대신 지어내지 않았습니다. "
+            f"엔드포인트를 복구한 뒤 같은 요청을 다시 보내주세요."
+        )
+        if streamed.strip():
+            return (
+                f"{streamed.rstrip()}\n\n---\n\n{notice}\n>\n"
+                f"> (위 본문은 연결이 끊기기 전까지 도착한 부분입니다.)"
+            )
+        return notice
+
+    async def _speak(
+        self,
+        *,
+        db,
+        state: DebateState,
+        agent: Agent,
+        prompt_messages: List[Dict[str, Any]],
+        custom_instructions: str,
+        round_number: int,
+        msg_type: str,
+        on_event: Optional[EventCallback],
+        on_tool_call: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    ) -> DebateMessage:
+        """한 에이전트의 발언을 스트리밍하고, DB 에 기록하고, 상태에 반영합니다.
+
+        LLM 이 응답하지 못하면 실패 사실을 그대로 적은 `msg_type="error"` 발언을
+        남기고 토론을 계속합니다 (다른 에이전트는 아직 살아 있을 수 있습니다).
+        """
+        msg_id = str(uuid.uuid4())
+        if on_event:
+            await on_event({
+                "type": "message_stream_start",
+                "message": {
+                    "id": msg_id,
+                    "sender_key": agent.key,
+                    "sender_name": agent.name,
+                    "sender_role": agent.role,
+                    "content": "",
+                    "round_number": round_number,
+                    "msg_type": msg_type,
+                },
+            })
+
+        streamed: List[str] = []
+
+        async def _on_chunk(delta: str) -> None:
+            streamed.append(delta)
+            if on_event:
+                await on_event({
+                    "type": "message_stream_chunk",
+                    "message_id": msg_id,
+                    "delta": delta,
+                })
+
+        try:
+            content, tool_logs = await self.llm_caller.call_agent(
+                agent, prompt_messages, custom_instructions,
+                on_tool_call=on_tool_call, on_chunk=_on_chunk,
+            )
+            final_type = msg_type
+        except LLMUnavailableError as exc:
+            logger.warning(f"Agent '{agent.key}' produced no response: {exc}")
+            content = self._unavailable_notice(agent, exc, "".join(streamed))
+            tool_logs = []
+            final_type = "error"
+            if agent.key not in state.failed_agent_keys:
+                state.failed_agent_keys.append(agent.key)
+
+        db.add(MessageModel(
+            id=msg_id,
+            session_id=state.session_id,
+            sender_key=agent.key,
+            sender_name=agent.name,
+            sender_role=agent.role,
+            content=content,
+            round_number=round_number,
+            msg_type=final_type,
+        ))
+        await db.commit()
+
+        message = DebateMessage(
+            id=msg_id,
+            sender_key=agent.key,
+            sender_name=agent.name,
+            sender_role=agent.role,
+            content=content,
+            round_number=round_number,
+            msg_type=final_type,
+            tool_calls=tool_logs,
+        )
+        state.messages.append(message)
+
+        if on_event:
+            await on_event({"type": "message_added", "message": message.model_dump()})
+        return message
+
+    # ------------------------------------------------------------------ 턴
 
     async def run_turn(
         self,
@@ -146,6 +316,8 @@ class OrchestratorEngine:
             if len(state.messages) > 1:
                 history_snippets = []
                 for m in state.messages[:-1]:
+                    if m.msg_type == "error":
+                        continue
                     history_snippets.append(f"{m.sender_name}({m.sender_role}): {m.content[:250]}")
                 history_text = "\n".join(history_snippets[-6:])
                 orch_plan_prompt = [
@@ -161,64 +333,16 @@ class OrchestratorEngine:
                     {"role": "user", "content": f"[User Request]: {user_prompt}\n\n위 요청을 분석하고 이번 토론의 핵심 목표, 접근 방향, 각 에이전트(Architect, Coder, Critic)에게 부여할 발언 지침을 작성하세요."}
                 ]
 
-            plan_msg_id = str(uuid.uuid4())
-            if on_event:
-                await on_event({
-                    "type": "message_stream_start",
-                    "message": {
-                        "id": plan_msg_id,
-                        "sender_key": orchestrator_agent.key,
-                        "sender_name": orchestrator_agent.name,
-                        "sender_role": orchestrator_agent.role,
-                        "content": "",
-                        "round_number": 0,
-                        "msg_type": "orchestrator",
-                    },
-                })
-
-            async def _stream_plan_chunk(delta: str):
-                if on_event:
-                    await on_event({
-                        "type": "message_stream_chunk",
-                        "message_id": plan_msg_id,
-                        "delta": delta,
-                    })
-
-            orch_plan_text, orch_tools = await self.llm_caller.call_agent(
-                orchestrator_agent, orch_plan_prompt, custom_instructions, on_chunk=_stream_plan_chunk
-            )
-
-            plan_msg_db = MessageModel(
-                id=plan_msg_id,
-                session_id=session_id,
-                sender_key=orchestrator_agent.key,
-                sender_name=orchestrator_agent.name,
-                sender_role=orchestrator_agent.role,
-                content=orch_plan_text,
+            await self._speak(
+                db=db,
+                state=state,
+                agent=orchestrator_agent,
+                prompt_messages=orch_plan_prompt,
+                custom_instructions=custom_instructions,
                 round_number=0,
                 msg_type="orchestrator",
+                on_event=on_event,
             )
-            db.add(plan_msg_db)
-            await db.commit()
-
-            state.messages.append(
-                DebateMessage(
-                    id=plan_msg_id,
-                    sender_key=orchestrator_agent.key,
-                    sender_name=orchestrator_agent.name,
-                    sender_role=orchestrator_agent.role,
-                    content=orch_plan_text,
-                    round_number=0,
-                    msg_type="orchestrator",
-                    tool_calls=orch_tools,
-                )
-            )
-
-            if on_event:
-                await on_event({
-                    "type": "message_added",
-                    "message": state.messages[-1].model_dump(),
-                })
 
             # 5. Phase 2: Multi-Round Specialist Debate Loop
             strategy = get_strategy(strategy_name)
@@ -245,16 +369,12 @@ class OrchestratorEngine:
                             "round": round_num,
                         })
 
-                    # Construct contextual message list for this agent
-                    agent_context = self._build_context_for_agent(state, agent)
-
-                    async def handle_tool_call(tool_data: Dict[str, Any]) -> None:
+                    async def handle_tool_call(tool_data: Dict[str, Any], speaker: Agent = agent) -> None:
                         # Record tool call in DB
-                        tc_id = str(uuid.uuid4())
                         tc_db = ToolCallRecordModel(
-                            id=tc_id,
+                            id=str(uuid.uuid4()),
                             session_id=session_id,
-                            agent_key=agent.key,
+                            agent_key=speaker.key,
                             tool_name=tool_data.get("tool_name", ""),
                             arguments=tool_data.get("arguments", {}),
                             output=tool_data.get("output", ""),
@@ -265,69 +385,22 @@ class OrchestratorEngine:
                         if on_event:
                             await on_event({
                                 "type": "tool_executed",
-                                "agent_key": agent.key,
-                                "agent_name": agent.name,
+                                "agent_key": speaker.key,
+                                "agent_name": speaker.name,
                                 "tool_call": tool_data,
                             })
 
-                    msg_id = str(uuid.uuid4())
-                    if on_event:
-                        await on_event({
-                            "type": "message_stream_start",
-                            "message": {
-                                "id": msg_id,
-                                "sender_key": agent.key,
-                                "sender_name": agent.name,
-                                "sender_role": agent.role,
-                                "content": "",
-                                "round_number": round_num,
-                                "msg_type": "agent",
-                            },
-                        })
-
-                    async def _stream_agent_chunk(delta: str, current_mid=msg_id):
-                        if on_event:
-                            await on_event({
-                                "type": "message_stream_chunk",
-                                "message_id": current_mid,
-                                "delta": delta,
-                            })
-
-                    response_text, tool_logs = await self.llm_caller.call_agent(
-                        agent, agent_context, custom_instructions, on_tool_call=handle_tool_call, on_chunk=_stream_agent_chunk
-                    )
-
-                    msg_db = MessageModel(
-                        id=msg_id,
-                        session_id=session_id,
-                        sender_key=agent.key,
-                        sender_name=agent.name,
-                        sender_role=agent.role,
-                        content=response_text,
+                    await self._speak(
+                        db=db,
+                        state=state,
+                        agent=agent,
+                        prompt_messages=self._build_context_for_agent(state, agent),
+                        custom_instructions=custom_instructions,
                         round_number=round_num,
                         msg_type="agent",
+                        on_event=on_event,
+                        on_tool_call=handle_tool_call,
                     )
-                    db.add(msg_db)
-                    await db.commit()
-
-                    state.messages.append(
-                        DebateMessage(
-                            id=msg_id,
-                            sender_key=agent.key,
-                            sender_name=agent.name,
-                            sender_role=agent.role,
-                            content=response_text,
-                            round_number=round_num,
-                            msg_type="agent",
-                            tool_calls=tool_logs,
-                        )
-                    )
-
-                    if on_event:
-                        await on_event({
-                            "type": "message_added",
-                            "message": state.messages[-1].model_dump(),
-                        })
 
             # 6. Phase 3: Final Consensus & Artifact Synthesis
             state.status = "synthesizing"
@@ -339,62 +412,22 @@ class OrchestratorEngine:
                     "speaker": orchestrator_agent.name,
                 })
 
-            synth_msg_id = str(uuid.uuid4())
-            if on_event:
-                await on_event({
-                    "type": "message_stream_start",
-                    "message": {
-                        "id": synth_msg_id,
-                        "sender_key": orchestrator_agent.key,
-                        "sender_name": orchestrator_agent.name,
-                        "sender_role": orchestrator_agent.role,
-                        "content": "",
-                        "round_number": state.current_round + 1,
-                        "msg_type": "orchestrator",
-                    },
-                })
-
-            async def _stream_synth_chunk(delta: str):
-                if on_event:
-                    await on_event({
-                        "type": "message_stream_chunk",
-                        "message_id": synth_msg_id,
-                        "delta": delta,
-                    })
-
-            synth_prompt = self._build_synthesis_prompt(state)
-            synth_text, synth_tools = await self.llm_caller.call_agent(
-                orchestrator_agent, synth_prompt, custom_instructions, on_chunk=_stream_synth_chunk
-            )
-
-            synth_msg_id = str(uuid.uuid4())
-            synth_msg_db = MessageModel(
-                id=synth_msg_id,
-                session_id=session_id,
-                sender_key=orchestrator_agent.key,
-                sender_name=orchestrator_agent.name,
-                sender_role=orchestrator_agent.role,
-                content=synth_text,
+            synth_message = await self._speak(
+                db=db,
+                state=state,
+                agent=orchestrator_agent,
+                prompt_messages=self._build_synthesis_prompt(state),
+                custom_instructions=custom_instructions,
                 round_number=state.current_round + 1,
                 msg_type="orchestrator",
+                on_event=on_event,
             )
-            db.add(synth_msg_db)
-
-            state.messages.append(
-                DebateMessage(
-                    id=synth_msg_id,
-                    sender_key=orchestrator_agent.key,
-                    sender_name=orchestrator_agent.name,
-                    sender_role=orchestrator_agent.role,
-                    content=synth_text,
-                    round_number=state.current_round + 1,
-                    msg_type="orchestrator",
-                    tool_calls=synth_tools,
-                )
-            )
+            synthesis_failed = synth_message.msg_type == "error"
 
             # 7. Extract and Persist Artifacts
-            artifacts = self._extract_artifacts_from_synthesis(session_id, synth_text, state)
+            artifacts = self._extract_artifacts_from_synthesis(
+                session_id, synth_message.content, state, synthesis_failed=synthesis_failed
+            )
             for art in artifacts:
                 art_db = ArtifactModel(
                     id=str(uuid.uuid4()),
@@ -411,13 +444,14 @@ class OrchestratorEngine:
             await db.commit()
 
             state.status = "completed"
-            state.is_consensus_reached = True
+            state.is_consensus_reached = not state.failed_agent_keys
+            if state.failed_agent_keys:
+                state.error_message = (
+                    "다음 에이전트가 LLM 엔드포인트에 닿지 못했습니다: "
+                    + ", ".join(state.failed_agent_keys)
+                )
 
             if on_event:
-                await on_event({
-                    "type": "message_added",
-                    "message": state.messages[-1].model_dump(),
-                })
                 await on_event({
                     "type": "artifacts_synthesized",
                     "artifacts": [a.model_dump() for a in state.artifacts],
@@ -425,6 +459,8 @@ class OrchestratorEngine:
                 await on_event({
                     "type": "turn_completed",
                     "status": "completed",
+                    "failed_agents": list(state.failed_agent_keys),
+                    "error_message": state.error_message,
                 })
 
             return state
@@ -438,6 +474,10 @@ class OrchestratorEngine:
         })
 
         for msg in state.messages:
+            # 응답을 못 받은 자리는 맥락에 넣지 않습니다. 실패 안내문을 발언인 양
+            # 읽히게 하면 다음 에이전트가 그것을 논평하기 시작합니다.
+            if msg.msg_type == "error":
+                continue
             if msg.sender_key == "user":
                 context.append({
                     "role": "user",
@@ -460,24 +500,41 @@ class OrchestratorEngine:
         """Constructs prompt for orchestrator final consensus & artifact generation."""
         transcript_lines = []
         for msg in state.messages:
+            if msg.msg_type == "error":
+                continue
             prefix = "### [User]" if msg.sender_key == "user" else f"### {msg.sender_name} ({msg.sender_role})"
             transcript_lines.append(f"{prefix}:\n{msg.content}\n")
         full_transcript = "\n".join(transcript_lines)
 
+        missing = ""
+        if state.failed_agent_keys:
+            # 누가 빠졌는지 알려야, 오케스트레이터가 없는 의견을 있는 것처럼 요약하지 않습니다.
+            missing = (
+                f"\n[주의] 다음 에이전트는 LLM 연결 실패로 이번 토론에서 발언하지 못했습니다: "
+                f"{', '.join(state.failed_agent_keys)}. 이들의 의견을 추측해서 채우지 말고, "
+                f"보고서에 누락 사실을 명시하세요.\n"
+            )
+
         prompt = (
             f"[User Goal]: {state.user_prompt}\n\n"
-            f"[Full Multi-Agent Debate Transcript]:\n{full_transcript}\n\n"
+            f"[Full Multi-Agent Debate Transcript]:\n{full_transcript}\n"
+            f"{missing}\n"
             f"수석 오케스트레이터로서 모든 토론과 피드백을 통합하여 최종 합의 보고서를 작성하세요.\n"
             f"반드시 다음 항목들을 포함해야 합니다:\n"
             f"1. **최종 합의 요약 및 아키텍처 결정 사항 (Summary & Architecture)**\n"
-            f"2. **Mermaid 다이어그램** (```mermaid 블록)\n"
+            f"2. **Mermaid 다이어그램** (```mermaid 블록. 노드 라벨에 괄호를 쓸 때는 "
+            f'A["결제 서비스 (Payment)"] 처럼 반드시 큰따옴표로 감쌀 것)\n'
             f"3. **완전한 실행 가능 소스 코드** (```python 블록)\n"
             f"4. **품질/보안 점검표 및 엣지 케이스 대응 전략**"
         )
         return [{"role": "user", "content": prompt}]
 
     def _extract_artifacts_from_synthesis(
-        self, session_id: str, synth_text: str, state: DebateState
+        self,
+        session_id: str,
+        synth_text: str,
+        state: DebateState,
+        synthesis_failed: bool = False,
     ) -> List[ArtifactItem]:
         """Extracts markdown, code, and mermaid artifacts from the synthesis text."""
         artifacts: List[ArtifactItem] = []
@@ -486,7 +543,10 @@ class OrchestratorEngine:
         artifacts.append(
             ArtifactItem(
                 artifact_type="markdown",
-                title="종합 아키텍처 & 산출물 보고서 (Final Synthesis Report)",
+                title=(
+                    "합성 실패 (LLM 연결 끊김)" if synthesis_failed
+                    else "종합 아키텍처 & 산출물 보고서 (Final Synthesis Report)"
+                ),
                 content=synth_text,
                 language="markdown",
             )
@@ -504,12 +564,12 @@ class OrchestratorEngine:
                     ArtifactItem(
                         artifact_type="mermaid",
                         title=f"시스템 아키텍처 다이어그램 #{mermaid_idx}",
-                        content=code,
+                        content=normalize_mermaid(code),
                         language="mermaid",
                     )
                 )
                 mermaid_idx += 1
-            elif lang in ["python", "py", "typescript", "javascript", "bash", "shell", "json", "toml", "sql"]:
+            elif lang in CODE_LANGUAGES:
                 artifacts.append(
                     ArtifactItem(
                         artifact_type="code",
@@ -520,6 +580,28 @@ class OrchestratorEngine:
                 )
                 code_idx += 1
 
+        # 2-b. 합성 보고서에 다이어그램이 없으면 토론 본문에서 찾습니다.
+        #      아키텍트가 그린 다이어그램이 최종 보고서에 다시 실리지 않는 경우가
+        #      잦고 (답변 길이 제한), 그때마다 다이어그램 탭이 통째로 비었습니다.
+        if mermaid_idx == 1:
+            for msg in reversed(state.messages):
+                if msg.msg_type == "error" or msg.sender_key == "user":
+                    continue
+                found = [b for b in extract_code_blocks(msg.content) if b["language"] == "mermaid"]
+                if not found:
+                    continue
+                for block in found:
+                    artifacts.append(
+                        ArtifactItem(
+                            artifact_type="mermaid",
+                            title=f"시스템 아키텍처 다이어그램 #{mermaid_idx} ({msg.sender_name} 제안)",
+                            content=normalize_mermaid(block["code"]),
+                            language="mermaid",
+                        )
+                    )
+                    mermaid_idx += 1
+                break
+
         # 3. JSON Summary Artifact
         json_summary = {
             "session_id": session_id,
@@ -527,8 +609,9 @@ class OrchestratorEngine:
             "strategy": state.strategy,
             "total_rounds": state.current_round,
             "participating_agents": state.active_agent_keys,
+            "failed_agents": list(state.failed_agent_keys),
             "total_messages": len(state.messages),
-            "consensus_reached": True,
+            "consensus_reached": not state.failed_agent_keys,
         }
         artifacts.append(
             ArtifactItem(

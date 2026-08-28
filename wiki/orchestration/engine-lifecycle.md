@@ -88,4 +88,43 @@ async def on_event(event: Dict[str, Any]) -> None:
 | `message_added` | `message` dictionary | Finalizes or appends color-coded message bubble to feed. |
 | `tool_executed` | `agent_key`, `agent_name`, `tool_call` | Appends collapsible accordion item showing input & output. |
 | `artifacts_synthesized` | `artifacts` list | Populates code, markdown, and Mermaid tabs in Artifact Viewer. |
-| `turn_completed` | `status: "completed"` | Re-enables user input and marks personas locked. |
+| `turn_completed` | `status`, `failed_agents`, `error_message` | Re-enables user input and marks personas locked; names any agent that never answered. |
+| `run_finished` | `status` (`completed` / `failed` / `cancelled`), `error` | Emitted by `DebateRunner`, not the engine. Detaches the page's subscription. |
+
+---
+
+## 4. Who Owns the Running Turn
+
+`run_turn()` is never awaited from a page callback.
+[`DebateRunner`](file:///d:/MultiAgentOrchestrator/app/orchestration/runner.py) owns it:
+`runner.start(session_id, prompt)` spawns an `asyncio.Task` and returns immediately.
+
+This is not a detail. Awaiting the turn inside a NiceGUI click handler tied the debate to
+one browser client, and that had two consequences:
+
+- Refreshing the page, or visiting `/personas/{id}`, deleted the client. The coroutine
+  kept a slot whose parent element was then garbage-collected, so the next UI update
+  raised `RuntimeError: The parent element this slot belongs to has been deleted.` — which
+  propagated out of `run_turn()` and killed the debate, usually near the end of a turn.
+- Even when it survived, there was no way to see progress after coming back.
+
+`DebateRunner` keeps a `TurnRun` per session with two things:
+
+| | Purpose |
+| :--- | :--- |
+| **Canonical snapshot** | Every message emitted this turn, with live-updated content, plus `streaming_ids`, current artifacts, and the busy label. A page attaching mid-debate renders this. |
+| **Subscriber queues** | One bounded `asyncio.Queue` per attached page. A page that goes away just loses its queue. A page that cannot keep up is dropped, not the run. |
+
+The runner never touches NiceGUI. The task is created with `asyncio.create_task`, which
+starts with an empty `Slot` stack, so UI elements cannot be created from it even by mistake.
+
+On the UI side ([`app/ui/app.py`](file:///d:/MultiAgentOrchestrator/app/ui/app.py)):
+
+- `load_session_state()` renders DB messages, then merges in the run's snapshot messages
+  by id for anything not yet committed, and re-registers the streaming card so incoming
+  chunks have somewhere to land. A *finished* run's snapshot is ignored — the database is
+  authoritative once the turn ends.
+- `client.on_delete` unsubscribes. Every component (`ChatFeed`, `AgentRosterControl`,
+  `ArtifactViewer`) exposes `alive` and ignores updates aimed at a deleted page.
+- Server shutdown cancels outstanding runs via `DebateRunner.shutdown()`; deleting a
+  session cancels its run via `forget()`.

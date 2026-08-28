@@ -27,6 +27,11 @@ The web application workspace is organized into four primary UI components in [a
 
 ## 1. Component Breakdown
 
+> Every component exposes an `alive` property and silently ignores updates once its page has been
+> deleted. Debates outlive the page that started them (see
+> [engine-lifecycle.md](../orchestration/engine-lifecycle.md#4-who-owns-the-running-turn)), so a
+> late event arriving at a closed tab must not raise.
+
 ### 1.1. Session Sidebar ([app/ui/components/sidebar.py](file:///d:/MultiAgentOrchestrator/app/ui/components/sidebar.py))
 - **`+ New Chat` Button**: Instantiates a fresh debate session and clears the workspace.
 - **Session List**: Displays historical sessions ordered by `updated_at` descending.
@@ -34,6 +39,12 @@ The web application workspace is organized into four primary UI components in [a
 - **Session Management**: Allows inline renaming of session titles and deletion with confirmation dialogs.
 
 ### 1.2. Agent Roster Control ([app/ui/components/roster.py](file:///d:/MultiAgentOrchestrator/app/ui/components/roster.py))
+
+> The persona button's tooltip element is created once at build time and only its text is swapped
+> afterwards. `Element.tooltip()` builds a new `q-tooltip` in whatever slot is current, so calling it
+> from a background callback after the page was replaced raised
+> `The parent element this slot belongs to has been deleted.`
+
 - **Agent Toggle Cards**: Allows users to include or exclude specific specialists (e.g. toggling the Critic off for faster brainstorming). The Master Orchestrator is fixed and always enabled.
 - **Dynamic Live Refresh**: Rendered inside a reactive container (`cards_row`). When personas are updated via the persona editor or config reloads, `update_agents()` and `refresh_agent_cards()` dynamically update card labels and roles without a page reload.
 - **Configuration Tooltips**: Hovering over an agent card reveals its configured model, endpoint URL, and sequential thinking mode.
@@ -49,12 +60,15 @@ The web application workspace is organized into four primary UI components in [a
 - **Folding Tool Accordions**: Each MCP tool call (input arguments and execution outputs) renders inside an expandable Quasar accordion, preserving timeline readability.
 - **Status & Progress Banner**: Shows real-time speaker indicators (e.g. `[Senior Python Engineer] 발언 및 분석 중...`) and round counters during execution.
 - **Input Bar**: Auto-expanding message textarea with submit shortcuts (`Enter` / `Ctrl+Enter`).
+- **Failure Cards**: A message with `msg_type="error"` — an agent whose endpoint never answered — renders on a rose background with an `응답 없음` badge. `finalize_streaming_message()` restyles the card in place when a turn that had started streaming ends in failure.
+- **Reattachment**: `render_all(messages, streaming_ids=…)` rebuilds the whole feed from a snapshot and re-registers any still-streaming card, so a page opened mid-debate keeps receiving chunks.
 
 ### 1.4. Artifact Viewer ([app/ui/components/artifact_viewer.py](file:///d:/MultiAgentOrchestrator/app/ui/components/artifact_viewer.py))
 - **Tabbed Interface**:
   - **Comprehensive Report Tab**: Markdown rendering of the final synthesis report.
   - **Source Code Tab**: Language-highlighted code viewer for extracted scripts.
-  - **Architecture Diagram Tab**: Interactive SVG rendering of Mermaid diagrams.
+  - **Architecture Diagram Tab**: Interactive SVG rendering of Mermaid diagrams. If Mermaid rejects
+    the source, the panel shows the parse error and the raw diagram text rather than going blank.
   - **JSON Summary Tab**: Structured session metadata.
 - **Action Toolbar**: Includes one-click **"Copy to Clipboard"** and **"Download File"** buttons for all extracted artifacts.
 
@@ -66,3 +80,5 @@ The web application workspace is organized into four primary UI components in [a
   - **System Instructions**
 - **Draft & Reset Controls**: Allows saving drafts to `session_agents` or resetting to `conf.toml` defaults.
 - **Lock Banner**: If the session has already begun (`personas_locked = true`), inputs are disabled, displaying a read-only warning badge.
+- **In-Progress Banner**: If a debate is running for this session, a banner says so and states that
+  opening this page does not interrupt it. Navigating here used to kill the running turn.

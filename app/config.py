@@ -217,11 +217,6 @@ class LLMConfig(BaseModel):
     extra_body: Optional[Dict[str, Any]] = Field(default=None, description="Extra JSON body fields")
     max_tool_iterations: Optional[int] = Field(default=None, ge=1, le=50)
     sequential_thinking: SequentialThinkingConfig = Field(default_factory=SequentialThinkingConfig)
-    fallback_to_simulation: bool = Field(
-        default=True,
-        description="If a real LLM call fails, answer with the offline simulator instead of raising",
-    )
-
 
 class AgentConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)

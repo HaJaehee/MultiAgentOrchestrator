@@ -9,6 +9,7 @@ from app.agents.pool import get_agent_pool
 from app.config import get_config
 from app.database.session import init_db
 from app.mcp.manager import get_mcp_manager
+from app.orchestration.runner import get_debate_runner
 from app.ui.app import create_ui
 from app.ui.personas_page import create_personas_page
 
@@ -46,6 +47,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     logger.info("Shutting down Multi-Agent Orchestrator Platform...")
+
+    # 백그라운드로 돌고 있는 토론 태스크를 먼저 세웁니다.
+    await get_debate_runner().shutdown()
+    logger.info("Background debate tasks cancelled.")
 
     # 유지 중인 MCP 세션과 서버 프로세스를 정리합니다.
     await mcp_mgr.shutdown()
@@ -85,7 +90,7 @@ async def list_agents():
             "api_version": a.api_version,
             "provider": a.provider,
             "has_api_key": bool(a.api_key and a.api_key.strip()),
-            "mode": "live" if a.is_live else "simulation",
+            "mode": "live" if a.is_live else "unconfigured",
             "temperature": a.temperature,
             "max_tokens": a.max_tokens,
             "sequential_thinking": a.sequential_thinking.model_dump(exclude={"prompt_template"}),

@@ -58,7 +58,6 @@ Defines system-wide defaults. Any agent that does not explicitly set an attribut
 | `num_retries` | `int` | `2` | Number of automatic retries on network/rate-limit failure. |
 | `drop_params` | `bool` | `true` | Silently drops unsupported parameters for local model compatibility. |
 | `max_tool_iterations`| `int` | `20` | Maximum number of consecutive tool-call loops per agent turn. |
-| `fallback_to_simulation`| `bool`| `true` | When `true`, uses offline simulator if real LLM fails. When `false`, bubbles errors. |
 | `extra_headers` | `dict` | `{}` | Custom HTTP headers sent with every LLM request (e.g. gateway auth). |
 | `extra_body` | `dict` | `{}` | Custom JSON body fields sent with requests. |
 
@@ -111,7 +110,7 @@ Configures specialist agents in the agent pool.
 
 ---
 
-## 3. Live Mode vs. Offline Simulation Mode
+## 3. Live Mode vs. Unconfigured Agents
 
 Each agent computes an `is_live` property dynamically ([app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py#L269-L277)):
 
@@ -128,7 +127,7 @@ def is_live(self) -> bool:
 
 - **Live Execution**: If `api_base`, `api_key`, or a local provider prefix (`ollama/`, `lm_studio/`) is present, real network requests are dispatched via LiteLLM.
 - **Keyless Local Endpoints**: When connecting to local servers without an API key (e.g. `vLLM` or `LM Studio` at `http://localhost:1234/v1`), LiteLLM requires a non-empty key parameter. The caller automatically injects a placeholder (`sk-no-key-required`) so local calls succeed.
-- **Offline Simulation Fallback**: If an agent lacks credentials/endpoint or if a live call fails and `fallback_to_simulation = true`, the built-in heuristic simulator creates contextual responses and mock tool outputs, ensuring end-to-end functionality in isolated test environments.
+- **Unconfigured Agents**: If an agent has neither an endpoint nor a key, its turn raises `LLMUnavailableError` and the debate records an explicit "연결 끊김" message in its place. Nothing is invented to fill the gap — see [llm-integration.md](../agents/llm-integration.md).
 
 ---
 

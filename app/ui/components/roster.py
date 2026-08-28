@@ -38,12 +38,22 @@ class AgentRosterControl:
         self.session_id: Optional[str] = None
         self.personas_locked: bool = False
         self.persona_button: Optional[ui.button] = None
+        self.persona_tooltip: Optional[ui.tooltip] = None
         self.persona_badge: Optional[ui.badge] = None
         self.mcp_row: Optional[ui.row] = None
         self.mcp_badge: Optional[ui.badge] = None
         self.mcp_reconnect_btn: Optional[ui.button] = None
         self.cards_row: Optional[ui.row] = None
         self.current_personas: Optional[Dict[str, Any]] = None
+
+    @property
+    def alive(self) -> bool:
+        """이 로스터가 아직 살아 있는 페이지에 붙어 있는지.
+
+        토론이 백그라운드로 옮겨 가면서, 이미 버려진 화면의 컨트롤을 갱신하려는
+        호출이 생길 수 있습니다. 그럴 때 조용히 넘어갑니다.
+        """
+        return self.expansion is not None and not self.expansion.is_deleted
 
     def build_ui(self) -> ui.expansion:
         # Expansion defaulted to open as requested
@@ -72,6 +82,13 @@ class AgentRosterControl:
                             .props("flat dense color=indigo-4")
                             .classes("text-[11px]")
                         )
+                        # 툴팁은 여기서 딱 한 번 만듭니다. `Element.tooltip()` 은 호출할
+                        # 때마다 "현재 슬롯" 에 새 q-tooltip 을 만드는데, 토론 종료
+                        # 콜백처럼 페이지 밖 태스크에서 부르면 그 슬롯의 부모가 이미
+                        # 지워져 있어 `The parent element this slot belongs to has been
+                        # deleted.` 로 터졌습니다. 이후에는 텍스트만 갈아 끼웁니다.
+                        with self.persona_button:
+                            self.persona_tooltip = ui.tooltip("")
                         self.summary_badge = ui.badge("4 Agents Active", color="indigo-7").props("dense text-xs")
                 self._refresh_persona_controls()
 
@@ -133,7 +150,7 @@ class AgentRosterControl:
 
     def refresh_agent_cards(self, personas: Optional[Dict[str, Any]] = None) -> None:
         """에이전트 카드 목록을 현재 페르소나 및 풀 상태로 다시 그립니다."""
-        if self.cards_row is None:
+        if self.cards_row is None or self.cards_row.is_deleted:
             return
         if personas is not None:
             self.current_personas = personas
@@ -181,7 +198,8 @@ class AgentRosterControl:
                 if agent.sequential_thinking.enabled:
                     ui.badge(f"ST·{agent.sequential_thinking.mode}", color="teal-9").props("dense text-[8px]")
                 if not agent.is_live:
-                    ui.badge("SIM", color="grey-8").props("dense text-[8px]")
+                    # 엔드포인트가 없으면 발언 차례에 "연결 끊김" 으로 기록됩니다.
+                    ui.badge("미설정", color="red-9").props("dense text-[8px]")
 
             ui.tooltip(
                 f"model: {agent.model}\n"
@@ -200,17 +218,21 @@ class AgentRosterControl:
 
     def _refresh_persona_controls(self) -> None:
         """잠금 상태에 따라 버튼 문구와 뱃지를 갱신합니다."""
-        if self.persona_badge:
+        if not self.alive:
+            return
+        if self.persona_badge and not self.persona_badge.is_deleted:
             self.persona_badge.set_visibility(self.personas_locked)
-        if self.persona_button:
+        if self.persona_button and not self.persona_button.is_deleted:
             if self.personas_locked:
                 self.persona_button.set_text("페르소나 보기")
                 self.persona_button.props("icon=lock")
-                self.persona_button.tooltip("토론이 시작되어 고정되었습니다. 값은 확인할 수 있습니다.")
+                tip = "토론이 시작되어 고정되었습니다. 값은 확인할 수 있습니다."
             else:
                 self.persona_button.set_text("페르소나 편집")
                 self.persona_button.props("icon=badge")
-                self.persona_button.tooltip("첫 메시지를 보내기 전까지 이름·역할·시스템 프롬프트를 수정할 수 있습니다")
+                tip = "첫 메시지를 보내기 전까지 이름·역할·시스템 프롬프트를 수정할 수 있습니다"
+            if self.persona_tooltip is not None and not self.persona_tooltip.is_deleted:
+                self.persona_tooltip.set_text(tip)
 
     def set_personas_locked(self, locked: bool) -> None:
         self.personas_locked = locked
@@ -218,7 +240,7 @@ class AgentRosterControl:
 
     def refresh_mcp_status(self) -> None:
         """conf.toml 의 MCP 서버별 연결 상태를 칩으로 다시 그립니다."""
-        if self.mcp_row is None:
+        if self.mcp_row is None or self.mcp_row.is_deleted:
             return
 
         try:
