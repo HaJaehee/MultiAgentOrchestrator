@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import signal
 import sys
@@ -216,3 +217,239 @@ async def test_tool_level_error_is_reported_as_error():
         assert _field(after_out, "count") == "2", "실패 호출이 세션을 재기동시켰습니다"
     finally:
         await manager.shutdown()
+
+
+# ------------------------------------------------------- 대화별 스코프 (_meta)
+#
+# 어느 대화의 호출인지는 호스트인 앱이 압니다. 모델에게 인자로 물어보면 잊거나
+# 잘못 적는 순간 다른 대화의 상태를 건드리므로, 스코프는 매 호출의 `_meta` 로
+# 우리가 실어 보냅니다. 아래 테스트들이 그 경로를 고정합니다.
+
+
+@pytest.mark.asyncio
+async def test_tool_calls_carry_the_conversation_scope():
+    """execute_tool(scope=...) 가 서버까지 요청 메타데이터로 도착해야 합니다."""
+    manager = MCPManager({"stateful": MCPServerConfig(command=sys.executable, args=[FIXTURE_SERVER])})
+    await manager.initialize()
+    try:
+        scoped, status = await manager.execute_tool("stateful__echo_scope", {}, scope="sess-A")
+        assert status == "success"
+        assert scoped.strip() == "scope=sess-A", f"스코프가 서버에 도착하지 않았습니다: {scoped}"
+
+        other, _ = await manager.execute_tool("stateful__echo_scope", {}, scope="sess-B")
+        assert other.strip() == "scope=sess-B"
+
+        # 스코프를 안 주면 메타데이터도 안 붙습니다 (서버가 폴백을 정합니다).
+        bare, _ = await manager.execute_tool("stateful__echo_scope", {})
+        assert bare.strip() == "scope=none"
+    finally:
+        await manager.shutdown()
+
+
+def _node_mcp_home() -> Path | None:
+    """@modelcontextprotocol/sdk 가 설치된 mcp_node 를 찾습니다 (없으면 None)."""
+    candidates = [
+        Path(os.environ["MCP_NODE_HOME"]) if os.environ.get("MCP_NODE_HOME") else None,
+        Path(__file__).resolve().parent.parent / "mcp_node",
+        Path(__file__).resolve().parent.parent / "dist" / "MultiAgentOrchestrator_bundle" / "mcp_node",
+    ]
+    for candidate in candidates:
+        if candidate and (candidate / "node_modules" / "@modelcontextprotocol" / "sdk").is_dir():
+            return candidate
+    return None
+
+
+def _node_bin() -> str | None:
+    import shutil as _shutil
+    root = Path(__file__).resolve().parent.parent
+    bundled = root / "dist" / "MultiAgentOrchestrator_bundle" / "node_runtime" / "node.exe"
+    if bundled.is_file():
+        return str(bundled)
+    return os.environ.get("NODE_BIN") or _shutil.which("node")
+
+
+needs_node = pytest.mark.skipif(
+    _node_mcp_home() is None or _node_bin() is None,
+    reason="Node 런타임 또는 mcp_node/node_modules 가 없습니다 (python setup_mcp.py)",
+)
+
+
+def _memory_server(tmp_path) -> dict:
+    """포크한 memory 서버를 mcp_node 옆에 놓고 서버 설정을 만듭니다."""
+    from app.mcp.manager import VENDORED_MEMORY_FILENAME, sync_vendored_servers
+
+    cfg = MCPServerConfig(
+        command=_node_bin(),
+        args=[str(_node_mcp_home() / VENDORED_MEMORY_FILENAME)],
+        env={"MEMORY_GRAPH_DIR": str(tmp_path / "graphs")},
+    )
+    servers = {"memory": cfg}
+    sync_vendored_servers(servers)
+    return servers
+
+
+async def _entity_names(manager: MCPManager, scope: str | None, arguments: dict | None = None) -> list:
+    out, status = await manager.execute_tool("memory__read_graph", arguments or {}, scope=scope)
+    assert status == "success", out
+    return sorted(e["name"] for e in json.loads(out)["entities"])
+
+
+async def _remember(manager: MCPManager, scope: str | None, name: str) -> None:
+    _, status = await manager.execute_tool(
+        "memory__create_entities",
+        {"entities": [{"name": name, "entityType": "decision", "observations": ["합의됨"]}]},
+        scope=scope,
+    )
+    assert status == "success"
+
+
+@needs_node
+@pytest.mark.asyncio
+async def test_memory_graphs_are_isolated_per_conversation(tmp_path):
+    """대화 A 가 기록한 사실이 대화 B 에 보이면 안 됩니다.
+
+    공식 memory 서버는 프로세스 하나에 그래프 하나여서, 서버를 공유하는 다음
+    대화가 이전 대화의 기억을 그대로 읽었습니다. 그게 이 포크의 이유입니다.
+    """
+    manager = MCPManager(_memory_server(tmp_path))
+    await manager.initialize()
+    try:
+        assert manager.clients["memory"].is_connected, manager.clients["memory"].connect_error
+
+        await _remember(manager, "sess-A", "A-만의-결정")
+        await _remember(manager, "sess-B", "B-만의-결정")
+
+        assert await _entity_names(manager, "sess-A") == ["A-만의-결정"]
+        assert await _entity_names(manager, "sess-B") == ["B-만의-결정"]
+    finally:
+        await manager.shutdown()
+
+
+@needs_node
+@pytest.mark.asyncio
+async def test_request_metadata_beats_a_spoofed_graph_id_argument(tmp_path):
+    """모델이 graph_id 로 남의 그래프를 지목해도 호스트 스코프가 이겨야 합니다."""
+    manager = MCPManager(_memory_server(tmp_path))
+    await manager.initialize()
+    try:
+        await _remember(manager, "sess-A", "A-만의-결정")
+        seen = await _entity_names(manager, "sess-B", {"graph_id": "sess-A"})
+        assert seen == [], f"인자로 남의 그래프가 열렸습니다: {seen}"
+    finally:
+        await manager.shutdown()
+
+
+@needs_node
+@pytest.mark.asyncio
+async def test_unscoped_calls_do_not_fall_into_a_shared_graph(tmp_path):
+    """스코프가 빠진 호출은 공용 그래프가 아니라 프로세스 한정 그래프로 갑니다.
+
+    공용으로 떨어뜨리면 주입이 조용히 실패했을 때 예전처럼 대화가 섞이고,
+    아무도 눈치채지 못합니다.
+    """
+    manager = MCPManager(_memory_server(tmp_path))
+    await manager.initialize()
+    try:
+        await _remember(manager, "sess-A", "A-만의-결정")
+        await _remember(manager, None, "스코프-없는-사실")
+
+        assert await _entity_names(manager, "sess-A") == ["A-만의-결정"]
+        assert await _entity_names(manager, None) == ["스코프-없는-사실"]
+
+        graphs = sorted(p.name for p in (tmp_path / "graphs").iterdir())
+        assert "sess-A.jsonl" in graphs
+        assert any(name.startswith("unscoped-") for name in graphs), graphs
+    finally:
+        await manager.shutdown()
+
+
+def test_vendored_memory_server_is_installed_where_the_config_points(tmp_path):
+    """설정이 가리키는 자리에 포크 사본이 놓이고, 경로는 절대 경로가 됩니다."""
+    from app.mcp.manager import VENDORED_MEMORY_FILENAME, VENDORED_MEMORY_SERVER, sync_vendored_servers
+
+    target = tmp_path / "mcp_node" / VENDORED_MEMORY_FILENAME
+    servers = {"memory": MCPServerConfig(command="node", args=[str(target)])}
+    sync_vendored_servers(servers)
+
+    assert target.is_file()
+    assert target.read_bytes() == VENDORED_MEMORY_SERVER.read_bytes()
+
+    # 상대 경로로 적혀 있어도 프로젝트 루트 기준 절대 경로로 바뀝니다. 상대
+    # 경로를 그대로 넘기면 자식 프로세스가 자기 cwd 로 풀어 버립니다.
+    relative = {"memory": MCPServerConfig(command="node", args=[f"./mcp_node/{VENDORED_MEMORY_FILENAME}"])}
+    sync_vendored_servers(relative)
+    assert Path(relative["memory"].args[0]).is_absolute()
+
+
+def test_scope_policy_splits_the_kernel_but_not_the_graph():
+    """서버마다 상태의 경계가 다릅니다. 그 경계를 호스트가 정합니다."""
+    from app.mcp.manager import compose_scope
+
+    # 지식 그래프는 대화 단위입니다. 합의된 사실은 참가자 전원이 함께 봐야 합니다.
+    assert compose_scope("memory", "sess-A", "coder") == "sess-A"
+    assert compose_scope("memory", "sess-A", "critic") == "sess-A"
+
+    # 커널은 발언자 단위입니다. 커널 변수는 다음 발언자의 컨텍스트에 남지 않으므로,
+    # 물려주면 아무도 검증할 수 없는 상태가 됩니다. 인계는 작업 공간 파일로 합니다.
+    assert compose_scope("sandbox", "sess-A", "coder") == "sess-A-coder"
+    assert compose_scope("sandbox", "sess-A", "critic") == "sess-A-critic"
+    assert compose_scope("sandbox", "sess-A", None) == "sess-A"
+
+    # 폴더를 공유하는 서버는 경로가 곧 경계라 스코프를 쓰지 않습니다.
+    assert compose_scope("filesystem", "sess-A", "coder") == "sess-A"
+    assert compose_scope("sandbox", None, "coder") is None
+
+
+@pytest.mark.asyncio
+async def test_two_agents_in_one_debate_get_different_kernels():
+    """같은 대화라도 발언자가 다르면 샌드박스 스코프가 달라야 합니다.
+
+    픽스처 서버를 'sandbox' 라는 이름으로 띄워, 정책이 실제 요청 메타데이터까지
+    반영되는지 봅니다.
+    """
+    manager = MCPManager({"sandbox": MCPServerConfig(command=sys.executable, args=[FIXTURE_SERVER])})
+    await manager.initialize()
+    try:
+        coder, _ = await manager.execute_tool(
+            "sandbox__echo_scope", {}, scope="sess-A", actor="coder"
+        )
+        critic, _ = await manager.execute_tool(
+            "sandbox__echo_scope", {}, scope="sess-A", actor="critic"
+        )
+        assert coder.strip() == "scope=sess-A-coder"
+        assert critic.strip() == "scope=sess-A-critic"
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_agents_in_one_debate_share_one_memory_graph():
+    """반대로 지식 그래프는 발언자가 달라도 같아야 합니다."""
+    manager = MCPManager({"memory": MCPServerConfig(command=sys.executable, args=[FIXTURE_SERVER])})
+    await manager.initialize()
+    try:
+        for actor in ("orchestrator", "architect", "critic"):
+            out, _ = await manager.execute_tool(
+                "memory__echo_scope", {}, scope="sess-A", actor=actor
+            )
+            assert out.strip() == "scope=sess-A", f"{actor} 가 다른 그래프를 봅니다: {out}"
+    finally:
+        await manager.shutdown()
+
+
+def test_stale_conf_pointing_at_the_official_memory_server_is_reported(caplog):
+    """소스만 갱신한 설치본은 conf.toml 이 그대로라 공식 서버를 계속 띄웁니다.
+
+    그러면 격리 없이 동작하는데, 조용하면 아무도 모릅니다.
+    """
+    import logging
+    from app.mcp.manager import OFFICIAL_MEMORY_PACKAGE, sync_vendored_servers
+
+    stale = {"memory": MCPServerConfig(
+        command="node",
+        args=[f"./mcp_node/node_modules/{OFFICIAL_MEMORY_PACKAGE}/dist/index.js"],
+    )}
+    with caplog.at_level(logging.WARNING, logger="app.mcp.manager"):
+        sync_vendored_servers(stale)
+
+    assert any("still points at the official memory server" in r.message for r in caplog.records)

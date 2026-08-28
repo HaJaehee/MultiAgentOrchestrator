@@ -137,6 +137,7 @@ python setup_mcp.py
 ```
 - `./workspace` 생성 및 **git 저장소 초기화** — git MCP 서버는 유효한 git 저장소가 아니면 기동에 실패합니다
 - `./mcp_node` 에 공식 Node MCP 서버 설치 (filesystem / memory / sequential-thinking, Node.js 필요)
+  및 포크한 memory 서버(대화별 지식 그래프) 사본 배치
 - `./mcp_sandbox` 에 [AirgappedPySandbox](https://github.com/HaJaehee/AirgappedPySandbox) 체크아웃
 
 Node 를 쓰지 않거나 샌드박스가 필요 없으면 `--skip-node` / `--skip-sandbox` 를 붙이고,
@@ -271,7 +272,7 @@ mcp_server = "sequential_thinking"  # mcp 모드에서 사용할 MCP 서버 키
 | 서버 | 조달 | 툴 | 기본값 | 역할 |
 |------|------|----|--------|------|
 | `filesystem` | Node (공식) | 14 | 활성 | 공용 작업 공간 파일 I/O. 지정 디렉터리 밖 경로는 서버가 차단 |
-| `memory` | Node (공식) | 9 | 활성 | 합의된 사실을 지식 그래프로 축적 (컨텍스트가 잘려도 보존) |
+| `memory` | Node (공식 서버 포크) | 9 | 활성 | 합의된 사실을 지식 그래프로 축적 (컨텍스트가 잘려도 보존). 그래프는 **대화별로 분리**됩니다 |
 | `git` | Python (공식) | 12 | 활성 | 산출물 버전 관리. 라운드별 변화를 diff 로 추적 |
 | `sandbox` | Python ([AirgappedPySandbox](https://github.com/HaJaehee/AirgappedPySandbox)) | 5 | 활성 | Python 코드 실제 실행. 에이전트의 주장을 실행으로 판정 |
 | `sequential_thinking` | Node (공식) | 1 | 비활성 | `mode = "mcp"` 를 쓸 때만 필요 |
@@ -410,6 +411,59 @@ MCP 서버는 허용 경로를 기동 시점에 받으므로(`filesystem` 은 ar
 띄우면서 앞선 토론의 도구가 남의 폴더를 읽고 쓰게 되기 때문입니다. 그런 경우 두 번째
 토론은 시작을 거절하고 이유를 알려줍니다. 토론 중에는 작업 공간 변경도 막습니다.
 
+#### 대화별 지식 그래프
+
+`memory` MCP 는 공식 서버가 아니라 `mcp_servers/memory_scoped/` 의 포크입니다.
+
+공식 서버는 프로세스 하나에 그래프 파일 하나(`MEMORY_FILE_PATH`)를 씁니다. 그런데 MCP 서버
+프로세스는 모든 대화가 공유하므로, **다음 대화가 이전 대화의 기억을 그대로 읽었습니다.** 이
+서버를 둔 이유는 라운드가 길어져 컨텍스트가 잘려도 그 토론의 결정이 남게 하려는 것이지 대화
+간에 지식을 쌓으려는 것이 아니었으므로, 동작이 목적과 정반대였습니다.
+
+포크는 격리 기준을 프로세스 수명이 아니라 **요청이 들고 오는 스코프**로 옮깁니다. 그래프는
+`workspace/.memory-graphs/<대화 id>.jsonl` 로 나뉘고, 어느 그래프를 열지는 앱이 매 호출의
+요청 메타데이터(`_meta`)로 알려줍니다.
+
+스코프를 도구 인자로 두고 모델에게 넘기게 하지 않은 것이 요점입니다. 모델이 한 번 잊으면
+조용히 남의 대화에 쓰게 되는데, 그게 바로 고치려던 증상입니다. 어느 대화의 호출인지는 호스트인
+앱이 이미 알고 있으니 앱이 말하는 것이 맞습니다. 모델이 `graph_id` 인자로 다른 그래프를
+지목해도 `_meta` 가 이깁니다.
+
+스코프가 아예 없는 호출은 공용 그래프가 아니라 `unscoped-<pid>.jsonl` 로 떨어지고 서버가
+stderr 에 경고를 남깁니다. 공용으로 떨어뜨리면 주입이 깨졌을 때 예전 증상이 조용히 되살아
+납니다.
+
+실행 사본(`mcp_node/memory-scoped.mjs`)은 앱이 기동할 때 자동으로 놓입니다. 포크를 갱신한
+뒤 따로 실행할 명령은 없습니다.
+
+#### 무엇을 어디까지 공유하는가
+
+경계는 서버마다 다르고, 그 경계는 호스트가 정합니다.
+
+| 상태 | 경계 | 이유 |
+|------|------|------|
+| 작업 공간 폴더 | 전부 공유 | 에이전트 사이의 인계 채널. filesystem·git diff·아티팩트 뷰어에 그대로 남습니다 |
+| 지식 그래프 | 대화 | 합의된 사실은 그 토론의 참가자 전원이 함께 봐야 합니다 |
+| 커널 네임스페이스 | 대화 × 발언자 | 커널 변수는 어디에도 기록되지 않습니다 |
+
+커널을 발언자 단위로 나눈 이유가 핵심입니다. 다음 발언자의 컨텍스트에는 앞 발언의 **본문만**
+들어가고 도구 실행 로그는 들어가지 않습니다(`_build_context_for_agent`). 커널을 공유하면
+크리틱은 존재조차 모르는 변수를 물려받게 되고, 세 라운드 전의 낡은 `df` 를 현재 것으로 오인해
+자신 있게 틀린 리뷰를 씁니다. 게다가 크리틱에게 샌드박스를 준 이유는 "코드를 직접 실행해
+반박"인데, 코더가 대화형으로 만들어 둔 객체를 들여다보는 것은 코더의 *결과*를 보는 것이지
+코더의 *코드*를 검증하는 것이 아닙니다.
+
+그래서 인계는 파일로 합니다. 코더가 `write_workspace_file` 로 남기고 크리틱이
+`run_python_file` 로 다시 실행합니다 — 실패하면 `NameError` 로 시끄럽게 실패하고, 파일을 열면
+해결됩니다. 한 에이전트가 라운드를 넘겨가며 자기 코드를 고치는 연속성은 그대로입니다.
+
+샌드박스는 원래 `namespace` 인자로 격리하되 요청 메타데이터가 있으면 그것을 우선하도록
+만들어져 있었는데, 앱이 메타데이터를 보내지 않아 그 경로가 한 번도 쓰이지 않았습니다.
+
+필요한 커널 수는 `동시 토론 수 × 샌드박스를 쓰는 에이전트 수` 입니다. 기본 구성은 coder·critic
+둘이라 `SANDBOX_MAX_NAMESPACES` 기본값을 16 으로 두었습니다(동시 토론 8건). 넘으면 가장 오래
+안 쓴 커널부터 정리되고 그 변수들은 사라집니다.
+
 #### 소스만 갱신해 반입하기
 
 런타임(포터블 파이썬 · node.exe · wheel · MCP 서버)은 한 번 반입하면 버전을 올릴 때까지
@@ -423,7 +477,7 @@ python package_source.py --no-tests --no-docs  # app/ 과 설정만
 
 | 담기는 것 | 빠지는 것 |
 |---|---|
-| `app/` | `python_runtime/`, `node_runtime/` |
+| `app/`, `mcp_servers/` | `python_runtime/`, `node_runtime/` |
 | `tests/`, `wiki/` (옵션으로 제외 가능) | `wheels/`, `mcp_node/`, `mcp_sandbox/` |
 | `conf.example.toml`, `.env.example`, `requirements.txt` | `workspace/`, `multiagent.db` |
 | `setup_mcp.py`, `package_offline.py|ps1`, `package_source.py|ps1` | `dist/`, `.git/`, `__pycache__/` |

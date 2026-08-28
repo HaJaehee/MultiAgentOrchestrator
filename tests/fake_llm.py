@@ -48,6 +48,8 @@ class FakeLLMCaller:
         self.fail_keys = set(fail_keys or ())
         self.replies = replies or {}
         self.calls: List[str] = []
+        # 각 발언이 어떤 대화 스코프로 도구를 부를지 (MCP _meta 로 나가는 값)
+        self.scopes: List[Optional[str]] = []
 
     def _reply_for(self, agent: Agent, messages: List[Dict[str, Any]]) -> str:
         if agent.key in self.replies:
@@ -66,8 +68,10 @@ class FakeLLMCaller:
         custom_instructions: str = "",
         on_tool_call: Optional[Callable[[Dict[str, Any]], Any]] = None,
         on_chunk: Optional[Callable[[str], Any]] = None,
+        session_id: Optional[str] = None,
     ) -> Tuple[str, List[Dict[str, Any]]]:
         self.calls.append(agent.key)
+        self.scopes.append(session_id)
         if agent.key in self.fail_keys:
             raise LLMUnavailableError(agent, "APIConnectionError: 500 Internal Server Error")
 

@@ -48,7 +48,8 @@ PACKAGE_NAME = "MultiAgentOrchestrator_source"
 
 # --- 무엇을 담는가 (허용 목록) -------------------------------------------------
 
-SOURCE_DIRS = ["app"]
+# mcp_servers/ 는 포크한 MCP 서버 원본입니다 (실행 사본은 앱이 mcp_node 에 놓습니다).
+SOURCE_DIRS = ["app", "mcp_servers"]
 TEST_DIRS = ["tests"]
 DOC_DIRS = ["wiki"]
 
@@ -95,7 +96,8 @@ SECRET_PATTERNS = [
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "개인 키"),
 ]
 
-TEXT_SUFFIXES = {".py", ".toml", ".md", ".txt", ".ps1", ".bat", ".json", ".yml", ".yaml", ".example", ".svg"}
+TEXT_SUFFIXES = {".py", ".toml", ".md", ".txt", ".ps1", ".bat", ".json", ".yml", ".yaml", ".example", ".svg",
+                 ".js", ".mjs"}
 
 
 def log(message: str) -> None:
@@ -158,8 +160,8 @@ APPLY_UPDATE_PS1 = """# 소스 갱신 적용 스크립트 (폐쇄망 설치본 �
 #
 #   .\\apply_update.ps1 -Target "C:\\path\\to\\MultiAgentOrchestrator_bundle"
 #
-# app/ 은 통째로 교체합니다. 파일 단위로 덮어쓰면 이번 갱신에서 삭제된 파일이
-# 대상에 남아 import 되기 때문입니다. 교체 전에 백업을 뜹니다.
+# app/ 과 mcp_servers/ 는 통째로 교체합니다. 파일 단위로 덮어쓰면 이번 갱신에서
+# 삭제된 파일이 대상에 남아 import 되기 때문입니다. 교체 전에 백업을 뜹니다.
 # conf.toml 은 건드리지 않습니다. 이 망의 엔드포인트 설정이 들어 있습니다.
 
 param(
@@ -183,7 +185,10 @@ $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 if (-not $NoBackup) {
     $backup = Join-Path $Target "_backup_$stamp"
     New-Item -ItemType Directory -Path $backup -Force | Out-Null
-    Copy-Item (Join-Path $Target "app") $backup -Recurse -Force
+    foreach ($d in @("app", "mcp_servers")) {
+        $p = Join-Path $Target $d
+        if (Test-Path $p) { Copy-Item $p $backup -Recurse -Force }
+    }
     foreach ($f in @("conf.toml", "requirements.txt")) {
         $p = Join-Path $Target $f
         if (Test-Path $p) { Copy-Item $p $backup -Force }
@@ -191,10 +196,17 @@ if (-not $NoBackup) {
     Write-Host "백업 완료: $backup"
 }
 
-# 2. app/ 통째 교체
-Remove-Item (Join-Path $Target "app") -Recurse -Force
-Copy-Item (Join-Path $Source "app") $Target -Recurse -Force
-Write-Host "app/ 교체 완료"
+# 2. app/ · mcp_servers/ 통째 교체
+# mcp_servers/ 는 포크한 MCP 서버 원본입니다. 실행 사본(mcp_node/memory-scoped.mjs)은
+# 앱이 기동할 때 여기서 다시 복사하므로, 이 폴더만 갱신되면 됩니다.
+foreach ($d in @("app", "mcp_servers")) {
+    $src = Join-Path $Source $d
+    if (-not (Test-Path $src)) { continue }
+    $dst = Join-Path $Target $d
+    if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
+    Copy-Item $src $Target -Recurse -Force
+    Write-Host "$d/ 교체 완료"
+}
 
 # 3. 설정이 아닌 부수 파일만 덮어쓰기
 foreach ($f in @("requirements.txt", "conf.example.toml", ".env.example", "README.md")) {

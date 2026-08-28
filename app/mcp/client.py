@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -6,6 +7,7 @@ import signal
 import sys
 import threading
 from collections import deque
+from functools import lru_cache
 
 import anyio
 from pathlib import Path
@@ -150,6 +152,43 @@ class MCPToolDefinition(BaseModel):
                 "parameters": schema,
             },
         }
+
+
+# ---------------------------------------------------------------------------
+# 요청 스코프 (_meta)
+# ---------------------------------------------------------------------------
+# 어떤 대화의 호출인지는 **호스트인 우리가** 압니다. 모델에게 인자로 물어보면,
+# 모델이 잊거나 잘못 적는 순간 다른 대화의 상태를 건드립니다. 그래서 스코프는
+# 매 호출의 `_meta` 에 우리가 실어 보냅니다.
+#
+# 키를 여러 개 넣는 이유: 서버마다 찾는 이름이 다릅니다 (샌드박스는
+# conversationId/sessionId 계열을 훑고, memory 포크는 graphId 도 봅니다).
+def build_scope_meta(scope: Optional[str]) -> Optional[Dict[str, Any]]:
+    """대화 식별자를 MCP 요청 메타데이터로 만듭니다. 스코프가 없으면 None."""
+    scope = (scope or "").strip()
+    if not scope:
+        return None
+    return {"conversationId": scope, "sessionId": scope, "graphId": scope}
+
+
+@lru_cache(maxsize=1)
+def _session_supports_meta() -> bool:
+    """설치된 mcp SDK 의 `call_tool` 이 `meta=` 를 받는지 확인합니다.
+
+    requirements 는 mcp>=1.29 를 요구하지만, 이미 설치된 환경이나 폐쇄망 반입본이
+    더 낮은 버전일 수 있습니다. 그때는 스코프 없이 호출합니다 — 격리가 빠질 뿐
+    도구 자체는 계속 동작해야 합니다.
+    """
+    try:
+        supported = "meta" in inspect.signature(ClientSession.call_tool).parameters
+    except (TypeError, ValueError):  # pragma: no cover - 서명을 못 읽는 경우
+        return False
+    if not supported:
+        logger.warning(
+            "Installed mcp SDK does not accept `meta=` in call_tool; MCP calls will be sent "
+            "without a conversation scope (memory graphs and sandbox namespaces will be shared)."
+        )
+    return supported
 
 
 class MCPClientConnection:
@@ -435,8 +474,15 @@ class MCPClientConnection:
             ]
         return []
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """유지 중인 세션으로 도구를 실행합니다. 세션이 끊겼으면 1회 재연결합니다."""
+    async def execute_tool(
+        self, tool_name: str, arguments: Dict[str, Any], scope: Optional[str] = None
+    ) -> str:
+        """유지 중인 세션으로 도구를 실행합니다. 세션이 끊겼으면 1회 재연결합니다.
+
+        `scope` 는 이 호출이 속한 대화의 식별자입니다. 요청 `_meta` 로 실려가서,
+        서버가 대화별로 상태를 나눠 담는 근거가 됩니다 (memory 의 그래프,
+        샌드박스의 네임스페이스).
+        """
         if not self._is_available:
             # Execute fallback simulation if server unavailable
             return self._simulate_tool_execution(tool_name, arguments)
@@ -451,7 +497,11 @@ class MCPClientConnection:
                     return self._simulate_tool_execution(tool_name, arguments)
 
             try:
-                res = await session.call_tool(tool_name, arguments=arguments)
+                meta = build_scope_meta(scope)
+                if meta and _session_supports_meta():
+                    res = await session.call_tool(tool_name, arguments=arguments, meta=meta)
+                else:
+                    res = await session.call_tool(tool_name, arguments=arguments)
                 text = self._extract_result_text(res)
                 if getattr(res, "isError", False):
                     # 도구는 실행됐지만 실패했다. 서버 메시지를 그대로 올려

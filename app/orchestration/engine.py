@@ -182,6 +182,7 @@ class OrchestratorEngine:
             content, tool_logs = await self.llm_caller.call_agent(
                 agent, prompt_messages, custom_instructions,
                 on_tool_call=on_tool_call, on_chunk=_on_chunk,
+                session_id=state.session_id,
             )
             final_type = msg_type
         except LLMUnavailableError as exc:

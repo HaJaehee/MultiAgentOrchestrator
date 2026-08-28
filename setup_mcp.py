@@ -10,6 +10,7 @@
   1. ./workspace 생성 및 git 저장소 초기화
      (git MCP 서버는 유효한 git 저장소가 아니면 기동에 실패합니다)
   2. ./mcp_node 에 공식 Node MCP 서버 설치 (filesystem / memory / sequential-thinking)
+     + 포크한 memory 서버(대화별 지식 그래프) 사본 배치
   3. ./mcp_sandbox 에 AirgappedPySandbox 체크아웃 (코드 실행 샌드박스)
 
 파이썬 MCP 서버(mcp-server-git 등)는 requirements.txt 에 포함되어 있으므로
@@ -95,6 +96,29 @@ def setup_node_servers() -> bool:
     return ok
 
 
+def install_forked_servers() -> bool:
+    """포크한 memory MCP 서버를 ./mcp_node 안에 놓습니다.
+
+    실행 사본이 `node_modules` 옆에 있어야 @modelcontextprotocol/sdk 와 zod 를
+    찾습니다. 앱도 기동할 때 같은 일을 하므로 여기서 실패해도 치명적이지는
+    않지만, 설치 직후 상태를 완결시켜 둡니다.
+
+    공식 memory 서버 대신 포크를 쓰는 이유는 mcp_servers/memory_scoped/index.mjs
+    의 머리말에 적혀 있습니다 — 요약하면, 공식 서버는 프로세스 하나에 그래프
+    하나여서 다음 대화가 이전 대화의 기억을 읽습니다.
+    """
+    source = ROOT_DIR / "mcp_servers" / "memory_scoped" / "index.mjs"
+    if not source.is_file():
+        print(f"      [경고] 포크 원본을 찾을 수 없습니다: {source}")
+        return False
+
+    target = ROOT_DIR / "mcp_node" / "memory-scoped.mjs"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+    print(f"      배치 완료: {target.relative_to(ROOT_DIR)}")
+    return True
+
+
 def setup_sandbox() -> bool:
     """코드 실행 샌드박스를 ./mcp_sandbox 에 준비합니다."""
     target = ROOT_DIR / "mcp_sandbox"
@@ -136,6 +160,9 @@ def main() -> None:
     else:
         print("[2/3] 공식 Node MCP 서버(./mcp_node) 설치 중...")
         results["mcp_node"] = setup_node_servers()
+        if results["mcp_node"]:
+            print("      포크한 memory 서버(대화별 지식 그래프) 배치 중...")
+            results["memory_scoped"] = install_forked_servers()
 
     if args.skip_sandbox:
         print("[3/3] 코드 실행 샌드박스 — 건너뜁니다.")

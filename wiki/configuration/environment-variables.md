@@ -93,7 +93,7 @@ By defaulting `PYTHON_BIN` to `sys.executable`, the child MCP process inherits t
 | `WORKSPACE_DIR` | `./workspace` | Root folder for agent filesystem I/O and git commits. |
 | `SANDBOX_KERNEL_PYTHON`| `PYTHON_BIN` | Python interpreter used for the IPython code sandbox execution kernel. |
 | `SANDBOX_EXEC_TIMEOUT` | `60` | Execution timeout in seconds for code evaluation. |
-| `SANDBOX_MAX_NAMESPACES`| `8` | Maximum concurrent isolated kernel sessions in the sandbox. |
+| `SANDBOX_MAX_NAMESPACES`| `16` | Maximum concurrent isolated kernel sessions in the sandbox. Namespaces are scoped per conversation **and per speaker**, so budget `concurrent debates x agents holding sandbox access` (two by default: coder and critic). Above the cap the least recently used kernel is shut down and its variables are gone. |
 
 ---
 

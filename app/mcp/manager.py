@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from app.config import MCPServerConfig, get_config, resolve_workspace_dir
+from app.config import MCPServerConfig, PROJECT_ROOT, get_config, resolve_workspace_dir
 from app.mcp.client import MCPClientConnection, MCPToolDefinition, MCPToolError
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,59 @@ def find_git_executable() -> Optional[str]:
         except Exception:
             continue
     return None
+
+
+# 포크한 memory MCP 서버의 소스 위치. 실제로 실행되는 사본은
+# `${MCP_NODE_HOME}` 안에 둡니다 — @modelcontextprotocol/sdk 와 zod 를
+# `node_modules` 에서 찾으려면 그 옆에 있어야 하기 때문입니다.
+VENDORED_MEMORY_SERVER = PROJECT_ROOT / "mcp_servers" / "memory_scoped" / "index.mjs"
+# conf.toml 이 이 이름으로 가리키는 인자를 포크 사본의 자리로 인식합니다.
+VENDORED_MEMORY_FILENAME = "memory-scoped.mjs"
+# 갱신되지 않은 conf.toml 이 아직 가리키고 있을 수 있는 공식 서버 진입점.
+OFFICIAL_MEMORY_PACKAGE = "@modelcontextprotocol/server-memory"
+
+
+def sync_vendored_servers(server_configs: Dict[str, MCPServerConfig]) -> None:
+    """설정이 가리키는 자리에 포크한 서버 사본을 최신 상태로 놓습니다.
+
+    설정에 적힌 경로를 그대로 씁니다. 사용자가 `MCP_NODE_HOME` 을 어디로 잡았든
+    따라가고, 상대 경로면 프로젝트 루트 기준의 절대 경로로 바꿔 설정에 되돌려
+    놓습니다. 상대 경로를 그대로 넘기면 자식 프로세스가 자기 cwd 로 풀어서
+    "설정은 하나인데 서버마다 다른 파일을 본다" 가 됩니다.
+
+    setup_mcp.py 를 다시 돌리지 않은 기존 설치에서도 서버가 뜨도록 기동 때마다
+    확인합니다. 파일 내용이 같으면 아무것도 하지 않습니다.
+    """
+    if not VENDORED_MEMORY_SERVER.is_file():
+        return
+
+    source = VENDORED_MEMORY_SERVER.read_bytes()
+    for name, cfg in server_configs.items():
+        if any(OFFICIAL_MEMORY_PACKAGE in arg for arg in cfg.args):
+            # 소스만 갱신한 설치본에서 일어납니다. apply_update.ps1 은 그 망의
+            # 엔드포인트가 들어 있는 conf.toml 을 일부러 덮지 않기 때문입니다.
+            # 조용히 두면 공식 서버가 그대로 떠서 대화 간 격리 없이 동작합니다.
+            logger.warning(
+                f"MCP server '{name}' still points at the official memory server; conversations "
+                f"will share one knowledge graph. Update conf.toml to "
+                f"args = [\"${{MCP_NODE_HOME:-./mcp_node}}/{VENDORED_MEMORY_FILENAME}\"] with "
+                f"env = {{ MEMORY_GRAPH_DIR = \"${{WORKSPACE_DIR:-./workspace}}/.memory-graphs\" }}."
+            )
+        for i, arg in enumerate(cfg.args):
+            if not arg.endswith(VENDORED_MEMORY_FILENAME):
+                continue
+            target = Path(arg).expanduser()
+            if not target.is_absolute():
+                target = (PROJECT_ROOT / target).resolve()
+            cfg.args[i] = str(target)
+            try:
+                if target.is_file() and target.read_bytes() == source:
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(source)
+                logger.info(f"Installed forked memory MCP server at: {target}")
+            except OSError as e:
+                logger.warning(f"Could not install forked memory MCP server at '{target}': {e}")
 
 
 def ensure_workspace(path: str) -> None:
@@ -119,6 +172,29 @@ def ensure_workspace(path: str) -> None:
 
 
 
+# 서버마다 상태의 경계가 다릅니다. 어디까지 공유하고 어디부터 나눌지는 호스트가
+# 정합니다 — 서버는 자기가 무엇에 묶여 있는지 알 수 없고, 모델에게 맡기면 잊습니다.
+#
+#   filesystem / git : 폴더 하나를 공유합니다. 경로가 곧 경계이므로 스코프가 없습니다.
+#   memory           : 대화 단위. 합의된 사실은 그 토론의 참가자 전원이 함께 봐야 합니다.
+#   sandbox          : 발언자 단위. 커널 변수는 어디에도 기록되지 않기 때문입니다 —
+#                      다음 발언자의 컨텍스트에는 앞 발언의 본문만 들어가고 도구 실행
+#                      로그는 들어가지 않으므로(engine._build_context_for_agent), 커널을
+#                      공유하면 자기가 존재도 모르는 변수를 물려받게 됩니다. 에이전트
+#                      사이의 인계는 작업 공간 파일로 합니다. 그건 filesystem·git diff·
+#                      아티팩트 뷰어에 남아서 검증할 수 있습니다.
+AGENT_SCOPED_SERVERS = frozenset({"sandbox"})
+
+
+def compose_scope(server_name: str, scope: Optional[str], actor: Optional[str]) -> Optional[str]:
+    """이 서버에 보낼 스코프를 만듭니다 (`AGENT_SCOPED_SERVERS` 는 발언자까지 포함)."""
+    if not scope:
+        return None
+    if server_name in AGENT_SCOPED_SERVERS and actor:
+        return f"{scope}-{actor}"
+    return scope
+
+
 class MCPManager:
     """Central MCP Host & Tool Registry manager."""
 
@@ -169,6 +245,7 @@ class MCPManager:
         self._tool_lookup.clear()
 
         ensure_workspace(str(self.workspace))
+        sync_vendored_servers(self.server_configs)
 
         for name in self.server_configs:
             await self._start_client(name)
@@ -272,10 +349,16 @@ class MCPManager:
         tools = self.get_tools_for_servers(allowed_servers)
         return [t.to_openai_tool() for t in tools]
 
-    async def execute_tool(self, tool_name: str, arguments: Any) -> Tuple[str, str]:
+    async def execute_tool(
+        self, tool_name: str, arguments: Any, scope: Optional[str] = None,
+        actor: Optional[str] = None,
+    ) -> Tuple[str, str]:
         """
         Executes a tool by qualified name (e.g. 'filesystem__read_file') or plain name ('read_file').
         Returns (output_str, status ['success'|'error']).
+
+        `scope` 는 이 호출이 속한 대화(세션)의, `actor` 는 지금 발언 중인 에이전트의
+        식별자입니다. 둘을 어떻게 조합해 서버에 보낼지는 `compose_scope()` 가 정합니다.
         """
         # Ensure arguments are dict
         if isinstance(arguments, str):
@@ -289,7 +372,10 @@ class MCPManager:
         if tool_name in self._tool_lookup:
             client, actual_tool_name = self._tool_lookup[tool_name]
             try:
-                result = await client.execute_tool(actual_tool_name, arguments)
+                result = await client.execute_tool(
+                    actual_tool_name, arguments,
+                    scope=compose_scope(client.server_name, scope, actor),
+                )
                 return result, "success"
             except MCPToolError as e:
                 # 서버가 보고한 실패 메시지를 그대로 전달합니다 (모델이 읽고 교정).
@@ -302,7 +388,10 @@ class MCPManager:
             server_name, actual_tool_name = tool_name.split("__", 1)
             if server_name in self.clients:
                 try:
-                    result = await self.clients[server_name].execute_tool(actual_tool_name, arguments)
+                    result = await self.clients[server_name].execute_tool(
+                        actual_tool_name, arguments,
+                        scope=compose_scope(server_name, scope, actor),
+                    )
                     return result, "success"
                 except MCPToolError as e:
                     # 서버가 보고한 실패 메시지를 그대로 전달합니다 (모델이 읽고 교정).

@@ -164,10 +164,16 @@ class LLMCaller:
         custom_instructions: str = "",
         on_tool_call: Optional[Callable[[Dict[str, Any]], Any]] = None,
         on_chunk: Optional[Callable[[str], Any]] = None,
+        session_id: Optional[str] = None,
     ) -> Tuple[str, List[Dict[str, Any]]]:
         """
         Executes a turn for the given agent.
         Returns (response_text, tool_call_logs).
+
+        `session_id` 는 MCP 도구 호출의 스코프로 함께 보내집니다. 이걸 빠뜨리면
+        서버가 대화를 구분할 수 없어 다른 대화의 상태(지식 그래프 등)를 봅니다.
+        발언자(`agent.key`)도 함께 실려서, 커널처럼 에이전트 단위로 나뉘어야 하는
+        상태를 서버가 구분할 수 있습니다 (`MCPManager.compose_scope`).
         """
         formatted_messages: List[Dict[str, Any]] = [
             {"role": "system", "content": self.build_system_prompt(agent, custom_instructions)}
@@ -192,7 +198,8 @@ class LLMCaller:
 
         try:
             content, logs = await self._run_litellm_loop(
-                agent, formatted_messages, tools, on_tool_call, on_chunk=on_chunk
+                agent, formatted_messages, tools, on_tool_call, on_chunk=on_chunk,
+                session_id=session_id,
             )
         except LLMUnavailableError:
             raise
@@ -300,6 +307,7 @@ class LLMCaller:
         on_tool_call: Optional[Callable[[Dict[str, Any]], Any]] = None,
         max_tool_iterations: Optional[int] = None,
         on_chunk: Optional[Callable[[str], Any]] = None,
+        session_id: Optional[str] = None,
     ) -> Tuple[str, List[Dict[str, Any]]]:
         tool_logs: List[Dict[str, Any]] = []
         current_messages = list(messages)
@@ -363,7 +371,9 @@ class LLMCaller:
                 except Exception:
                     fn_args = {"raw": fn_args_raw}
 
-                output, status = await self.mcp_manager.execute_tool(fn_name, fn_args)
+                output, status = await self.mcp_manager.execute_tool(
+                    fn_name, fn_args, scope=session_id, actor=agent.key
+                )
                 call_log = {
                     "tool_name": fn_name,
                     "arguments": fn_args,

@@ -238,13 +238,13 @@ async def test_partial_stream_is_kept_alongside_the_failure_notice():
 
     class HalfWayCaller(FakeLLMCaller):
         async def call_agent(self, agent, messages, custom_instructions="",
-                             on_tool_call=None, on_chunk=None):
+                             on_tool_call=None, on_chunk=None, session_id=None):
             if agent.key == "critic":
                 if on_chunk:
                     await on_chunk("검토를 시작하겠습니다")
                 raise LLMUnavailableError(agent, "APIError: 500")
             return await super().call_agent(
-                agent, messages, custom_instructions, on_tool_call, on_chunk
+                agent, messages, custom_instructions, on_tool_call, on_chunk, session_id
             )
 
     engine = _engine(llm_caller=HalfWayCaller())
@@ -456,7 +456,7 @@ def test_workspace_paths_are_absolute_and_shared_by_every_server():
     assert filesystem_root.is_absolute(), "filesystem 이 상대 경로를 받고 있습니다"
     assert sandbox_root.is_absolute(), "sandbox 가 상대 경로를 받고 있습니다"
     assert filesystem_root == sandbox_root == git_root
-    assert servers["memory"].env["MEMORY_FILE_PATH"].startswith(str(filesystem_root))
+    assert servers["memory"].env["MEMORY_GRAPH_DIR"].startswith(str(filesystem_root))
 
 
 def test_default_workspace_is_the_project_root_one():
@@ -542,3 +542,39 @@ async def test_session_workspace_is_applied_at_turn_start(tmp_path, monkeypatch)
     await _engine(llm_caller=FakeLLMCaller()).run_turn(session_id=sid, user_prompt="설계해줘")
 
     assert switched == [(tmp_path / "chosen").resolve()]
+
+
+# ------------------------------------------------------- 8. 대화별 도구 스코프
+
+
+@pytest.mark.asyncio
+async def test_every_tool_call_in_a_turn_carries_its_session_id():
+    """토론 중의 MCP 호출에는 그 대화의 식별자가 스코프로 붙어야 합니다.
+
+    스코프가 빠지면 서버는 어느 대화의 호출인지 알 수 없고, 프로세스를 공유하는
+    다음 대화가 이전 대화의 상태(지식 그래프)를 그대로 읽습니다. 스코프를 모델의
+    인자에 맡기지 않고 호스트가 매 호출에 싣는 것이 이 설계의 요점입니다.
+    """
+    caller = FakeLLMCaller()
+    sid = await _make_session()
+
+    await _engine(llm_caller=caller).run_turn(session_id=sid, user_prompt="설계해줘")
+
+    assert caller.scopes, "발언이 한 번도 없었습니다"
+    assert set(caller.scopes) == {sid}, f"스코프가 새거나 비었습니다: {set(caller.scopes)}"
+
+
+@pytest.mark.asyncio
+async def test_two_sessions_do_not_share_a_tool_scope():
+    """대화가 다르면 스코프도 달라야 합니다."""
+    caller = FakeLLMCaller()
+    sid_a = await _make_session()
+    sid_b = await _make_session()
+    engine = _engine(llm_caller=caller)
+
+    await engine.run_turn(session_id=sid_a, user_prompt="첫 대화")
+    first_round = len(caller.scopes)
+    await engine.run_turn(session_id=sid_b, user_prompt="둘째 대화")
+
+    assert set(caller.scopes[:first_round]) == {sid_a}
+    assert set(caller.scopes[first_round:]) == {sid_b}

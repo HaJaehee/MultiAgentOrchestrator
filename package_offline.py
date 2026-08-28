@@ -9,6 +9,7 @@
     ├── python_runtime/      포터블 CPython
     ├── node_runtime/        node.exe (MCP 공식 Node 서버 구동용, npm 미포함)
     ├── mcp_node/            filesystem / memory / sequential-thinking MCP 서버
+    ├── mcp_servers/         포크한 MCP 서버 원본 (memory: 대화별 지식 그래프)
     ├── mcp_sandbox/         AirgappedPySandbox (Python 코드 실행 MCP 서버)
     ├── workspace/           에이전트 공용 작업 공간
     └── run_offline.bat|ps1  실행 스크립트 (MCP 경로 환경변수 자동 주입)
@@ -81,7 +82,9 @@ REQUIRED_IMPORTS = [
     ("ipykernel", "샌드박스 커널"),
 ]
 SANDBOX_EXCLUDE = shutil.ignore_patterns(
-    ".git", ".github", "__pycache__", "*.pyc", "dist", "build", "workspace", ".venv"
+    # `.devvenv` 는 샌드박스 레포의 개발용 가상환경입니다. 경로가 개발 PC 를 가리켜
+    # 번들에서는 쓰지도 못하면서, 심사받을 서드파티 코드만 수백 MB 늘립니다.
+    ".git", ".github", "__pycache__", "*.pyc", "dist", "build", "workspace", ".venv", ".devvenv"
 )
 
 STEPS = 10
@@ -99,6 +102,15 @@ def stage_sources() -> None:
     if staging_app.exists():
         shutil.rmtree(staging_app)
     shutil.copytree(ROOT_DIR / "app", staging_app, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+    # 포크한 MCP 서버 원본. 실행 사본(mcp_node/memory-scoped.mjs)은 앱이 기동할 때
+    # 여기서 복사해 놓습니다.
+    staging_forks = STAGING_DIR / "mcp_servers"
+    if (ROOT_DIR / "mcp_servers").is_dir():
+        if staging_forks.exists():
+            shutil.rmtree(staging_forks)
+        shutil.copytree(ROOT_DIR / "mcp_servers", staging_forks,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 
     for fname in [".env.example", "requirements.txt", "README.md"]:
         src = ROOT_DIR / fname
