@@ -37,6 +37,87 @@ class LLMUnavailableError(RuntimeError):
         super().__init__(f"{agent.name} ({agent.model} @ {self.endpoint}): {self.reason}")
 
 
+def merge_consecutive_roles(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """같은 role 이 연달아 오면 하나로 합칩니다.
+
+    토론 기록은 본질적으로 다자 대화인데 OpenAI 형식에는 "다른 에이전트" role 이
+    없습니다. 그래서 남의 발언은 전부 user, 자기 발언만 assistant 로 넣게 되고,
+    발언자가 셋이면 user 가 연달아 3~5개씩 나갑니다.
+
+    OpenAI 는 이것을 받아주지만 **Anthropic·Gemini 와 상당수 OpenAI 호환 셔임
+    (llama.cpp server, 일부 vLLM 챗 템플릿)은 400 Bad Request 로 거절합니다**
+    ("roles must alternate between user and assistant"). 라운드가 늘수록 연속
+    구간이 길어지므로, 이런 엔드포인트에서는 오케스트레이터만 응답하고 전문가
+    에이전트는 전부 실패합니다.
+
+    발언마다 `[이름 (역할)]:` 머리표가 이미 붙어 있어, 합쳐도 누가 말했는지는
+    그대로 남습니다. tool 호출이 얽힌 메시지는 건드리지 않습니다.
+    """
+    merged: List[Dict[str, Any]] = []
+    for msg in messages:
+        prev = merged[-1] if merged else None
+        mergeable = (
+            prev is not None
+            and prev.get("role") == msg.get("role")
+            and msg.get("role") in ("user", "assistant")
+            and not prev.get("tool_calls") and not msg.get("tool_calls")
+            and isinstance(prev.get("content"), str) and isinstance(msg.get("content"), str)
+        )
+        if mergeable:
+            prev["content"] = f"{prev['content']}\n\n{msg['content']}"
+        else:
+            merged.append(dict(msg))
+    return merged
+
+
+def estimate_tokens(model: str, messages: List[Dict[str, Any]]) -> int:
+    """메시지 목록의 토큰 수. 모델을 모르면 글자 수로 어림잡습니다."""
+    try:
+        return int(litellm.token_counter(model=model, messages=messages))
+    except Exception:  # noqa: BLE001 - 토큰 계산 실패가 호출을 막아서는 안 됩니다
+        chars = sum(len(str(m.get("content") or "")) for m in messages)
+        # 한글은 토크나이저에 따라 글자당 1~1.5 토큰입니다. 넉넉히 잡습니다.
+        return chars // 2 + len(messages) * 4
+
+
+def fit_context_window(agent: Agent, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """`max_context_window` 안에 들어가도록 가운데 발언부터 덜어냅니다.
+
+    라운드가 쌓이면 전사(transcript)가 그대로 길어져 컨텍스트 한도를 넘고,
+    엔드포인트는 400 ("maximum context length ... however you requested ...") 을
+    돌려줍니다. 지금까지 이 설정은 conf.toml 에 선언만 되어 있고 아무데서도
+    읽히지 않았습니다.
+
+    맨 앞(목표)과 맨 뒤(이번 차례 지시)는 남깁니다. 그 사이를 오래된 것부터
+    덜어내고, 무엇이 빠졌는지 모델에게 알려 줍니다.
+    """
+    budget = agent.max_context_window - agent.max_tokens - 512  # 응답분 + 여유
+    if budget <= 0 or len(messages) <= 3:
+        return messages
+    if estimate_tokens(agent.model, messages) <= budget:
+        return messages
+
+    head, tail = messages[:2], messages[-1:]      # system + 목표, 이번 차례 지시
+    middle = messages[2:-1]
+    dropped = 0
+    while middle and estimate_tokens(agent.model, head + middle + tail) > budget:
+        middle.pop(0)
+        dropped += 1
+
+    if dropped:
+        notice = {
+            "role": "user",
+            "content": f"[앞선 발언 {dropped}건은 컨텍스트 한도로 생략되었습니다. "
+                       f"남은 기록만으로 판단하고, 생략된 내용을 지어내지 마세요.]",
+        }
+        logger.warning(
+            f"Context window trim for {agent.name}: dropped {dropped} message(s) "
+            f"(max_context_window={agent.max_context_window})"
+        )
+        return head + [notice] + middle + tail
+    return head + middle + tail
+
+
 class ToolCallLog(dict):
     """Dictionary representing a single tool call and its execution result."""
     pass
@@ -92,6 +173,11 @@ class LLMCaller:
             {"role": "system", "content": self.build_system_prompt(agent, custom_instructions)}
         ]
         formatted_messages.extend(messages)
+
+        # 순서 주의: 먼저 한도에 맞춰 자르고, 그 다음 role 을 합칩니다. 생략 안내가
+        # user 로 들어가므로 합치기를 나중에 해야 교대가 보장됩니다.
+        formatted_messages = fit_context_window(agent, formatted_messages)
+        formatted_messages = merge_consecutive_roles(formatted_messages)
 
         # Retrieve available tools for this agent
         tools = self.mcp_manager.get_openai_tools_for_servers(self.resolve_tool_servers(agent))

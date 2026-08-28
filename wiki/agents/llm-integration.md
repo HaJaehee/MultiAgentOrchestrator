@@ -94,3 +94,48 @@ This replaced a built-in simulator that invented persona-shaped answers on failu
 A 500 from the endpoint used to look like a successful debate, and the invented turn
 then fed the next agent's prompt and the final synthesis report. Whatever partial text
 arrived before the connection dropped is kept above the failure notice.
+
+
+---
+
+## 5. Shaping the Request Before It Goes Out
+
+`call_agent()` runs two transforms on the message list, in this order, before the tool loop.
+
+### 5.1. Trim to the context window (`fit_context_window`)
+
+A debate transcript grows every round, and `max_context_window` was declared in `conf.toml`
+and read nowhere. Past a few rounds the request exceeded the model's window and the endpoint
+answered **400** (`maximum context length ... however you requested ...`).
+
+The system prompt, the goal, and the current turn instruction are kept; the middle is dropped
+oldest-first until the estimate fits `max_context_window - max_tokens - 512`. The model is told
+how many turns were elided so it does not invent them. Token counting uses
+`litellm.token_counter`, falling back to a character heuristic for unknown models.
+
+The synthesis call is bounded separately, in
+[`_build_synthesis_prompt()`](file:///d:/MultiAgentOrchestrator/app/orchestration/engine.py):
+it packs the whole transcript into a *single* user message, so there are no messages for
+`fit_context_window()` to drop. It fills from the most recent turn backwards — later turns
+already reflect the earlier discussion, so if something must go, the front should go.
+
+### 5.2. Merge consecutive same-role turns (`merge_consecutive_roles`)
+
+A debate is a multi-party conversation, but the OpenAI message format has no role for
+"a different agent". Every other speaker's turn becomes `user` and only the agent's own
+becomes `assistant`, so three specialists produce three to five consecutive `user` messages,
+growing with the round count.
+
+OpenAI accepts that. **Anthropic, Gemini, and several OpenAI-compatible shims (llama.cpp
+server, some vLLM chat templates) reject it with 400** — `roles must alternate between user
+and assistant`. On such an endpoint the orchestrator's planning call succeeds (it is a single
+user message) while *every specialist turn fails*, which reads as "the agents keep losing
+their connection".
+
+Consecutive `user` or `assistant` messages are merged into one, joined by a blank line. Each
+turn already carries a `[Name (Role)]:` header, so who said what survives the merge. Messages
+carrying `tool_calls`, and `tool` results, are never merged — that would break the
+`tool_call_id` pairing.
+
+Order matters: trim first, merge second. Trimming inserts its elision notice as a `user`
+message, which would otherwise sit next to another `user` message.

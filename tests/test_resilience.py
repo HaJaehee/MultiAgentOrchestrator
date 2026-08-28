@@ -254,3 +254,118 @@ async def test_partial_stream_is_kept_alongside_the_failure_notice():
     assert "검토를 시작하겠습니다" in critic.content
     assert "연결 끊김" in critic.content
     assert critic.msg_type == "error"
+
+
+# --------------------------------------------------------------- 5. 엔드포인트 400
+
+def test_consecutive_same_role_messages_are_merged():
+    """Anthropic·Gemini·일부 OpenAI 호환 셔임은 role 이 교대하지 않으면 400 을 냅니다."""
+    from app.agents.llm import merge_consecutive_roles
+
+    merged = merge_consecutive_roles([
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "a"},
+        {"role": "user", "content": "b"},
+        {"role": "assistant", "content": "c"},
+        {"role": "user", "content": "d"},
+        {"role": "user", "content": "e"},
+    ])
+    assert [m["role"] for m in merged] == ["system", "user", "assistant", "user"]
+    assert merged[1]["content"] == "a\n\nb"
+    assert merged[3]["content"] == "d\n\ne"
+
+
+def test_merge_leaves_tool_call_messages_alone():
+    """도구 호출이 얽힌 메시지를 합치면 tool_call_id 짝이 깨집니다."""
+    from app.agents.llm import merge_consecutive_roles
+
+    messages = [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "t1"}]},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "t2"}]},
+        {"role": "tool", "tool_call_id": "t1", "content": "out1"},
+        {"role": "tool", "tool_call_id": "t2", "content": "out2"},
+    ]
+    assert merge_consecutive_roles(messages) == messages
+
+
+@pytest.mark.asyncio
+async def test_real_debate_context_alternates_roles():
+    """실제 토론 전사가 엔드포인트에 나갈 때 role 이 교대해야 합니다."""
+    from itertools import groupby
+    from app.agents.llm import fit_context_window, merge_consecutive_roles
+
+    sid = await _make_session(max_rounds=2)
+    engine = _engine(llm_caller=FakeLLMCaller())
+    state = await engine.run_turn(session_id=sid, user_prompt="설계해줘")
+
+    critic = _fixed_pool().get("critic")
+    context = engine._build_context_for_agent(state, critic)
+    raw = [{"role": "system", "content": "sys"}] + context
+    # 다듬기 전에는 user 가 연달아 나옵니다 (이것이 400 의 원인이었습니다).
+    assert max(len(list(g)) for _, g in groupby(m["role"] for m in raw)) > 1
+
+    sent = merge_consecutive_roles(fit_context_window(critic, raw))
+    assert max(len(list(g)) for _, g in groupby(m["role"] for m in sent)) == 1
+
+
+def test_context_window_drops_oldest_middle_messages():
+    """한도를 넘으면 가운데를 오래된 것부터 덜어내고, 앞뒤는 남깁니다."""
+    from app.agents.llm import fit_context_window
+
+    agent = Agent(key="architect", name="A", role="R", model="fake/model",
+                  max_context_window=2000, max_tokens=1000)
+    messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "목표"}]
+    messages += [{"role": "user", "content": f"발언 {i} " + "가" * 400} for i in range(10)]
+    messages += [{"role": "user", "content": "이번 차례입니다"}]
+
+    fitted = fit_context_window(agent, messages)
+
+    assert len(fitted) < len(messages)
+    assert fitted[0]["content"] == "sys"
+    assert fitted[1]["content"] == "목표"
+    assert fitted[-1]["content"] == "이번 차례입니다"
+    assert "컨텍스트 한도로 생략" in fitted[2]["content"]
+    # 남은 것은 최근 발언이어야 합니다.
+    assert "발언 9" in fitted[-2]["content"]
+
+
+def test_context_window_leaves_short_conversations_untouched():
+    from app.agents.llm import fit_context_window
+
+    agent = Agent(key="architect", name="A", role="R", model="fake/model",
+                  max_context_window=128000, max_tokens=4096)
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "짧은 요청"},
+        {"role": "assistant", "content": "짧은 답"},
+        {"role": "user", "content": "이번 차례"},
+    ]
+    assert fit_context_window(agent, messages) == messages
+
+
+@pytest.mark.asyncio
+async def test_synthesis_prompt_is_bounded_by_context_window():
+    """합성 프롬프트는 전사 전체가 user 메시지 하나에 들어가는 자리입니다.
+
+    메시지 단위로 덜어내는 `fit_context_window()` 로는 손댈 수 없으므로,
+    만드는 쪽에서 크기를 정해야 합니다.
+    """
+    sid = await _make_session(max_rounds=3)
+    long_reply = "가" * 3000
+    engine = _engine(llm_caller=FakeLLMCaller(replies={
+        "architect": long_reply, "coder": long_reply, "critic": long_reply,
+    }))
+    state = await engine.run_turn(session_id=sid, user_prompt="설계해줘")
+
+    tight = Agent(key="orchestrator", name="O", role="R", model="fake/model",
+                  max_context_window=4000, max_tokens=1000)
+    roomy = Agent(key="orchestrator", name="O", role="R", model="fake/model",
+                  max_context_window=128000, max_tokens=4096)
+
+    bounded = engine._build_synthesis_prompt(state, tight)[0]["content"]
+    full = engine._build_synthesis_prompt(state, roomy)[0]["content"]
+
+    assert len(bounded) < len(full)
+    assert "컨텍스트 한도로 생략" in bounded
+    # 잘라도 지시문은 남아야 보고서 형식이 유지됩니다.
+    assert "Mermaid 다이어그램" in bounded

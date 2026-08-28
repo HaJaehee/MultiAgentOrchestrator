@@ -200,7 +200,9 @@ api_version = "2024-10-21"                  # Azure OpenAI 전용
 provider = "openai"                          # LiteLLM provider 강제 지정 (선택)
 temperature = 0.4
 max_tokens = 4096
-max_context_window = 128000
+max_context_window = 128000  # 엔드포인트의 실제 한도로 맞추세요.
+                             # 전사가 이 값에 맞춰 잘립니다. 실제보다 크게 잡으면
+                             # 잘리지 않은 채 나가 400 을 받습니다.
 timeout = 120            # 요청 타임아웃(초)
 num_retries = 2          # 재시도 횟수
 drop_params = true       # 엔드포인트가 모르는 파라미터 자동 제거 (로컬 모델 호환성)

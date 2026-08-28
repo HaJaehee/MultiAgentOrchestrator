@@ -53,7 +53,7 @@ Defines system-wide defaults. Any agent that does not explicitly set an attribut
 | `temperature` | `float` | `0.4` | Default sampling temperature (range: `0.0` to `2.0`). |
 | `top_p` | `float` | `null` | Nucleus sampling probability cutoff. |
 | `max_tokens` | `int` | `4096` | Maximum generation token budget per response. |
-| `max_context_window`| `int` | `128000` | Maximum token limit of the model context window. |
+| `max_context_window`| `int` | `128000` | The model's context window. The transcript is trimmed to fit before every call — **set this to the endpoint's real limit**, or the endpoint answers with 400 instead. |
 | `timeout` | `float` | `120.0` | HTTP request timeout in seconds. |
 | `num_retries` | `int` | `2` | Number of automatic retries on network/rate-limit failure. |
 | `drop_params` | `bool` | `true` | Silently drops unsupported parameters for local model compatibility. |

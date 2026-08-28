@@ -5,7 +5,7 @@ import uuid
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 from sqlalchemy import select
 from app.agents.base import Agent
-from app.agents.llm import LLMCaller, LLMUnavailableError
+from app.agents.llm import LLMCaller, LLMUnavailableError, estimate_tokens
 from app.agents.personas import prepare_agents_for_turn
 from app.agents.pool import AgentPool, get_agent_pool
 from app.database.models import ArtifactModel, MessageModel, SessionModel, ToolCallRecordModel
@@ -416,7 +416,7 @@ class OrchestratorEngine:
                 db=db,
                 state=state,
                 agent=orchestrator_agent,
-                prompt_messages=self._build_synthesis_prompt(state),
+                prompt_messages=self._build_synthesis_prompt(state, orchestrator_agent),
                 custom_instructions=custom_instructions,
                 round_number=state.current_round + 1,
                 msg_type="orchestrator",
@@ -496,15 +496,51 @@ class OrchestratorEngine:
         })
         return context
 
-    def _build_synthesis_prompt(self, state: DebateState) -> List[Dict[str, Any]]:
-        """Constructs prompt for orchestrator final consensus & artifact generation."""
-        transcript_lines = []
-        for msg in state.messages:
-            if msg.msg_type == "error":
-                continue
+    def _build_synthesis_prompt(
+        self, state: DebateState, agent: Optional[Agent] = None
+    ) -> List[Dict[str, Any]]:
+        """Constructs prompt for orchestrator final consensus & artifact generation.
+
+        전사(transcript)를 오케스트레이터의 컨텍스트 한도에 맞춰 자릅니다.
+        여기는 한 개의 user 메시지 안에 토론 전체가 통째로 들어가는 자리라,
+        `fit_context_window()` 가 손댈 수 있는 것이 없습니다 (메시지 단위로
+        덜어내는데 덜어낼 메시지가 없습니다). 라운드가 몇 번만 돌아도 한도를
+        넘어 400 이 나므로, 만드는 쪽에서 크기를 정해야 합니다.
+
+        최근 발언부터 채웁니다. 뒤로 갈수록 앞선 논의가 반영된 결론이라,
+        잘라야 한다면 앞쪽을 버리는 편이 낫습니다.
+        """
+        usable = [m for m in state.messages if m.msg_type != "error"]
+
+        def render(msg: DebateMessage) -> str:
             prefix = "### [User]" if msg.sender_key == "user" else f"### {msg.sender_name} ({msg.sender_role})"
-            transcript_lines.append(f"{prefix}:\n{msg.content}\n")
-        full_transcript = "\n".join(transcript_lines)
+            return f"{prefix}:\n{msg.content}\n"
+
+        if agent is None:
+            kept, dropped = [render(m) for m in usable], 0
+        else:
+            # 응답 분량과 지시문 몫을 빼고 남는 것이 전사의 예산입니다.
+            budget = agent.max_context_window - agent.max_tokens - 1024
+            kept_rev: List[str] = []
+            dropped = 0
+            for msg in reversed(usable):
+                block = render(msg)
+                probe = [{"role": "user", "content": "\n".join([block] + kept_rev)}]
+                if kept_rev and budget > 0 and estimate_tokens(agent.model, probe) > budget:
+                    dropped = len(usable) - len(kept_rev)
+                    break
+                kept_rev.insert(0, block)
+            kept = kept_rev
+
+        if dropped:
+            logger.warning(
+                f"Synthesis transcript trimmed: dropped {dropped} of {len(usable)} message(s) "
+                f"(max_context_window={agent.max_context_window})"
+            )
+            kept.insert(0, f"[앞선 발언 {dropped}건은 컨텍스트 한도로 생략되었습니다. "
+                           f"생략된 내용을 지어내지 말고, 남은 기록만으로 종합하세요.]\n")
+
+        full_transcript = "\n".join(kept)
 
         missing = ""
         if state.failed_agent_keys:
