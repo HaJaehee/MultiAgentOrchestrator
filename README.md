@@ -1,4 +1,4 @@
-# 🤖 Multi-Agent Orchestrator Platform
+# 🤖 MADO — Multi-Agent Debate & Orchestration Platform
 
 > **MCP 도구를 활용하는 반응형 멀티 에이전트 협업 & 토론 웹 애플리케이션**  
 > Dynamic Agent Profiling via `conf.toml`, MCP Tool Integration, Multi-Model LLM Abstraction (LiteLLM), StateGraph Orchestration, and NiceGUI + FastAPI Reactive Web Interface.

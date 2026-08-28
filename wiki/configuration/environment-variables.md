@@ -1,6 +1,6 @@
 # Environment Variables & Dynamic Resolution
 
-The Multi-Agent Orchestrator Platform features a dynamic environment variable substitution engine in [app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py#L41-L86). It allows a single [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml) to be shared seamlessly between local developer workstations, staging servers, and air-gapped production bundles without modification.
+The MADO: Multi-Agent Debate & Orchestration Platform features a dynamic environment variable substitution engine in [app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py#L41-L86). It allows a single [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml) to be shared seamlessly between local developer workstations, staging servers, and air-gapped production bundles without modification.
 
 ---
 

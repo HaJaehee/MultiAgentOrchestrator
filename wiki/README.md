@@ -1,6 +1,6 @@
-# Multi-Agent Orchestrator Platform — Technical Wiki
+# MADO — Multi-Agent Debate & Orchestration Platform · Technical Wiki
 
-Welcome to the **Multi-Agent Orchestrator Platform** technical documentation and context wiki. This documentation repository provides comprehensive knowledge about the system architecture, agent orchestration engine, Model Context Protocol (MCP) host integration, dynamic configuration, reactive UI, and air-gapped deployment mechanisms.
+Welcome to the **MADO: Multi-Agent Debate & Orchestration Platform** technical documentation and context wiki. This documentation repository provides comprehensive knowledge about the system architecture, agent orchestration engine, Model Context Protocol (MCP) host integration, dynamic configuration, reactive UI, and air-gapped deployment mechanisms.
 
 ---
 
@@ -53,7 +53,7 @@ wiki/
 
 ## 🧭 System Overview at a Glance
 
-The Multi-Agent Orchestrator Platform is a full-stack Python application designed for autonomous multi-agent collaboration, peer review, and artifact synthesis using the Model Context Protocol (MCP).
+The MADO: Multi-Agent Debate & Orchestration Platform is a full-stack Python application designed for autonomous multi-agent collaboration, peer review, and artifact synthesis using the Model Context Protocol (MCP).
 
 ```mermaid
 graph TD

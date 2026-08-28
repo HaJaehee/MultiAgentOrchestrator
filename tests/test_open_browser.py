@@ -111,24 +111,23 @@ def test_wait_gives_up_when_the_server_never_comes_up():
 
 
 def test_wait_survives_a_server_that_starts_late():
-    """서버가 늦게 떠도 열립니다. 곧바로 열면 연결 실패 화면을 보게 됩니다."""
-    holder = socket.socket()
-    holder.bind(("127.0.0.1", 0))
-    port = holder.getsockname()[1]
-    holder.close()
+    """서버가 늦게 떠도 열립니다. 곧바로 열면 연결 실패 화면을 보게 됩니다.
 
+    포트를 잡아 두되 `listen()` 만 늦게 겁니다. 포트를 놓았다가 다시 잡으면 그
+    틈에 다른 프로세스가 가져갈 수 있어, 테스트가 이따금 이유 없이 실패합니다.
+    """
     server = socket.socket()
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))          # 포트는 처음부터 우리 것입니다
+    port = server.getsockname()[1]
 
     def listen_later():
         time.sleep(0.8)
-        server.bind(("127.0.0.1", port))
-        server.listen(1)
+        server.listen(1)                   # 여기서부터 연결을 받습니다
 
     thread = threading.Thread(target=listen_later, daemon=True)
     thread.start()
     try:
-        assert open_browser.wait_for_server("127.0.0.1", port, timeout=10) is True
+        assert open_browser.wait_for_server("127.0.0.1", port, timeout=15) is True
     finally:
         thread.join(timeout=5)
         server.close()

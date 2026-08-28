@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 def create_ui() -> None:
     """Configures the main NiceGUI web application page and event bindings."""
 
-    @ui.page("/", title="Multi-Agent Orchestrator", favicon=FAVICON_SVG)
+    @ui.page("/", title="MADO: Multi-Agent Debate & Orchestration Platform", favicon=FAVICON_SVG)
     async def index_page():
         ui.dark_mode(True)
         ui.add_head_html(f"<style>{CUSTOM_CSS}</style>")
@@ -288,7 +288,7 @@ def create_ui() -> None:
                 ui.button(icon="menu", on_click=drawer.toggle).props("flat dense round color=grey-4").tooltip("사이드바 열기/닫기")
                 ui.icon("forum", size="sm").classes("text-indigo-400 mr-0.5")
                 with ui.column().classes("gap-0"):
-                    ui.label("Multi-Agent Orchestrator Platform").classes("text-base font-bold text-white tracking-wide")
+                    ui.label("MADO: Multi-Agent Debate & Orchestration Platform").classes("text-base font-bold text-white tracking-wide")
                     ui.label("MCP-enabled Autonomous Collaborative Debate & Synthesis").classes("text-[11px] text-slate-400")
 
             with ui.row().classes("items-center gap-2"):

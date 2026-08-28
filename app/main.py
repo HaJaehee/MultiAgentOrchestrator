@@ -24,7 +24,7 @@ logger = logging.getLogger("multiagent")
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """FastAPI & NiceGUI application lifecycle manager."""
-    logger.info("Starting Multi-Agent Orchestrator Platform...")
+    logger.info("Starting MADO: Multi-Agent Debate & Orchestration Platform...")
 
     # 1. Load configuration
     cfg = get_config()
@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     yield
 
-    logger.info("Shutting down Multi-Agent Orchestrator Platform...")
+    logger.info("Shutting down MADO: Multi-Agent Debate & Orchestration Platform...")
 
     # 백그라운드로 돌고 있는 토론 태스크를 먼저 세웁니다.
     await get_debate_runner().shutdown()
@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 # 1. Create FastAPI Application
 server = FastAPI(
-    title="Multi-Agent Orchestrator Platform",
+    title="MADO: Multi-Agent Debate & Orchestration Platform",
     description="MCP-enabled Autonomous Multi-Agent Collaborative Debate & Synthesis Backend",
     version="0.1.0",
     lifespan=lifespan,
@@ -150,7 +150,7 @@ create_ui()
 create_personas_page()
 ui.run_with(
     server,
-    title="Multi-Agent Orchestrator Platform",
+    title="MADO: Multi-Agent Debate & Orchestration Platform",
     favicon=FAVICON_SVG,
     dark=True,
 )
@@ -158,7 +158,7 @@ ui.run_with(
 
 def start():
     import argparse
-    parser = argparse.ArgumentParser(description="Multi-Agent Orchestrator Platform")
+    parser = argparse.ArgumentParser(description="MADO: Multi-Agent Debate & Orchestration Platform")
     parser.add_argument("--host", type=str, default=None, help="Host to bind (overrides conf.toml and .env)")
     parser.add_argument("--port", type=int, default=None, help="Port to bind (overrides conf.toml and .env)")
     parser.add_argument("--config", type=str, default="conf.toml", help="Path to config file")

@@ -1,12 +1,12 @@
 # Architecture Overview
 
-This document describes the high-level architecture, technology stack, component decomposition, and execution flow of the **Multi-Agent Orchestrator Platform**.
+This document describes the high-level architecture, technology stack, component decomposition, and execution flow of the **MADO: Multi-Agent Debate & Orchestration Platform**.
 
 ---
 
 ## 1. Architectural Philosophy
 
-The Multi-Agent Orchestrator Platform is designed around five foundational principles:
+The MADO: Multi-Agent Debate & Orchestration Platform is designed around five foundational principles:
 
 1. **Python-Native Full-Stack Unification**: The application combines backend logic ([FastAPI](file:///d:/MultiAgentOrchestrator/app/main.py)) and frontend reactive rendering ([NiceGUI](file:///d:/MultiAgentOrchestrator/app/ui/app.py)) in a single Python runtime. This eliminates separate Node.js frontend build steps, transpilation, or split deployments.
 2. **Dynamic Declarative Configuration**: Everything from model endpoints and API keys to individual agent personas and MCP tool access permissions is governed by [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml). The application never requires code changes to switch models, tune temperatures, or register new agent roles.

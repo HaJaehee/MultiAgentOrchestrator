@@ -1,1 +1,1 @@
-"""Multi-Agent Orchestrator Test Suite."""
+"""MADO 테스트 스위트."""

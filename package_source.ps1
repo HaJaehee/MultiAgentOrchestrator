@@ -1,4 +1,4 @@
-# Multi-Agent Orchestrator Platform - Source & Config Only Packaging Script
+# MADO: Multi-Agent Debate & Orchestration Platform - Source & Config Only Packaging Script
 # 런타임(포터블 파이썬 / node / wheel / MCP 서버)은 빼고 소스와 설정만 dist/ 에 압축합니다.
 $ErrorActionPreference = "Stop"
 

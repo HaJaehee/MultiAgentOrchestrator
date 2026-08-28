@@ -1,6 +1,6 @@
 # Database Schema & Persistence
 
-The Multi-Agent Orchestrator Platform uses SQLite with the asynchronous **SQLAlchemy 2.0 ORM** powered by `aiosqlite`. All database models are defined in [app/database/models.py](file:///d:/MultiAgentOrchestrator/app/database/models.py), and connection pooling and engine management are handled in [app/database/session.py](file:///d:/MultiAgentOrchestrator/app/database/session.py).
+The MADO: Multi-Agent Debate & Orchestration Platform uses SQLite with the asynchronous **SQLAlchemy 2.0 ORM** powered by `aiosqlite`. All database models are defined in [app/database/models.py](file:///d:/MultiAgentOrchestrator/app/database/models.py), and connection pooling and engine management are handled in [app/database/session.py](file:///d:/MultiAgentOrchestrator/app/database/session.py).
 
 ---
 

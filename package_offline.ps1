@@ -1,4 +1,4 @@
-# Multi-Agent Orchestrator Platform - Offline Packaging Script
+# MADO: Multi-Agent Debate & Orchestration Platform - Offline Packaging Script
 $ErrorActionPreference = "Stop"
 
 try {

@@ -486,7 +486,7 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "setlocal\r\n"
         "cd /d \"%~dp0\"\r\n\r\n"
         "echo ==========================================================\r\n"
-        "echo   Multi-Agent Orchestrator Platform (오프라인 / 폐쇄망 모드)\r\n"
+        "echo   MADO: Multi-Agent Debate & Orchestration Platform (오프라인 / 폐쇄망 모드)\r\n"
         "echo ==========================================================\r\n\r\n"
         "set \"PYTHONHOME=%~dp0python_runtime\"\r\n"
         "set \"PYTHONPATH=%~dp0;%~dp0python_runtime\\Lib;%~dp0python_runtime\\Lib\\site-packages\"\r\n"
@@ -518,7 +518,7 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
 
     # --- run_offline.ps1 ---
     ps1 = (
-        "# Multi-Agent Orchestrator Platform - Offline Launch Script\r\n"
+        "# MADO: Multi-Agent Debate & Orchestration Platform - Offline Launch Script\r\n"
         "$ErrorActionPreference = \"Stop\"\r\n\r\n"
         "# 콘솔 입출력 인코딩 UTF-8 설정 (한글 깨짐 방지)\r\n"
         "try {\r\n"
@@ -529,7 +529,7 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "$RootDir = $PSScriptRoot\r\n"
         "if (-not $RootDir) { $RootDir = (Get-Location).Path }\r\n\r\n"
         "Write-Host \"==========================================================\" -ForegroundColor Cyan\r\n"
-        "Write-Host \"  Multi-Agent Orchestrator Platform (오프라인 / 폐쇄망 모드)\" -ForegroundColor Cyan\r\n"
+        "Write-Host \"  MADO: Multi-Agent Debate & Orchestration Platform (오프라인 / 폐쇄망 모드)\" -ForegroundColor Cyan\r\n"
         "Write-Host \"==========================================================\" -ForegroundColor Cyan\r\n\r\n"
         "$env:PYTHONHOME = Join-Path $RootDir \"python_runtime\"\r\n"
         "$env:PYTHONPATH = \"$RootDir;$(Join-Path $RootDir 'python_runtime\\Lib');$(Join-Path $RootDir 'python_runtime\\Lib\\site-packages')\"\r\n"
@@ -612,7 +612,7 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         else "- [!] 코드 실행 샌드박스가 번들에 포함되지 않았습니다.\r\n"
     )
     readme_offline = (
-        "# 📦 Multi-Agent Orchestrator Platform - 폐쇄망(오프라인) 배포 가이드\r\n\r\n"
+        "# 📦 MADO: Multi-Agent Debate & Orchestration Platform - 폐쇄망(오프라인) 배포 가이드\r\n\r\n"
         "이 패키지는 외부 인터넷 연결이 불가능한 폐쇄망 환경에서도 즉시 구동될 수 있도록 "
         "파이썬 런타임, Node 런타임, MCP 서버, 의존성 라이브러리, 오프라인 Wheel 파일 및 "
         "소스코드를 모두 포함하고 있습니다.\r\n\r\n"
@@ -698,7 +698,7 @@ def main() -> None:
         return
 
     print("=" * 60)
-    print("  [폐쇄망 배포용] Multi-Agent Orchestrator 패키징 시작")
+    print("  [폐쇄망 배포용] MADO 패키징 시작")
     print("=" * 60)
 
     if sys.platform != "win32":

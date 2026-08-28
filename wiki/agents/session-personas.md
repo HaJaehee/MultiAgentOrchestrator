@@ -1,6 +1,6 @@
 # Session Personas & Immutability Lifecycle
 
-In the Multi-Agent Orchestrator Platform, `conf.toml` defines system-wide default agent configurations. However, different collaboration scenarios (e.g. cloud migration vs. embedded systems) require tailored system prompts and agent titles.
+In the MADO: Multi-Agent Debate & Orchestration Platform, `conf.toml` defines system-wide default agent configurations. However, different collaboration scenarios (e.g. cloud migration vs. embedded systems) require tailored system prompts and agent titles.
 
 The session persona management system, implemented in [app/agents/personas.py](file:///d:/MultiAgentOrchestrator/app/agents/personas.py), provides session-specific persona overrides while guaranteeing **persona immutability** once a debate begins.
 

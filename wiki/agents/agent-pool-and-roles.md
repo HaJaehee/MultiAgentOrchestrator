@@ -1,6 +1,6 @@
 # Agent Pool & Built-In Roles
 
-The Multi-Agent Orchestrator Platform coordinates multiple specialized autonomous agents that debate, collaborate, and synthesize solutions. Agent definitions, runtime metadata, and UI appearance are managed by [app/agents/base.py](file:///d:/MultiAgentOrchestrator/app/agents/base.py) and [app/agents/pool.py](file:///d:/MultiAgentOrchestrator/app/agents/pool.py).
+The MADO: Multi-Agent Debate & Orchestration Platform coordinates multiple specialized autonomous agents that debate, collaborate, and synthesize solutions. Agent definitions, runtime metadata, and UI appearance are managed by [app/agents/base.py](file:///d:/MultiAgentOrchestrator/app/agents/base.py) and [app/agents/pool.py](file:///d:/MultiAgentOrchestrator/app/agents/pool.py).
 
 ---
 

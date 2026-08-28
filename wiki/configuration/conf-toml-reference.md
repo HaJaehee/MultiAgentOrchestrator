@@ -1,6 +1,6 @@
 # conf.toml Configuration Reference
 
-The [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml) file is the single source of truth for all runtime behaviors in the Multi-Agent Orchestrator Platform. It dynamically configures the web application, default LLM provider options, MCP background servers, and all specialist agent personas.
+The [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml) file is the single source of truth for all runtime behaviors in the MADO: Multi-Agent Debate & Orchestration Platform. It dynamically configures the web application, default LLM provider options, MCP background servers, and all specialist agent personas.
 
 The configuration file is loaded, validated, and normalized by [app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py) using `tomllib` and Pydantic v2.
 

@@ -1,6 +1,6 @@
 # Reactive Web UI: NiceGUI & FastAPI Integration
 
-The user interface of the Multi-Agent Orchestrator Platform is implemented with [NiceGUI](https://nicegui.io/) embedded directly within a [FastAPI](https://fastapi.tiangolo.com/) application.
+The user interface of the MADO: Multi-Agent Debate & Orchestration Platform is implemented with [NiceGUI](https://nicegui.io/) embedded directly within a [FastAPI](https://fastapi.tiangolo.com/) application.
 
 ---
 
@@ -40,7 +40,7 @@ create_personas_page()   # Registers "/personas/{session_id}" (Persona Editor)
 
 ui.run_with(
     server,
-    title="Multi-Agent Orchestrator Platform",
+    title="MADO: Multi-Agent Debate & Orchestration Platform",
     favicon=FAVICON_SVG,
     dark=True,
 )

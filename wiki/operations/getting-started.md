@@ -1,6 +1,6 @@
 # Getting Started Guide
 
-This guide walks you through setting up and running the Multi-Agent Orchestrator Platform on a development machine.
+This guide walks you through setting up and running the MADO: Multi-Agent Debate & Orchestration Platform on a development machine.
 
 ---
 

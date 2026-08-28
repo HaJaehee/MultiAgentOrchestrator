@@ -1,6 +1,6 @@
 # Model Context Protocol (MCP) Integration & Protocol Architecture
 
-The Multi-Agent Orchestrator Platform embeds a native host implementation of the **Model Context Protocol (MCP)** using the official Python SDK (`mcp`). It allows agents to inspect files, execute code in sandboxes, manipulate git repositories, and query persistent knowledge graphs via standardized JSON-RPC over `stdio`.
+The MADO: Multi-Agent Debate & Orchestration Platform embeds a native host implementation of the **Model Context Protocol (MCP)** using the official Python SDK (`mcp`). It allows agents to inspect files, execute code in sandboxes, manipulate git repositories, and query persistent knowledge graphs via standardized JSON-RPC over `stdio`.
 
 Implementation files:
 - [app/mcp/client.py](file:///d:/MultiAgentOrchestrator/app/mcp/client.py): Stdio process management, session lifecycle, and error capture.

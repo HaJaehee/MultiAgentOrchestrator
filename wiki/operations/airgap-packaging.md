@@ -1,6 +1,6 @@
 # Air-Gapped & Offline Packaging
 
-In enterprise, defense, and high-security environments, systems often operate in **air-gapped networks** completely isolated from the public internet. The Multi-Agent Orchestrator Platform includes an automated packaging pipeline in [package_offline.py](file:///d:/MultiAgentOrchestrator/package_offline.py) that produces fully self-contained, zero-dependency deployment bundles.
+In enterprise, defense, and high-security environments, systems often operate in **air-gapped networks** completely isolated from the public internet. The MADO: Multi-Agent Debate & Orchestration Platform includes an automated packaging pipeline in [package_offline.py](file:///d:/MultiAgentOrchestrator/package_offline.py) that produces fully self-contained, zero-dependency deployment bundles.
 
 ---
 
