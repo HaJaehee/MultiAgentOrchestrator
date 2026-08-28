@@ -24,6 +24,9 @@ class SessionModel(Base):
     custom_instructions: Mapped[str] = mapped_column(Text, default="")
     # 첫 유저 메시지가 기록되는 순간 True 가 되며, 이후 페르소나 수정이 금지됩니다.
     personas_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 이 대화가 쓸 작업 공간. 비어 있으면 conf.toml 의 WORKSPACE_DIR 기본값을 씁니다.
+    # 페르소나와 달리 잠기지 않습니다 — 토론 도중에도 바꿀 수 있어야 합니다.
+    workspace_dir: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 

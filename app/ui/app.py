@@ -6,7 +6,7 @@ from nicegui import ui
 from sqlalchemy import desc, select
 from app.database.models import ArtifactModel, MessageModel, SessionModel
 from app.database.session import get_session_factory
-from app.orchestration.runner import TurnRun, get_debate_runner
+from app.orchestration.runner import TurnRun, WorkspaceConflictError, get_debate_runner
 from app.ui.components.artifact_viewer import ArtifactViewer
 from app.ui.components.chat_feed import ChatFeed
 from app.ui.components.roster import AgentRosterControl
@@ -168,6 +168,7 @@ def create_ui() -> None:
                     curr.strategy = roster_control.strategy_name
                     curr.max_rounds = roster_control.max_rounds
                     curr.custom_instructions = roster_control.custom_instructions
+                    curr.workspace_dir = roster_control.workspace_dir
                     await db.commit()
 
         async def on_send_message(prompt: str) -> None:
@@ -193,7 +194,11 @@ def create_ui() -> None:
 
                 # 토론은 이 페이지가 아니라 프로세스가 소유합니다. 새로고침하거나
                 # 페르소나 화면에 다녀와도 중단되지 않고, 돌아오면 다시 이어 붙습니다.
-                run = runner.start(current_session_id, prompt)
+                run = runner.start(current_session_id, prompt, roster_control.workspace_dir)
+            except WorkspaceConflictError as exc:
+                chat_feed.set_busy(False, str(exc), "Blocked")
+                ui.notify(str(exc), type="warning", position="bottom-right")
+                return
             except Exception as exc:  # noqa: BLE001 - 입력이 잠긴 채로 남으면 안 됩니다
                 logger.error(f"Could not start the debate: {exc}", exc_info=True)
                 chat_feed.set_busy(False, f"토론을 시작하지 못했습니다: {exc}", "Error")
@@ -261,6 +266,7 @@ def create_ui() -> None:
                     max_rounds=roster_control.max_rounds,
                     active_agents=roster_control.get_active_agent_keys(),
                     custom_instructions=roster_control.custom_instructions,
+                    workspace_dir=roster_control.workspace_dir,
                 )
                 db.add(new_session)
                 await db.commit()
@@ -288,6 +294,7 @@ def create_ui() -> None:
                         session_id=sid,
                         personas_locked=bool(s_obj.personas_locked),
                         personas=personas,
+                        workspace_dir=s_obj.workspace_dir or "",
                     )
 
                 # Load messages

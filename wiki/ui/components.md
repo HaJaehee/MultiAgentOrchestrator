@@ -53,6 +53,10 @@ The web application workspace is organized into four primary UI components in [a
 - **Custom Instructions Box**: Allows injecting ad-hoc guidelines into all agent prompts for the current session.
 - **Persona Settings Button**: Links directly to `/personas/{session_id}`. Displays a lock icon if debate has commenced.
 - **MCP Server Chips**: Displays real-time connection states (Green/Orange/Red) and opens diagnostic tooltips on hover.
+- **Workspace Field**: The folder every workspace-bound MCP server (`filesystem`, `git`, `memory`,
+  `sandbox`) shares, for *this conversation*. Applying it restarts those servers, since each one
+  receives its root at spawn time. The value is stored on the session row — `conf.toml` is never
+  written. Blocked while a debate is running, here or in another conversation.
 
 ### 1.3. Chat & Debate Feed ([app/ui/components/chat_feed.py](file:///d:/MultiAgentOrchestrator/app/ui/components/chat_feed.py))
 - **Color-Coded Message Timeline**: Displays user prompts, orchestrator guidance, and specialist contributions with distinct avatars, roles, and colors.

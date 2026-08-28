@@ -76,3 +76,47 @@ Tools are distributed across agents according to their specialized responsibilit
 | **Critic** | `filesystem`, `sandbox`, `git`, `memory` | Inspect code, run stress/edge-case tests in sandbox, verify git diffs, record security findings. |
 
 > **Security Note**: The `critic` is intentionally given access to the `sandbox` so that code review criticisms can be backed by empirical execution logs rather than theoretical assertions.
+
+
+---
+
+## Workspace Resolution
+
+Four of the bundled servers are rooted at one shared directory:
+
+| Server | How it receives the root |
+| :--- | :--- |
+| `filesystem` | last `args` entry (allowed directory) |
+| `git` | `--repository` argument |
+| `memory` | `MEMORY_FILE_PATH` env, a file inside it |
+| `sandbox` | `SANDBOX_WORKSPACE` env |
+
+`WORKSPACE_DIR` is normalised to an **absolute path** at import time in
+[`app/config.py`](file:///d:/MultiAgentOrchestrator/app/config.py), anchored at the project
+root rather than the current working directory.
+
+This is not cosmetic. Passing the relative `./workspace` leaves resolution to each child
+process, and these are different runtimes: `filesystem` is node, `sandbox` is python. The
+sandbox in particular resolves what it is given with `Path(value).resolve()` against *its own*
+cwd, so `./workspace` pointed at the sandbox's install directory while `filesystem` pointed at
+the project's. Two servers, one setting, two folders.
+
+### Runtime switching
+
+`MCPManager.set_workspace(path)` re-resolves the **raw** `[mcp_servers]` table with the new
+`WORKSPACE_DIR` and restarts every server. Re-running the same substitution is exact; string-
+replacing paths in already-substituted argv would not be.
+
+The root is fixed at spawn time for every one of these servers, so there is no way to change
+it without a restart. Because the manager is process-wide, two conversations with different
+workspaces cannot debate concurrently — `DebateRunner.start()` raises `WorkspaceConflictError`
+rather than let the running debate's tools quietly move to another folder.
+
+### Known gap: the sandbox kernel's cwd
+
+`AirgappedPySandbox` starts its IPython kernel with `cwd=PROJECT_ROOT` (the sandbox's own
+directory), independent of `SANDBOX_WORKSPACE`. Tool-mediated paths are unaffected —
+`write_workspace_file`, `run_python_file`, `list_workspace_files`, and artifact diffing all
+resolve against `SANDBOX_WORKSPACE` and enforce isolation. But a bare `open("./workspace/x")`
+inside `execute_python_code` resolves against the sandbox directory instead. Have agents use
+the workspace tools, or absolute paths, for file access inside executed code.

@@ -8,6 +8,8 @@ from app.agents.base import Agent
 from app.agents.llm import LLMCaller, LLMUnavailableError, estimate_tokens
 from app.agents.personas import prepare_agents_for_turn
 from app.agents.pool import AgentPool, get_agent_pool
+from app.config import resolve_workspace_dir
+from app.mcp.manager import get_mcp_manager
 from app.database.models import ArtifactModel, MessageModel, SessionModel, ToolCallRecordModel
 from app.database.session import get_session_factory
 from app.orchestration.state import ArtifactItem, DebateMessage, DebateState
@@ -93,6 +95,18 @@ class OrchestratorEngine:
         self.agent_pool = agent_pool or get_agent_pool()
         self.llm_caller = llm_caller or LLMCaller()
         self.session_factory = get_session_factory()
+
+    # ------------------------------------------------------------------ 작업 공간
+
+    @staticmethod
+    async def _apply_session_workspace(workspace_dir: str) -> None:
+        """세션이 지정한 작업 공간으로 MCP 서버를 맞춥니다 (같으면 아무것도 안 함)."""
+        manager = get_mcp_manager()
+        desired = resolve_workspace_dir(workspace_dir or None)
+        if manager.workspace == desired:
+            return
+        logger.info(f"Switching MCP workspace for this turn: {manager.workspace} -> {desired}")
+        await manager.set_workspace(desired)
 
     # ------------------------------------------------------------------ 발언
 
@@ -222,6 +236,11 @@ class OrchestratorEngine:
             session_model = res.scalar_one_or_none()
             if not session_model:
                 raise ValueError(f"Session with ID '{session_id}' not found.")
+
+            # 이 대화의 작업 공간을 적용합니다. filesystem 은 허용 경로를 argv 로,
+            # sandbox 는 SANDBOX_WORKSPACE 를 env 로 기동 시점에 받으므로, 경로가
+            # 달라졌으면 서버를 다시 띄우는 것 외에 방법이 없습니다.
+            await self._apply_session_workspace(session_model.workspace_dir)
 
             strategy_name = session_model.strategy
             max_rounds = session_model.max_rounds

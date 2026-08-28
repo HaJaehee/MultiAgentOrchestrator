@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 _ADDED_COLUMNS = {
     "sessions": {
         "personas_locked": "BOOLEAN NOT NULL DEFAULT 0",
+        "workspace_dir": "TEXT NOT NULL DEFAULT ''",
     },
 }
 

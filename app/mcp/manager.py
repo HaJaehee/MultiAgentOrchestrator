@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from app.config import MCPServerConfig
+from app.config import MCPServerConfig, get_config, resolve_workspace_dir
 from app.mcp.client import MCPClientConnection, MCPToolDefinition, MCPToolError
 
 logger = logging.getLogger(__name__)
@@ -127,6 +127,38 @@ class MCPManager:
         self.clients: Dict[str, MCPClientConnection] = {}
         self._tool_lookup: Dict[str, Tuple[MCPClientConnection, str]] = {}  # qualified_name -> (client, tool_name)
         self._initialized = False
+        self._workspace: Optional[Path] = None
+
+    @property
+    def workspace(self) -> Path:
+        """지금 떠 있는 MCP 서버들이 보고 있는 작업 공간."""
+        if self._workspace is None:
+            self._workspace = resolve_workspace_dir(os.environ.get("WORKSPACE_DIR"))
+        return self._workspace
+
+    async def set_workspace(self, path: str | Path) -> Path:
+        """작업 공간을 바꾸고 서버를 다시 띄웁니다.
+
+        filesystem 은 허용 디렉터리를 argv 로, sandbox 는 `SANDBOX_WORKSPACE`
+        를 env 로 **기동 시점에** 받습니다. 둘 다 프로세스가 살아 있는 동안에는
+        바꿀 수 없으므로, 경로가 달라지면 다시 띄우는 것 외에 방법이 없습니다.
+
+        conf.toml 은 건드리지 않습니다. 이것은 대화(세션)의 설정이지 배포 설정이
+        아닙니다.
+        """
+        target = resolve_workspace_dir(str(path))
+        if self._initialized and target == self.workspace:
+            return target
+
+        ensure_workspace(str(target))
+        # 이미 치환된 문자열을 찾아 바꾸는 대신, 원문을 새 WORKSPACE_DIR 로
+        # 다시 풉니다. `${WORKSPACE_DIR}` 가 어디에 몇 번 나오든 정확합니다.
+        self.server_configs = get_config().mcp_servers_for_workspace(target)
+        self._workspace = target
+
+        await self.initialize()
+        logger.info(f"MCP workspace switched to: {target}")
+        return target
 
     async def initialize(self) -> None:
         """Initializes all configured MCP clients and discovers tools.
@@ -136,7 +168,7 @@ class MCPManager:
         await self.shutdown()
         self._tool_lookup.clear()
 
-        ensure_workspace(os.environ.get("WORKSPACE_DIR", "./workspace"))
+        ensure_workspace(str(self.workspace))
 
         for name in self.server_configs:
             await self._start_client(name)

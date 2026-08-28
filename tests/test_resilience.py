@@ -432,3 +432,113 @@ async def test_tool_loop_runs_to_the_limit_then_fails_honestly():
 
     assert calls["n"] == 4, "한도만큼 정확히 돌아야 합니다"
     assert "max_tool_iterations" in str(excinfo.value)
+
+
+# --------------------------------------------------------------- 7. 작업 공간
+
+def test_workspace_paths_are_absolute_and_shared_by_every_server():
+    """filesystem 과 sandbox 가 같은 폴더를 봐야 합니다.
+
+    상대 경로를 넘기면 받는 쪽이 각자의 cwd 로 resolve 합니다. node 로 뜨는
+    filesystem 과 python 으로 뜨는 sandbox 는 다른 프로세스이므로, 같은
+    './workspace' 를 줘도 서로 다른 폴더를 볼 수 있습니다.
+    """
+    from pathlib import Path
+    from app.config import get_config
+
+    cfg = get_config()
+    servers = cfg.mcp_servers
+
+    filesystem_root = Path(servers["filesystem"].args[-1])
+    sandbox_root = Path(servers["sandbox"].env["SANDBOX_WORKSPACE"])
+    git_root = Path(servers["git"].args[-1])
+
+    assert filesystem_root.is_absolute(), "filesystem 이 상대 경로를 받고 있습니다"
+    assert sandbox_root.is_absolute(), "sandbox 가 상대 경로를 받고 있습니다"
+    assert filesystem_root == sandbox_root == git_root
+    assert servers["memory"].env["MEMORY_FILE_PATH"].startswith(str(filesystem_root))
+
+
+def test_default_workspace_is_the_project_root_one():
+    from app.config import PROJECT_ROOT, resolve_workspace_dir
+
+    assert resolve_workspace_dir(None) == PROJECT_ROOT / "workspace"
+    assert resolve_workspace_dir("") == PROJECT_ROOT / "workspace"
+    # 상대 경로는 cwd 가 아니라 프로젝트 루트 기준입니다.
+    assert resolve_workspace_dir("./data") == (PROJECT_ROOT / "data").resolve()
+
+
+def test_mcp_servers_reresolve_for_a_new_workspace(tmp_path):
+    """작업 공간을 바꾸면 원문을 다시 풀어 모든 서버에 새 경로가 들어갑니다."""
+    import os
+    from app.config import get_config
+
+    cfg = get_config()
+    previous = os.environ.get("WORKSPACE_DIR")
+    try:
+        servers = cfg.mcp_servers_for_workspace(tmp_path)
+        assert servers["filesystem"].args[-1] == str(tmp_path)
+        assert servers["sandbox"].env["SANDBOX_WORKSPACE"] == str(tmp_path)
+        assert servers["git"].args[-1] == str(tmp_path)
+        # 비활성 서버는 띄우지 않으므로 빠져야 합니다.
+        assert "fetch" not in servers
+    finally:
+        if previous is not None:
+            os.environ["WORKSPACE_DIR"] = previous
+
+
+@pytest.mark.asyncio
+async def test_concurrent_debates_in_different_workspaces_are_refused(tmp_path):
+    """MCP 서버는 프로세스 전체가 공유합니다. 조용히 남의 폴더를 쓰느니 거절합니다."""
+    from app.orchestration.runner import DebateRunner, WorkspaceConflictError
+
+    class Never(FakeLLMCaller):
+        async def call_agent(self, *args, **kwargs):
+            await asyncio.sleep(30)  # 끝나지 않는 토론
+
+    sid_a = await _make_session()
+    sid_b = await _make_session()
+    runner = DebateRunner(_engine(llm_caller=Never()))
+
+    run_a = runner.start(sid_a, "첫 대화", str(tmp_path / "ws-a"))
+    try:
+        with pytest.raises(WorkspaceConflictError) as excinfo:
+            runner.start(sid_b, "둘째 대화", str(tmp_path / "ws-b"))
+        assert "작업 공간" in str(excinfo.value)
+
+        # 같은 작업 공간이면 막지 않습니다.
+        run_c = runner.start(sid_b, "둘째 대화", str(tmp_path / "ws-a"))
+        assert run_c.status == "running"
+        await runner.cancel(sid_b)
+    finally:
+        await runner.cancel(sid_a)
+    assert run_a.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_session_workspace_is_applied_at_turn_start(tmp_path, monkeypatch):
+    """세션에 지정된 폴더로 MCP 서버를 맞춘 뒤에 토론이 시작되어야 합니다."""
+    from app.orchestration import engine as engine_module
+
+    switched = []
+
+    class FakeManager:
+        workspace = tmp_path / "current"
+
+        async def set_workspace(self, path):
+            switched.append(path)
+            FakeManager.workspace = path
+            return path
+
+    monkeypatch.setattr(engine_module, "get_mcp_manager", lambda: FakeManager())
+
+    sid = await _make_session()
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        row = await db.get(SessionModel, sid)
+        row.workspace_dir = str(tmp_path / "chosen")
+        await db.commit()
+
+    await _engine(llm_caller=FakeLLMCaller()).run_turn(session_id=sid, user_prompt="설계해줘")
+
+    assert switched == [(tmp_path / "chosen").resolve()]

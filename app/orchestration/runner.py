@@ -23,6 +23,7 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional, Set
 
+from app.config import resolve_workspace_dir
 from app.orchestration.engine import OrchestratorEngine, get_orchestrator_engine
 
 logger = logging.getLogger(__name__)
@@ -32,12 +33,23 @@ logger = logging.getLogger(__name__)
 MAX_QUEUED_EVENTS = 2000
 
 
+class WorkspaceConflictError(RuntimeError):
+    """다른 대화가 다른 작업 공간에서 토론 중일 때.
+
+    MCP 서버는 프로세스 전체가 공유하고, 작업 공간은 기동 시점에 고정됩니다.
+    서로 다른 작업 공간의 토론을 동시에 돌리면 나중에 시작한 쪽이 서버를 다시
+    띄우면서 앞선 토론의 도구가 남의 폴더를 읽고 쓰게 됩니다. 조용히 틀리느니
+    시작을 거절합니다.
+    """
+
+
 class TurnRun:
     """진행 중이거나 방금 끝난 토론 한 턴."""
 
-    def __init__(self, session_id: str, user_prompt: str):
+    def __init__(self, session_id: str, user_prompt: str, workspace: Optional[str] = None):
         self.session_id = session_id
         self.user_prompt = user_prompt
+        self.workspace = resolve_workspace_dir(workspace or None)
         self.status: str = "running"  # running | completed | failed | cancelled
         self.error: Optional[str] = None
         self.busy: bool = True
@@ -176,13 +188,26 @@ class DebateRunner:
         run = self._runs.get(session_id)
         return run is not None and run.status == "running"
 
-    def start(self, session_id: str, user_prompt: str) -> TurnRun:
+    def running_elsewhere(self, session_id: str) -> List[TurnRun]:
+        """이 세션이 아닌 다른 세션에서 돌고 있는 토론."""
+        return [r for sid, r in self._runs.items()
+                if sid != session_id and r.status == "running"]
+
+    def start(self, session_id: str, user_prompt: str,
+              workspace: Optional[str] = None) -> TurnRun:
         """토론을 백그라운드에서 시작합니다. 이미 돌고 있으면 그 실행을 돌려줍니다."""
         existing = self._runs.get(session_id)
         if existing is not None and existing.status == "running":
             return existing
 
-        run = TurnRun(session_id, user_prompt)
+        run = TurnRun(session_id, user_prompt, workspace)
+        clashing = [r for r in self.running_elsewhere(session_id) if r.workspace != run.workspace]
+        if clashing:
+            raise WorkspaceConflictError(
+                f"다른 대화가 아직 토론 중이고 작업 공간이 다릅니다 "
+                f"({clashing[0].workspace}). MCP 서버는 프로세스 전체가 공유하므로 "
+                f"동시에 두 작업 공간을 쓸 수 없습니다. 그 토론이 끝난 뒤 시작하세요."
+            )
         self._runs[session_id] = run
 
         async def on_event(event: Dict[str, Any]) -> None:

@@ -5,8 +5,9 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional
 from nicegui import ui
 from app.agents.base import Agent
 from app.agents.pool import AgentPool, get_agent_pool
-from app.config import get_config
+from app.config import get_config, resolve_workspace_dir
 from app.mcp.manager import get_mcp_manager
+from app.orchestration.runner import get_debate_runner
 from app.orchestration.strategies import STRATEGY_MAP
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,8 @@ class AgentRosterControl:
         self.strategy_name: str = "free_debate"
         self.max_rounds: int = 3
         self.custom_instructions: str = ""
+        # 이 대화의 작업 공간. 빈 문자열이면 conf.toml 기본값을 씁니다.
+        self.workspace_dir: str = ""
 
         # Init selection defaults
         for ag in self.agent_pool.list_all():
@@ -44,6 +47,9 @@ class AgentRosterControl:
         self.mcp_badge: Optional[ui.badge] = None
         self.mcp_reconnect_btn: Optional[ui.button] = None
         self.cards_row: Optional[ui.row] = None
+        self.workspace_input: Optional[ui.input] = None
+        self.workspace_hint: Optional[ui.label] = None
+        self.workspace_apply_btn: Optional[ui.button] = None
         self.current_personas: Optional[Dict[str, Any]] = None
 
     @property
@@ -112,6 +118,27 @@ class AgentRosterControl:
 
                 self.mcp_row = ui.row().classes("w-full gap-2 flex-wrap items-center")
                 self.refresh_mcp_status()
+
+                # 작업 공간 (이 대화 전용). filesystem·git·memory·sandbox MCP 가
+                # 모두 이 폴더 하나를 공유합니다.
+                with ui.row().classes("w-full items-center gap-2 no-wrap mt-1"):
+                    ui.icon("folder_open", size="xs").classes("text-amber-400")
+                    ui.label("작업 공간:").classes("text-xs font-semibold text-slate-300 flex-shrink-0")
+                    self.workspace_input = ui.input(
+                        placeholder="비우면 기본값 (프로젝트 루트의 workspace)",
+                        value=self.workspace_dir,
+                    ).props("outlined dark dense").classes("flex-grow text-xs")
+                    self.workspace_apply_btn = (
+                        ui.button("적용", icon="check", on_click=self._on_workspace_apply)
+                        .props("flat dense color=amber-4").classes("text-[11px] flex-shrink-0")
+                    )
+                    self.workspace_apply_btn.tooltip(
+                        "이 대화에서 쓸 폴더로 MCP 서버를 다시 띄웁니다. conf.toml 은 바뀌지 않습니다"
+                    )
+                self.workspace_hint = ui.label("").classes(
+                    "text-[10px] text-slate-500 truncate w-full"
+                )
+                self._refresh_workspace_hint()
 
                 ui.separator().classes("bg-slate-800 my-1")
 
@@ -317,6 +344,56 @@ class AgentRosterControl:
             if self.mcp_reconnect_btn:
                 self.mcp_reconnect_btn.enable()
 
+    def _refresh_workspace_hint(self) -> None:
+        """입력값이 실제로 어느 폴더가 되는지 보여줍니다 (상대 경로·빈 값 포함)."""
+        if self.workspace_hint is None or self.workspace_hint.is_deleted:
+            return
+        effective = resolve_workspace_dir(self.workspace_dir or None)
+        live = get_mcp_manager().workspace
+        text = f"현재 적용: {live}"
+        if effective != live:
+            text += f"   |   적용 대기: {effective}  ('적용' 을 누르세요)"
+        self.workspace_hint.set_text(text)
+
+    async def _on_workspace_apply(self) -> None:
+        """작업 공간을 바꾸고 MCP 서버를 다시 띄웁니다.
+
+        conf.toml 은 건드리지 않습니다. 이것은 대화의 설정입니다.
+        """
+        if self.workspace_input is None:
+            return
+        value = (self.workspace_input.value or "").strip()
+
+        if self.session_id and get_debate_runner().is_running(self.session_id):
+            ui.notify("토론이 진행 중입니다. 끝난 뒤에 바꾸세요.", type="warning", position="bottom-right")
+            return
+        others = get_debate_runner().running_elsewhere(self.session_id or "")
+        if others:
+            ui.notify(
+                "다른 대화가 토론 중입니다. MCP 서버는 프로세스 전체가 공유하므로 "
+                "지금 바꾸면 그 토론이 남의 폴더를 쓰게 됩니다.",
+                type="warning", position="bottom-right",
+            )
+            return
+
+        if self.workspace_apply_btn:
+            self.workspace_apply_btn.disable()
+        try:
+            self.workspace_dir = value
+            target = await get_mcp_manager().set_workspace(resolve_workspace_dir(value or None))
+            self.refresh_mcp_status()
+            self._refresh_workspace_hint()
+            if self.on_config_changed:
+                await self.on_config_changed()
+            ui.notify(f"작업 공간을 '{target}' 로 바꾸고 MCP 서버를 다시 띄웠습니다.",
+                      type="positive", position="bottom-right")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Workspace switch failed: {e}", exc_info=True)
+            ui.notify(f"작업 공간 변경 실패: {e}", type="negative", position="bottom-right")
+        finally:
+            if self.workspace_apply_btn and not self.workspace_apply_btn.is_deleted:
+                self.workspace_apply_btn.enable()
+
     def _on_agent_toggle(self, key: str, value: bool) -> None:
         self.selected_agents[key] = value
         self._update_summary_badge()
@@ -358,6 +435,7 @@ class AgentRosterControl:
         max_rounds: int,
         instructions: str,
         session_id: Optional[str] = None,
+        workspace_dir: str = "",
         personas_locked: bool = False,
         personas: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -367,6 +445,7 @@ class AgentRosterControl:
         self.strategy_name = strategy
         self.max_rounds = max_rounds
         self.custom_instructions = instructions
+        self.workspace_dir = workspace_dir or ""
         self.session_id = session_id
         self.personas_locked = personas_locked
         if personas is not None:
@@ -383,3 +462,6 @@ class AgentRosterControl:
             self.rounds_label.set_text(str(max_rounds))
         if self.custom_instr_input:
             self.custom_instr_input.value = instructions
+        if self.workspace_input:
+            self.workspace_input.value = self.workspace_dir
+        self._refresh_workspace_hint()

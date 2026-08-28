@@ -37,6 +37,30 @@ VAR_NAME_PATTERN = re.compile(r"[A-Za-z0-9_]+")
 if not os.environ.get("PYTHON_BIN"):
     os.environ["PYTHON_BIN"] = sys.executable
 
+# 프로젝트 루트 = app/ 의 부모. cwd 가 아니라 이 값을 기준으로 삼습니다.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# 작업 공간은 **절대 경로**로 고정합니다.
+#
+# conf.toml 이 `${WORKSPACE_DIR:-./workspace}` 로 상대 경로를 넘기면, 그 값을
+# 받는 쪽이 각자의 cwd 로 resolve 합니다. filesystem MCP(node)와 sandbox MCP
+# (python)는 서로 다른 프로세스이고, 특히 샌드박스는 받은 값을
+# `Path(v).resolve()` 로 자기 cwd 기준으로 풉니다. 그래서 "같은 ./workspace 를
+# 줬는데 두 서버가 다른 폴더를 본다" 가 됩니다.
+#
+# 여기서 한 번 절대 경로로 만들어 두면 argv 로 가든 env 로 가든 같은 곳을
+# 가리킵니다.
+def resolve_workspace_dir(value: Optional[str] = None) -> Path:
+    """작업 공간 경로를 절대 경로로 정규화합니다. 비어 있으면 `<루트>/workspace`."""
+    raw = (value or "").strip()
+    if not raw:
+        return PROJECT_ROOT / "workspace"
+    path = Path(raw).expanduser()
+    return path.resolve() if path.is_absolute() else (PROJECT_ROOT / path).resolve()
+
+
+os.environ["WORKSPACE_DIR"] = str(resolve_workspace_dir(os.environ.get("WORKSPACE_DIR")))
+
 
 def _substitute_env(text: str) -> str:
     """Expands ${VAR} / ${VAR:-default}, where the default may itself contain ${...}."""
@@ -285,6 +309,25 @@ class RootConfig(BaseModel):
     mcp_servers: Dict[str, MCPServerConfig] = Field(default_factory=dict)
     agents: Dict[str, AgentConfig] = Field(default_factory=dict)
 
+    # 치환 **전** 의 [mcp_servers] 원문. 작업 공간을 런타임에 바꿀 때 이걸
+    # 새 WORKSPACE_DIR 로 다시 풉니다. 이미 치환된 경로 문자열을 찾아 바꾸는
+    # 것보다 정확합니다 — 같은 치환기를 그대로 한 번 더 돌리는 것이니까요.
+    raw_mcp_servers: Dict[str, Any] = Field(default_factory=dict, exclude=True)
+
+    def mcp_servers_for_workspace(self, workspace: Path) -> Dict[str, MCPServerConfig]:
+        """`WORKSPACE_DIR` 를 바꿔 놓고 [mcp_servers] 를 다시 해석합니다.
+
+        환경변수를 실제로 바꾸는 것은 의도한 부작용입니다. MCP 서버는 자식
+        프로세스로 뜨므로 이 값을 물려받아야 하고, Roots 응답도 이걸 읽습니다.
+        """
+        os.environ["WORKSPACE_DIR"] = str(workspace)
+        if not self.raw_mcp_servers:
+            return self.enabled_mcp_servers
+        resolved = resolve_env_vars(self.raw_mcp_servers)
+        servers = {name: MCPServerConfig.model_validate(cfg) for name, cfg in resolved.items()}
+        # 매니저는 켜져 있는 서버만 띄웁니다 (`enabled_mcp_servers` 와 같은 기준).
+        return {name: cfg for name, cfg in servers.items() if cfg.enabled}
+
     @model_validator(mode="before")
     @classmethod
     def apply_llm_defaults(cls, data: Any) -> Any:
@@ -350,18 +393,29 @@ def load_config(config_path: str | Path = "conf.toml") -> RootConfig:
         raw_dict = tomllib.load(f)
 
     resolved_dict = resolve_env_vars(raw_dict)
-    return RootConfig.model_validate(resolved_dict)
+    config = RootConfig.model_validate(resolved_dict)
+    config.raw_mcp_servers = raw_dict.get("mcp_servers") or {}
+    return config
 
 
 # Global singleton instance
 _config: Optional[RootConfig] = None
+# 그 싱글턴을 어느 파일에서 읽었는지. 아래 persona 갱신이 "지금 쓰는 설정"인지
+# 판단하는 데 씁니다.
+_config_path: Optional[Path] = None
 
 
 def get_config(reload: bool = False, config_path: str | Path = "conf.toml") -> RootConfig:
-    global _config
+    global _config, _config_path
     if _config is None or reload:
         _config = load_config(config_path)
+        _config_path = Path(config_path).resolve()
     return _config
+
+
+def active_config_path() -> Optional[Path]:
+    """현재 전역 설정을 읽어 온 파일 경로 (아직 안 읽었으면 None)."""
+    return _config_path
 
 
 def update_agent_persona_in_conf_file(
@@ -462,5 +516,11 @@ def update_agent_persona_in_conf_file(
         content = "".join(lines)
 
     path.write_text(content, encoding="utf-8")
-    get_config(reload=True, config_path=config_path)
+
+    # 방금 쓴 파일이 **지금 앱이 쓰고 있는 설정일 때만** 다시 읽습니다.
+    # 조건 없이 다시 읽으면, 다른 파일을 고쳤을 뿐인데 전역 설정이 그 파일로
+    # 갈아끼워집니다. 그 뒤의 에이전트 풀·MCP 서버 목록이 통째로 바뀝니다.
+    active = active_config_path()
+    if active is not None and path.resolve() == active:
+        get_config(reload=True, config_path=path)
 

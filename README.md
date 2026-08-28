@@ -380,6 +380,36 @@ git init ./workspace              # git MCP 서버는 유효한 저장소를 요
 > `sys.executable` 이 기본값입니다. PATH 의 `python` 을 쓰면 가상환경에서 앱을 돌릴 때
 > 의존성이 없는 다른 인터프리터를 가리켜 서버가 기동에 실패합니다.
 
+#### 작업 공간 (모든 도구가 같은 폴더를 보게 하기)
+
+`filesystem` · `git` · `memory` · `sandbox` MCP 는 **하나의 작업 공간**을 공유합니다.
+기본값은 프로젝트 루트의 `workspace/` 이고, 앱이 기동할 때 **절대 경로로 정규화**합니다.
+
+절대 경로로 만드는 것이 핵심입니다. 상대 경로(`./workspace`)를 그대로 넘기면 받는 쪽이
+각자의 cwd 로 해석하는데, `filesystem` 은 node 프로세스, `sandbox` 는 python 프로세스라
+같은 값을 줘도 서로 다른 폴더를 볼 수 있습니다. 실제로 샌드박스는 받은 값을
+`Path(v).resolve()` 로 자기 cwd 기준으로 풀어서, `./workspace` 를 주면 **샌드박스 설치
+폴더 아래**를 가리켰습니다.
+
+```bash
+# 확인
+python -c "import os, app.config; print(os.environ['WORKSPACE_DIR'])"
+```
+
+#### 대화별 작업 공간 (런타임 변경)
+
+에이전트 설정 패널의 **작업 공간** 칸에 폴더를 적고 `적용` 을 누르면 그 대화에서 쓸
+폴더가 바뀝니다. 값은 **세션에 저장되며 `conf.toml` 은 바뀌지 않습니다.** 비워 두면
+기본값을 씁니다.
+
+MCP 서버는 허용 경로를 기동 시점에 받으므로(`filesystem` 은 argv, `sandbox` 는
+`SANDBOX_WORKSPACE`), 적용하면 서버를 다시 띄웁니다. 몇 초 걸립니다.
+
+한 가지 제약이 있습니다. **MCP 서버는 프로세스 전체가 공유합니다.** 서로 다른 작업
+공간을 쓰는 두 대화를 동시에 토론시킬 수는 없습니다 — 나중에 시작한 쪽이 서버를 다시
+띄우면서 앞선 토론의 도구가 남의 폴더를 읽고 쓰게 되기 때문입니다. 그런 경우 두 번째
+토론은 시작을 거절하고 이유를 알려줍니다. 토론 중에는 작업 공간 변경도 막습니다.
+
 #### 소스만 갱신해 반입하기
 
 런타임(포터블 파이썬 · node.exe · wheel · MCP 서버)은 한 번 반입하면 버전을 올릴 때까지
@@ -437,7 +467,7 @@ python package_source.py --no-tests --no-docs  # app/ 과 설정만
 | `PYTHON_BIN` | 앱과 동일한 인터프리터 (`sys.executable`) | Python 실행기 |
 | `MCP_NODE_HOME` | `./mcp_node` | Node MCP 서버 설치 위치 |
 | `MCP_SANDBOX_HOME` | `./mcp_sandbox` | 샌드박스 서버 위치 |
-| `WORKSPACE_DIR` | `./workspace` | 에이전트 공용 작업 공간 |
+| `WORKSPACE_DIR` | `<프로젝트 루트>/workspace` | 에이전트 공용 작업 공간. 기동 시 절대 경로로 정규화되며 filesystem·git·memory·sandbox 가 모두 이 폴더를 공유합니다 |
 | `SANDBOX_KERNEL_PYTHON` | `PYTHON_BIN` | 샌드박스 커널 인터프리터 |
 
 폐쇄망 번들에서는 `run_offline.bat` / `run_offline.ps1` 이 위 값을 자동으로 채웁니다.
