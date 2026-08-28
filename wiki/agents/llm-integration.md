@@ -34,7 +34,7 @@ flowchart LR
 
 ## 2. The Multi-Turn Tool Calling Loop & Real-Time Streaming
 
-When an agent has access to MCP tools, [`_run_litellm_loop()`](file:///d:/MultiAgentOrchestrator/app/agents/llm.py#L199-L270) runs an autonomous observation-thought loop up to `max_tool_iterations` (default: 20):
+When an agent has access to MCP tools, [`_run_litellm_loop()`](file:///d:/MultiAgentOrchestrator/app/agents/llm.py#L199-L270) runs an autonomous observation-thought loop up to `max_tool_iterations` (default: 30):
 
 ```mermaid
 sequenceDiagram

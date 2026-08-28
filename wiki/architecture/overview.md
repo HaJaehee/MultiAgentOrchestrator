@@ -113,7 +113,7 @@ flowchart TD
 - **Base Agent Model** ([base.py](file:///d:/MultiAgentOrchestrator/app/agents/base.py)): Defines runtime metadata, UI badge colors, icons, and connection modes (live vs. unconfigured).
 - **Agent Pool Registry** ([pool.py](file:///d:/MultiAgentOrchestrator/app/agents/pool.py)): Holds active agent instances loaded from configuration.
 - **Session Personas** ([personas.py](file:///d:/MultiAgentOrchestrator/app/agents/personas.py)): Coordinates session-specific overrides and the freeze/lock mechanism.
-- **LLM Caller** ([llm.py](file:///d:/MultiAgentOrchestrator/app/agents/llm.py)): Wraps LiteLLM `acompletion`, injects system prompts, manages multi-turn tool loops up to `max_tool_iterations`, and provides an offline fallback simulator.
+- **LLM Caller** ([llm.py](file:///d:/MultiAgentOrchestrator/app/agents/llm.py)): Wraps LiteLLM `acompletion`, injects system prompts, and manages multi-turn tool loops up to `max_tool_iterations`. An unreachable endpoint raises `LLMUnavailableError`; nothing is fabricated in its place.
 
 ### 4.5. Model Context Protocol (MCP) Host ([app/mcp/](file:///d:/MultiAgentOrchestrator/app/mcp/))
 - Implements an asynchronous MCP host manager ([manager.py](file:///d:/MultiAgentOrchestrator/app/mcp/manager.py)) and stdio client connection manager ([client.py](file:///d:/MultiAgentOrchestrator/app/mcp/client.py)).

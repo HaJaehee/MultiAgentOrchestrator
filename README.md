@@ -206,7 +206,7 @@ max_context_window = 128000  # 엔드포인트의 실제 한도로 맞추세요.
 timeout = 120            # 요청 타임아웃(초)
 num_retries = 2          # 재시도 횟수
 drop_params = true       # 엔드포인트가 모르는 파라미터 자동 제거 (로컬 모델 호환성)
-max_tool_iterations = 5  # 한 턴에서 허용할 MCP 도구 루프 횟수
+max_tool_iterations = 30 # 한 턴에서 허용할 MCP 도구 루프 횟수 (1~50)
 extra_headers = { "X-Org-Id" = "${MY_ORG_ID}" }
 extra_body = { "user" = "multiagent-orchestrator" }
 ```

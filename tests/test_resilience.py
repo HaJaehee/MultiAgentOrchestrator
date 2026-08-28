@@ -369,3 +369,66 @@ async def test_synthesis_prompt_is_bounded_by_context_window():
     assert "컨텍스트 한도로 생략" in bounded
     # 잘라도 지시문은 남아야 보고서 형식이 유지됩니다.
     assert "Mermaid 다이어그램" in bounded
+
+
+# --------------------------------------------------------------- 6. 도구 루프 한도
+
+def test_tool_iteration_default_is_consistent_everywhere():
+    """코드 기본값·conf.toml·문서가 어긋나면 설정이 안 먹는 것처럼 보입니다."""
+    import re
+    import pathlib
+    from app.config import AgentConfig
+
+    assert Agent(key="k", name="n", role="r").max_tool_iterations == 30
+    assert AgentConfig(name="n", role="r").max_tool_iterations == 30
+
+    for name in ("conf.toml", "conf.example.toml"):
+        path = pathlib.Path(name)
+        if not path.exists():
+            continue
+        found = re.search(r"^max_tool_iterations\s*=\s*(\d+)", path.read_text(encoding="utf-8"), re.M)
+        assert found and int(found.group(1)) == 30, f"{name} 의 값이 코드 기본값과 다릅니다"
+
+
+@pytest.mark.asyncio
+async def test_tool_loop_runs_to_the_limit_then_fails_honestly():
+    """한도를 다 쓰면 자리표시자 답변이 아니라 실패를 올려야 합니다."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from app.agents.llm import LLMCaller
+
+    calls = {"n": 0}
+
+    def _message():
+        tc = SimpleNamespace(
+            id="call_1",
+            function=SimpleNamespace(name="read_file", arguments='{"path": "a.txt"}'),
+        )
+        return SimpleNamespace(
+            content="", tool_calls=[tc], model_dump=lambda: {"role": "assistant", "tool_calls": []}
+        )
+
+    async def fake_acompletion(**kwargs):
+        if kwargs.get("stream"):
+            raise RuntimeError("streaming unsupported")   # 비스트리밍 경로로 떨어뜨립니다
+        calls["n"] += 1
+        return SimpleNamespace(choices=[SimpleNamespace(message=_message())])
+
+    agent = Agent(key="coder", name="Coder", role="Engineer",
+                  model="fake/model", api_key="k", max_tool_iterations=4)
+
+    caller = LLMCaller()
+    caller.mcp_manager = SimpleNamespace(
+        get_openai_tools_for_servers=lambda servers: [
+            {"type": "function", "function": {"name": "read_file", "parameters": {}}}
+        ],
+        execute_tool=AsyncMock(return_value=("파일 내용", "success")),
+    )
+
+    with patch("litellm.acompletion", side_effect=fake_acompletion):
+        with pytest.raises(LLMUnavailableError) as excinfo:
+            await caller.call_agent(agent, [{"role": "user", "content": "읽어줘"}])
+
+    assert calls["n"] == 4, "한도만큼 정확히 돌아야 합니다"
+    assert "max_tool_iterations" in str(excinfo.value)

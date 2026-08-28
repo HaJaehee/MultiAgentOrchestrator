@@ -248,7 +248,7 @@ class AgentConfig(BaseModel):
     )
     extra_headers: Dict[str, str] = Field(default_factory=dict, description="Extra HTTP headers")
     extra_body: Dict[str, Any] = Field(default_factory=dict, description="Extra JSON body fields")
-    max_tool_iterations: int = Field(default=20, ge=1, le=50, description="Max MCP tool-loop iterations per turn")
+    max_tool_iterations: int = Field(default=30, ge=1, le=50, description="Max MCP tool-loop iterations per turn")
     allowed_mcp_servers: List[str] = Field(
         default_factory=list, description="List of MCP server keys this agent can access"
     )
