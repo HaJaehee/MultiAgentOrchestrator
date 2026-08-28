@@ -35,6 +35,7 @@ import sys
 import urllib.request
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 ROOT_DIR = Path(__file__).resolve().parent
 DIST_DIR = ROOT_DIR / "dist"
@@ -112,7 +113,8 @@ def stage_sources() -> None:
         shutil.copytree(ROOT_DIR / "mcp_servers", staging_forks,
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 
-    for fname in [".env.example", "requirements.txt", "README.md"]:
+    # open_browser.py 는 실행 스크립트가 백그라운드로 띄웁니다 (서버가 응답하면 브라우저 열기).
+    for fname in [".env.example", "requirements.txt", "README.md", "open_browser.py"]:
         src = ROOT_DIR / fname
         if src.exists():
             shutil.copy2(src, STAGING_DIR / fname)
@@ -464,9 +466,17 @@ def stage_node_mcp_servers() -> bool:
 # ---------------------------------------------------------------------------
 # 7. 실행 스크립트 & 문서
 # ---------------------------------------------------------------------------
-def write_launchers(has_node: bool, has_sandbox: bool) -> None:
+def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path] = None) -> None:
+    """번들 안에 실행 스크립트를 씁니다.
+
+    `target_dir` 를 주면 그 폴더에 씁니다. 이미 배포한 설치본의 실행 스크립트만
+    새로 만들 때 씁니다 (`--launchers-only`).
+    """
+    out_dir = Path(target_dir) if target_dir is not None else STAGING_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     def write(name: str, content: str) -> None:
-        with open(STAGING_DIR / name, "w", encoding="utf-8-sig", newline="") as f:
+        with open(out_dir / name, "w", encoding="utf-8-sig", newline="") as f:
             f.write(content)
 
     # --- run_offline.bat ---
@@ -496,6 +506,10 @@ def write_launchers(has_node: bool, has_sandbox: bool) -> None:
         "set \"APP_URL=\"\r\n"
         "for /f \"usebackq delims=\" %%i in (`\"%PYTHON_BIN%\" -c \"from app.config import get_config;c=get_config().app;print(f'http://{c.host}:{c.port}')\"`) do set \"APP_URL=%%i\"\r\n"
         "if not defined APP_URL set \"APP_URL=conf.toml 의 [app] 참조\"\r\n\r\n"
+        "rem --- 서버가 응답하면 브라우저를 엽니다. 서버는 콘솔을 붙잡고 있으므로\r\n"
+        "rem     기다리는 일은 별도 프로세스가 합니다 (MAO_NO_BROWSER=1 이면 건너뜁니다).\r\n"
+        "rem     같은 인자를 그대로 넘겨야 --port 로 포트를 바꿔도 맞는 주소를 엽니다.\r\n"
+        "if exist \"%~dp0open_browser.py\" start \"\" /b \"%PYTHON_BIN%\" open_browser.py %*\r\n\r\n"
         "echo [*] 내장 포터블 파이썬 런타임으로 서버를 시작합니다 (%APP_URL%)...\r\n"
         "\"%PYTHON_BIN%\" -m app.main %*\r\n\r\n"
         "pause\r\n"
@@ -536,6 +550,14 @@ def write_launchers(has_node: bool, has_sandbox: bool) -> None:
         "$AppUrl = try {\r\n"
         "    & $env:PYTHON_BIN -c \"from app.config import get_config;c=get_config().app;print(f'http://{c.host}:{c.port}')\"\r\n"
         "} catch { \"conf.toml 의 [app] 참조\" }\r\n\r\n"
+        "# 서버가 응답하면 브라우저를 엽니다. 서버는 이 콘솔을 붙잡고 있으므로 기다리는\r\n"
+        "# 일은 별도 프로세스가 합니다 (MAO_NO_BROWSER=1 이면 건너뜁니다). 같은 인자를\r\n"
+        "# 그대로 넘겨야 --port 로 포트를 바꿔도 맞는 주소를 엽니다.\r\n"
+        "if (Test-Path (Join-Path $RootDir \"open_browser.py\")) {\r\n"
+        "    Start-Process -FilePath $env:PYTHON_BIN "
+        "-ArgumentList (@(\"open_browser.py\") + $args) "
+        "-WorkingDirectory $RootDir -WindowStyle Hidden | Out-Null\r\n"
+        "}\r\n\r\n"
         "Write-Host \"[*] 내장 파이썬 런타임으로 서버를 시작합니다 ($AppUrl)...\" -ForegroundColor Green\r\n"
         "& $env:PYTHON_BIN -m app.main $args\r\n"
     )
@@ -602,8 +624,11 @@ def write_launchers(has_node: bool, has_sandbox: bool) -> None:
         "  ```powershell\r\n"
         "  .\\run_offline.ps1\r\n"
         "  ```\r\n"
-        "- 실행 후 콘솔에 표시되는 주소로 접속합니다. 주소는 `conf.toml` 의 `[app] host/port` "
-        "(또는 `.env` 의 `APP_HOST` / `APP_PORT`) 를 그대로 따릅니다.\r\n\r\n"
+        "- 서버가 뜨면 **기본 브라우저가 자동으로 열립니다.** 열리지 않으면 콘솔에 표시되는 "
+        "주소로 접속하세요. 주소는 `conf.toml` 의 `[app] host/port` "
+        "(또는 `.env` 의 `APP_HOST` / `APP_PORT`) 를 그대로 따릅니다.\r\n"
+        "- 브라우저를 띄우고 싶지 않으면 `MAO_NO_BROWSER=1` 을 설정한 뒤 실행하세요. "
+        "서버를 기다리는 시간은 기본 90초이고 `MAO_BROWSER_TIMEOUT` 으로 바꿉니다.\r\n\r\n"
         "실행 스크립트가 MCP 서버 경로 환경변수(`NODE_BIN`, `PYTHON_BIN`, `MCP_NODE_HOME`, "
         "`MCP_SANDBOX_HOME`, `WORKSPACE_DIR`)를 자동으로 채워주므로 별도 설정이 필요 없습니다.\r\n\r\n"
         "---\r\n\r\n"
@@ -652,7 +677,25 @@ def main() -> None:
     parser.add_argument("--skip-sandbox", action="store_true", help="코드 실행 샌드박스 MCP 서버 제외")
     parser.add_argument("--node-version", default=DEFAULT_NODE_VERSION, help="번들할 Node 버전")
     parser.add_argument("--sandbox-src", default=None, help="AirgappedPySandbox 로컬 체크아웃 경로")
+    parser.add_argument(
+        "--launchers-only", metavar="DIR", nargs="?", const=str(STAGING_DIR), default=None,
+        help="번들 전체를 다시 만들지 않고 실행 스크립트와 open_browser.py 만 갱신 "
+             "(기본 대상: dist/MultiAgentOrchestrator_bundle)",
+    )
     args = parser.parse_args()
+
+    if args.launchers_only:
+        # 이미 배포한 설치본을 통째로 다시 만들지 않고 실행 스크립트만 바꿉니다.
+        # 런타임과 wheels 를 다시 내려받을 이유가 없습니다.
+        target = Path(args.launchers_only).resolve()
+        if not target.is_dir():
+            raise SystemExit(f"[!] 대상 폴더가 없습니다: {target}")
+        has_node = (target / "node_runtime" / "node.exe").exists()
+        has_sandbox = (target / "mcp_sandbox").is_dir()
+        write_launchers(has_node=has_node, has_sandbox=has_sandbox, target_dir=target)
+        shutil.copy2(ROOT_DIR / "open_browser.py", target / "open_browser.py")
+        print(f"[완료] 실행 스크립트를 갱신했습니다: {target}")
+        return
 
     print("=" * 60)
     print("  [폐쇄망 배포용] Multi-Agent Orchestrator 패키징 시작")

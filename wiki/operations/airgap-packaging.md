@@ -19,6 +19,7 @@ MultiAgentOrchestrator_bundle/
 ├── mcp_sandbox/               # AirgappedPySandbox Python code runner
 ├── workspace/                 # Initialized workspace directory & git repository
 ├── install_wheels_offline.bat # Re-installation verification utility
+├── open_browser.py            # Waits for the port to answer, then opens the default browser
 └── run_offline.bat | ps1      # One-click launcher with auto-injected environment variables
 ```
 
@@ -81,6 +82,38 @@ set "PYTHONUTF8=1"
 
 "%PYTHON_BIN%" -m app.main %*
 ```
+
+### Automatic Browser Launch
+Before handing the console over to the server, the launcher starts `open_browser.py` in the
+background:
+
+```bat
+if exist "%~dp0open_browser.py" start "" /b "%PYTHON_BIN%" open_browser.py %*
+"%PYTHON_BIN%" -m app.main %*
+```
+
+The waiter polls the TCP port and opens the default browser only once the server answers —
+opening it immediately would land the user on a connection-refused page. It lives outside the
+server process on purpose:
+
+- With `debug = true`, uvicorn runs in reload mode and re-executes the lifespan on every file
+  change. Opening from there would spawn a tab on each save.
+- The server must keep the console so logs are visible and Ctrl+C stops it. Waiting is the
+  launcher's job, not the server's.
+
+The address comes from `conf.toml [app]`, overridden by the same `--host` / `--port` arguments
+that were forwarded to `app.main`, so a custom port always opens the right URL. A wildcard bind
+address (`0.0.0.0`) is rewritten to `127.0.0.1` — it is a bind address, not a reachable one.
+Set `MAO_NO_BROWSER=1` to opt out, `MAO_BROWSER_TIMEOUT` to change the 90-second wait.
+
+Launchers are generated artifacts, not source. To refresh them on an existing installation
+without rebuilding the whole bundle:
+
+```powershell
+python package_offline.py --launchers-only "C:\path\to\MultiAgentOrchestrator_bundle"
+```
+
+`apply_update.ps1` runs this automatically after copying the sources.
 
 ### Parameter Forwarding & Encoding
 - **CLI Parameter Forwarding**: Both `run_offline.ps1` (`$args`) and `run_offline.bat` (`%*`) pass all command-line arguments directly to `app.main`. Users can run `.\run_offline.ps1 --port 9000` to override the bound port dynamically.

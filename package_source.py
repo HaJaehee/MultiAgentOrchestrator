@@ -59,6 +59,8 @@ ROOT_FILES: list[tuple[str, str]] = [
     ("conf.example.toml", "conf.example.toml"),
     (".env.example", ".env.example"),
     ("setup_mcp.py", "setup_mcp.py"),
+    # 실행 스크립트가 백그라운드로 띄우는 브라우저 대기 스크립트.
+    ("open_browser.py", "open_browser.py"),
     ("package_offline.py", "package_offline.py"),
     ("package_offline.ps1", "package_offline.ps1"),
     ("package_source.py", "package_source.py"),
@@ -209,7 +211,7 @@ foreach ($d in @("app", "mcp_servers")) {
 }
 
 # 3. 설정이 아닌 부수 파일만 덮어쓰기
-foreach ($f in @("requirements.txt", "conf.example.toml", ".env.example", "README.md")) {
+foreach ($f in @("requirements.txt", "conf.example.toml", ".env.example", "README.md", "open_browser.py")) {
     $src = Join-Path $Source $f
     if (Test-Path $src) { Copy-Item $src $Target -Force }
 }
@@ -226,6 +228,21 @@ if ((Test-Path $confNew) -and (Test-Path $confCur)) {
         Write-Host "  현재: $confCur"
         Write-Host "  신규: $(Join-Path $Target 'conf.toml.new')"
         Write-Host "  비교: Compare-Object (Get-Content conf.toml) (Get-Content conf.toml.new)"
+    }
+}
+
+# 5. 실행 스크립트(run_offline.bat / .ps1) 다시 생성
+# 이 스크립트들은 소스가 아니라 package_offline.py 가 만들어 내는 산출물입니다.
+# 브라우저 자동 실행처럼 스크립트 자체가 바뀌는 갱신은 여기서 반영해야 합니다.
+$py = Join-Path $Target "python_runtime\\python.exe"
+if (-not (Test-Path $py)) { $py = "python" }
+$packager = Join-Path $Source "package_offline.py"
+if (Test-Path $packager) {
+    try {
+        & $py $packager --launchers-only $Target
+        Write-Host "실행 스크립트 갱신 완료"
+    } catch {
+        Write-Warning "실행 스크립트를 갱신하지 못했습니다(설치본의 기존 스크립트를 그대로 씁니다): $_"
     }
 }
 
