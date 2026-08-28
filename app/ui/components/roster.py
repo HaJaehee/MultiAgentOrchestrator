@@ -4,13 +4,14 @@ import logging
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 from nicegui import ui
 from app.agents.base import Agent
-from app.agents.pool import AgentPool, get_agent_pool
+from app.agents.pool import AgentPool, get_agent_pool, reload_agent_pool
 from app.config import (
     active_config_path,
     add_mcp_server_to_conf_file,
     get_config,
     remove_mcp_server_from_conf_file,
     resolve_workspace_dir,
+    set_agent_allowed_mcp_servers_in_conf_file,
     set_mcp_server_enabled_in_conf_file,
 )
 from app.mcp.manager import get_mcp_manager
@@ -266,6 +267,24 @@ class AgentRosterControl:
                     # 엔드포인트가 없으면 발언 차례에 "연결 끊김" 으로 기록됩니다.
                     ui.badge("미설정", color="red-9").props("dense text-[8px]")
 
+            # 이 에이전트가 쓸 수 있는 MCP 서버. 어느 도구를 주느냐가 발언의 질을
+            # 좌우하는데, 지금까지는 conf.toml 을 직접 고치는 수밖에 없었습니다.
+            allowed = agent.allowed_mcp_servers or []
+            with ui.row().classes("w-full items-center gap-1 mt-1 no-wrap"):
+                tools_button = ui.button(
+                    f"도구 {len(allowed)}",
+                    icon="handyman",
+                    on_click=lambda _, k=agent.key: self._open_agent_tools_dialog(k),
+                ).props("flat dense no-caps size=sm color=teal-4").classes("text-[10px]")
+                ui.label(", ".join(allowed) or "없음").classes(
+                    "text-[9px] text-slate-500 truncate"
+                )
+                if self.mcp_locked:
+                    tools_button.disable()
+                    tools_button.tooltip(self.mcp_lock_reason)
+                else:
+                    tools_button.tooltip("이 에이전트가 호출할 수 있는 MCP 서버 고르기")
+
             ui.tooltip(
                 f"model: {agent.model}\n"
                 f"endpoint: {agent.endpoint_label}\n"
@@ -425,6 +444,8 @@ class AgentRosterControl:
         if self.mcp_add_btn and not self.mcp_add_btn.is_deleted:
             self.mcp_add_btn.disable() if self.mcp_locked else self.mcp_add_btn.enable()
         self.refresh_mcp_status()
+        # 카드의 도구 버튼도 같은 규칙으로 잠깁니다.
+        self.refresh_agent_cards()
 
     def _blocked_by_running_debate(self) -> bool:
         """잠겨 있으면 알리고 True. 화면이 낡았을 때를 위한 마지막 확인입니다."""
@@ -442,11 +463,17 @@ class AgentRosterControl:
         active = active_config_path()
         return str(active) if active is not None else "conf.toml"
 
-    async def _apply_mcp_change(self, write, done_message: str) -> None:
-        """conf.toml 을 고치고, 그 구성으로 MCP 서버를 다시 띄웁니다.
+    async def _apply_conf_change(
+        self, write, done_message: str, restart_servers: bool = True
+    ) -> None:
+        """conf.toml 을 고치고, 바뀐 구성을 돌고 있는 앱에 그대로 반영합니다.
 
-        파일만 고치고 끝내면 화면과 실제로 떠 있는 서버가 어긋납니다. 다음 기동
-        때까지 그 사실을 아무도 모르므로, 여기서 바로 반영합니다.
+        파일만 고치고 끝내면 화면과 실제로 떠 있는 서버·에이전트가 어긋납니다.
+        다음 기동 때까지 그 사실을 아무도 모르므로 여기서 바로 맞춥니다.
+
+        `restart_servers` 는 서버 프로세스를 다시 띄울지입니다. 도구 할당처럼
+        서버 구성이 그대로인 변경까지 전부 다시 띄우면 몇 초씩 걸리기만 하고
+        얻는 것이 없습니다.
         """
         if self.mcp_add_btn and not self.mcp_add_btn.is_deleted:
             self.mcp_add_btn.disable()
@@ -461,18 +488,23 @@ class AgentRosterControl:
             if self.mcp_add_btn and not self.mcp_add_btn.is_deleted and not self.mcp_locked:
                 self.mcp_add_btn.enable()
 
-        ui.notify("MCP 서버를 다시 띄우는 중입니다...", type="ongoing", position="bottom-right")
+        if restart_servers:
+            ui.notify("MCP 서버를 다시 띄우는 중입니다...", type="ongoing", position="bottom-right")
         try:
-            await get_mcp_manager().reload_from_config()
+            if restart_servers:
+                await get_mcp_manager().reload_from_config()
+            # 설정을 다시 읽었으므로 에이전트 풀도 그 구성으로 맞춥니다.
+            reload_agent_pool()
             ui.notify(done_message, type="positive", position="bottom-right")
         except Exception as e:  # noqa: BLE001
-            logger.error(f"MCP reload failed: {e}", exc_info=True)
+            logger.error(f"Applying the new configuration failed: {e}", exc_info=True)
             ui.notify(
-                f"conf.toml 은 저장했지만 서버를 다시 띄우지 못했습니다: {e}",
+                f"conf.toml 은 저장했지만 실행 중인 앱에 반영하지 못했습니다: {e}",
                 type="negative", position="bottom-right",
             )
         finally:
             self.refresh_mcp_status()
+            self.refresh_agent_cards()
             self._refresh_workspace_hint()
 
     async def _on_mcp_toggle(self, server_name: str, enabled: bool) -> None:
@@ -480,7 +512,7 @@ class AgentRosterControl:
             # 스위치를 사용자가 움직여 놓았으므로 실제 설정값으로 되돌립니다.
             self.refresh_mcp_status()
             return
-        await self._apply_mcp_change(
+        await self._apply_conf_change(
             lambda: set_mcp_server_enabled_in_conf_file(server_name, enabled, self._conf_path()),
             f"'{server_name}' 서버를 {'켰습니다' if enabled else '껐습니다'}.",
         )
@@ -542,7 +574,7 @@ class AgentRosterControl:
 
                 enabled = bool(enabled_cb.value)
                 dialog.close()
-                await self._apply_mcp_change(
+                await self._apply_conf_change(
                     lambda: add_mcp_server_to_conf_file(
                         name, command, args, env, enabled, self._conf_path()
                     ),
@@ -585,7 +617,7 @@ class AgentRosterControl:
 
             async def do_delete() -> None:
                 dialog.close()
-                await self._apply_mcp_change(
+                await self._apply_conf_change(
                     lambda: remove_mcp_server_from_conf_file(server_name, self._conf_path()),
                     f"'{server_name}' 서버를 삭제했습니다.",
                 )
@@ -593,6 +625,94 @@ class AgentRosterControl:
             with ui.row().classes("w-full justify-end gap-2 mt-3"):
                 ui.button("취소", on_click=dialog.close).props("flat color=grey")
                 ui.button("삭제", on_click=do_delete).props("unelevated color=red-6")
+
+        dialog.open()
+
+    def _open_agent_tools_dialog(self, agent_key: str) -> None:
+        """이 에이전트가 호출할 수 있는 MCP 서버를 고릅니다.
+
+        페르소나와 헷갈리기 쉽지만 다른 것입니다. 이름·역할·시스템 프롬프트는
+        대화별로 갈리고 첫 발언과 함께 잠기지만, 도구 할당은 conf.toml 이 정본이라
+        모든 대화에 함께 걸립니다. 그래서 잠금 규칙도 MCP 서버 쪽을 따릅니다.
+        """
+        if self._blocked_by_running_debate():
+            return
+
+        agent = self.agent_pool.get(agent_key)
+        if agent is None:
+            ui.notify(f"'{agent_key}' 에이전트를 찾을 수 없습니다.", type="warning", position="bottom-right")
+            return
+
+        try:
+            configured = get_config().mcp_servers
+            status = get_mcp_manager().connection_status()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Could not read MCP servers: {e}")
+            configured, status = {}, {}
+
+        allowed = list(agent.allowed_mcp_servers or [])
+        # conf.toml 에서 이미 사라진 서버가 아직 적혀 있을 수 있습니다. 조용히
+        # 지우지 않고 보여주고, 사용자가 체크를 풀어 정리하게 합니다.
+        orphans = [name for name in allowed if name not in configured]
+        boxes: Dict[str, ui.checkbox] = {}
+
+        with ui.dialog() as dialog, ui.card().classes(
+            "p-4 w-[520px] max-w-full bg-slate-900 text-white border border-slate-700"
+        ):
+            ui.label(f"{agent.name} · 도구 할당").classes("text-lg font-bold")
+            ui.label(
+                "이 에이전트가 발언 중 호출할 수 있는 MCP 서버입니다. conf.toml 에 저장되어 "
+                "지금 열려 있는 모든 대화와 앞으로 만드는 모든 대화에 함께 적용됩니다."
+            ).classes("text-[11px] text-amber-400 mb-2 leading-snug")
+
+            if not configured and not orphans:
+                ui.label("conf.toml 에 등록된 MCP 서버가 없습니다.").classes("text-xs text-slate-400")
+
+            with ui.column().classes("w-full gap-1 max-h-[46vh] overflow-y-auto"):
+                for name, server_cfg in configured.items():
+                    info = status.get(name)
+                    with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                        boxes[name] = ui.checkbox(value=name in allowed).props("dense dark color=indigo-4")
+                        ui.label(name).classes("text-xs font-semibold text-slate-200")
+                        if not server_cfg.enabled:
+                            ui.badge("꺼짐", color="grey-8").props("dense text-[9px]")
+                            ui.label("서버가 꺼져 있어 지금은 도구가 제공되지 않습니다").classes(
+                                "text-[10px] text-slate-500 truncate"
+                            )
+                        elif info and info["connected"]:
+                            ui.badge(f"툴 {info['tool_count']}", color="green-8").props("dense text-[9px]")
+                        else:
+                            ui.badge("연결 안 됨", color="red-9").props("dense text-[9px]")
+
+                for name in orphans:
+                    with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                        boxes[name] = ui.checkbox(value=True).props("dense dark color=amber-6")
+                        ui.label(name).classes("text-xs font-semibold text-amber-300")
+                        ui.badge("설정에 없음", color="amber-9").props("dense text-[9px]")
+
+            st = agent.sequential_thinking
+            if st.enabled and st.mode == "mcp":
+                ui.label(
+                    f"참고: 이 에이전트는 sequential_thinking 을 mcp 모드로 쓰므로 "
+                    f"'{st.mcp_server}' 서버가 여기 선택과 무관하게 자동으로 포함됩니다."
+                ).classes("text-[10px] text-slate-500 mt-2 leading-snug")
+
+            async def do_save() -> None:
+                servers = [name for name, box in boxes.items() if box.value]
+                dialog.close()
+                await self._apply_conf_change(
+                    lambda: set_agent_allowed_mcp_servers_in_conf_file(
+                        agent_key, servers, self._conf_path()
+                    ),
+                    f"'{agent.name}' 의 도구를 {len(servers)}개로 저장했습니다."
+                    if servers else f"'{agent.name}' 에게 도구를 할당하지 않았습니다.",
+                    # 서버 구성은 그대로입니다. 다시 띄울 이유가 없습니다.
+                    restart_servers=False,
+                )
+
+            with ui.row().classes("w-full justify-end gap-2 mt-3"):
+                ui.button("취소", on_click=dialog.close).props("flat color=grey")
+                ui.button("저장", on_click=do_save).props("unelevated color=indigo-6")
 
         dialog.open()
 

@@ -64,3 +64,15 @@ def get_agent_pool() -> AgentPool:
         cfg = get_config()
         _agent_pool = AgentPool(cfg.agents)
     return _agent_pool
+
+
+def reload_agent_pool() -> AgentPool:
+    """다시 읽어 들인 conf.toml 로 전역 풀을 갱신합니다.
+
+    새 객체를 만들지 않고 제자리에서 다시 채웁니다. 엔진과 화면이 이 풀을 각자
+    붙잡고 있어서, 갈아 끼우면 이미 들고 있던 쪽은 예전 구성을 계속 보게 됩니다.
+    """
+    pool = get_agent_pool()
+    pool.agent_configs = get_config().agents
+    pool.reload()
+    return pool

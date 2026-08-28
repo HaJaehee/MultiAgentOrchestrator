@@ -121,7 +121,7 @@ async def test_toggle_writes_and_reloads_once_the_debate_is_over(roster, monkeyp
 
 @pytest.mark.asyncio
 async def test_dialogs_refuse_to_open_while_a_debate_runs(roster, monkeypatch):
-    """추가·삭제 창은 잠긴 동안 아예 열리지 않습니다."""
+    """추가·삭제·도구 할당 창은 잠긴 동안 아예 열리지 않습니다."""
     control, runner, _ = roster
     opened: List[str] = []
     monkeypatch.setattr(roster_module.ui, "dialog", lambda *a, **k: opened.append("dialog"))
@@ -129,5 +129,29 @@ async def test_dialogs_refuse_to_open_while_a_debate_runs(roster, monkeypatch):
     runner.running = ["session-a"]
     control._open_mcp_add_dialog()
     control._open_mcp_delete_dialog("filesystem")
+    control._open_agent_tools_dialog("orchestrator")
 
     assert opened == []
+
+
+@pytest.mark.asyncio
+async def test_agent_tool_change_does_not_restart_the_servers(roster):
+    """도구 할당은 서버 구성을 바꾸지 않습니다. 다시 띄우면 몇 초만 버립니다."""
+    control, _, manager = roster
+    written: List[str] = []
+
+    await control._apply_conf_change(
+        lambda: written.append("conf"), "저장했습니다.", restart_servers=False
+    )
+
+    assert written == ["conf"]
+    assert manager.reloads == 0
+
+
+@pytest.mark.asyncio
+async def test_server_change_still_restarts_the_servers(roster):
+    control, _, manager = roster
+
+    await control._apply_conf_change(lambda: None, "저장했습니다.", restart_servers=True)
+
+    assert manager.reloads == 1

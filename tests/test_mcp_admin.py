@@ -19,6 +19,7 @@ from app.config import (
     add_mcp_server_to_conf_file,
     get_config,
     remove_mcp_server_from_conf_file,
+    set_agent_allowed_mcp_servers_in_conf_file,
     set_mcp_server_enabled_in_conf_file,
 )
 from app.mcp.manager import MCPManager
@@ -44,6 +45,20 @@ args = ["-m", "mcp_server_fetch"]
 
 [agents.orchestrator]
 name = "Master Orchestrator"
+allowed_mcp_servers = ["filesystem"]
+
+# 도구 목록이 시스템 프롬프트 뒤에 오는 배치. 프롬프트 안에 대괄호 줄이 있어서,
+# 여러 줄 문자열을 건너뛰지 못하면 섹션 경계를 여기서 잘못 끊습니다.
+[agents.critic]
+name = "Critic"
+system_prompt = \"\"\"
+[검토 항목]
+- 보안 취약점
+\"\"\"
+allowed_mcp_servers = [
+    "filesystem",
+    "git",
+]
 """
 
 
@@ -252,3 +267,67 @@ async def test_conf_edits_reach_the_running_servers(tmp_path: Path, monkeypatch)
         # 전역 설정을 프로젝트 파일로 되돌립니다 (다른 테스트가 그것을 봅니다).
         if PROJECT_CONF.is_file():
             get_config(reload=True, config_path=PROJECT_CONF)
+
+
+# --------------------------------------------------------------- 에이전트 도구 할당
+
+
+def test_agent_tools_replace_an_existing_list(conf: Path):
+    set_agent_allowed_mcp_servers_in_conf_file("orchestrator", ["filesystem", "fetch"], conf)
+
+    data = _load(conf)
+    assert data["agents"]["orchestrator"]["allowed_mcp_servers"] == ["filesystem", "fetch"]
+    assert data["agents"]["orchestrator"]["name"] == "Master Orchestrator"
+
+
+def test_agent_tools_survive_a_bracket_line_inside_the_system_prompt(conf: Path):
+    """프롬프트 안의 `[검토 항목]` 을 섹션 헤더로 읽으면 목록이 중복 삽입됩니다.
+
+    그러면 TOML 이 같은 키를 두 번 갖게 되어 파일 자체가 못 읽는 상태가 됩니다.
+    """
+    set_agent_allowed_mcp_servers_in_conf_file("critic", ["memory"], conf)
+
+    data = _load(conf)   # 중복 키가 생겼다면 여기서 터집니다
+    assert data["agents"]["critic"]["allowed_mcp_servers"] == ["memory"]
+    assert "[검토 항목]" in data["agents"]["critic"]["system_prompt"]
+    assert conf.read_text(encoding="utf-8").count("allowed_mcp_servers") == 2
+
+
+def test_agent_tools_are_added_when_the_key_is_missing(conf: Path):
+    """conf.toml 에 목록을 적지 않은 에이전트에게도 도구를 줄 수 있어야 합니다."""
+    add_mcp_server_to_conf_file("extra", "node", ["x.js"], {}, True, conf)
+    path_text = conf.read_text(encoding="utf-8")
+    conf.write_text(path_text + '\n[agents.newbie]\nname = "Newbie"\n', encoding="utf-8")
+
+    set_agent_allowed_mcp_servers_in_conf_file("newbie", ["extra"], conf)
+    assert _load(conf)["agents"]["newbie"]["allowed_mcp_servers"] == ["extra"]
+
+
+def test_agent_tools_can_be_emptied(conf: Path):
+    set_agent_allowed_mcp_servers_in_conf_file("orchestrator", [], conf)
+    assert _load(conf)["agents"]["orchestrator"]["allowed_mcp_servers"] == []
+
+
+def test_agent_tools_reject_junk(conf: Path):
+    with pytest.raises(KeyError):
+        set_agent_allowed_mcp_servers_in_conf_file("nobody", ["filesystem"], conf)
+    with pytest.raises(ValueError):
+        set_agent_allowed_mcp_servers_in_conf_file("orchestrator", ["has space"], conf)
+    # 실패한 시도가 파일을 건드리지 않았습니다.
+    assert _load(conf)["agents"]["orchestrator"]["allowed_mcp_servers"] == ["filesystem"]
+
+
+@pytest.mark.skipif(not PROJECT_CONF.is_file(), reason="conf.toml 이 없는 설치")
+def test_agent_tools_round_trip_on_the_real_conf(tmp_path: Path):
+    path = tmp_path / "conf.toml"
+    path.write_text(PROJECT_CONF.read_text(encoding="utf-8"), encoding="utf-8")
+    before = _load(path)["agents"]["critic"]["allowed_mcp_servers"]
+
+    set_agent_allowed_mcp_servers_in_conf_file("critic", ["filesystem", "fetch"], path)
+    assert _load(path)["agents"]["critic"]["allowed_mcp_servers"] == ["filesystem", "fetch"]
+    # 다른 에이전트와 프롬프트는 그대로입니다.
+    assert _load(path)["agents"]["coder"]["allowed_mcp_servers"] ==         _load(PROJECT_CONF)["agents"]["coder"]["allowed_mcp_servers"]
+    assert _load(path)["agents"]["critic"]["system_prompt"] ==         _load(PROJECT_CONF)["agents"]["critic"]["system_prompt"]
+
+    set_agent_allowed_mcp_servers_in_conf_file("critic", before, path)
+    assert path.read_text(encoding="utf-8") == PROJECT_CONF.read_text(encoding="utf-8")

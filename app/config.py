@@ -568,27 +568,54 @@ def _toml_inline_table(mapping: Dict[str, str]) -> str:
     return "{ " + items + " }"
 
 
+TOML_MULTILINE_DELIMITERS = ('"""', "'''")
+
+
+def _advance_multiline_state(line: str, state: Optional[str]) -> Optional[str]:
+    """줄 하나를 지나간 뒤의 여러 줄 문자열 상태 (열려 있으면 그 구분자)."""
+    i = 0
+    while i < len(line):
+        if state is None:
+            opener = next((d for d in TOML_MULTILINE_DELIMITERS if line.startswith(d, i)), None)
+            if opener is not None:
+                state = opener
+                i += len(opener)
+                continue
+        elif line.startswith(state, i):
+            i += len(state)
+            state = None
+            continue
+        i += 1
+    return state
+
+
 def _find_toml_section(lines: List[str], header: str) -> tuple[int, int]:
     """`header` 섹션이 차지하는 줄 범위 `[start, end)`. 없으면 `(-1, -1)`.
 
     끝 경계는 다음 섹션 헤더 앞의 주석·빈 줄을 제외합니다. 이 파일에서 주석은
     항상 뒤따르는 섹션을 설명하므로, 그것까지 지우거나 그 사이에 끼워 넣으면
     남의 설명이 사라지거나 엉뚱한 서버에 붙습니다.
+
+    여러 줄 문자열 안은 건너뜁니다. `[agents.*]` 의 system_prompt 는 사용자가
+    쓰는 글이라 `[검토 항목]` 같은 줄이 얼마든지 들어갑니다. 그것을 섹션 헤더로
+    읽으면 뒤따르는 설정을 남의 섹션 것으로 취급하게 됩니다.
     """
+    state: Optional[str] = None
     start = -1
+    end = len(lines)
+
     for i, line in enumerate(lines):
-        if line.strip() == header:
+        at_top_level = state is None
+        stripped = line.strip()
+        if at_top_level and start == -1 and stripped == header:
             start = i
+        elif at_top_level and start != -1 and stripped.startswith("[") and stripped.endswith("]"):
+            end = i
             break
+        state = _advance_multiline_state(line, state)
+
     if start == -1:
         return -1, -1
-
-    end = len(lines)
-    for j in range(start + 1, len(lines)):
-        stripped = lines[j].strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            end = j
-            break
 
     while end - 1 > start:
         prev = lines[end - 1].strip()
@@ -685,6 +712,50 @@ def add_mcp_server_to_conf_file(
         lines = lines + [tail + "\n"] + block
     else:
         lines = lines[:insert_at] + ["\n"] + block + lines[insert_at:]
+
+    path.write_text("".join(lines), encoding="utf-8")
+    reload_config_if_active(path)
+
+
+def set_agent_allowed_mcp_servers_in_conf_file(
+    agent_key: str,
+    servers: List[str],
+    config_path: str | Path = "conf.toml",
+) -> None:
+    """[agents.<key>].allowed_mcp_servers 를 통째로 갈아 끼웁니다.
+
+    어떤 에이전트가 어떤 도구를 쓰는지도 배포 설정입니다. 대화별로 갈리고 첫
+    발언과 함께 잠기는 페르소나(이름·역할·시스템 프롬프트)와 달리 conf.toml 이
+    정본이고, 진행 중인 대화를 포함해 모든 대화에 적용됩니다.
+    """
+    path = Path(config_path)
+    if not BARE_KEY_PATTERN.fullmatch(agent_key or ""):
+        raise ValueError(f"에이전트 키 '{agent_key}' 을 쓸 수 없습니다.")
+    for name in servers:
+        if not BARE_KEY_PATTERN.fullmatch(name or ""):
+            raise ValueError(f"MCP 서버 이름 '{name}' 을 쓸 수 없습니다.")
+
+    header = f"[agents.{agent_key}]"
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    start, end = _find_toml_section(lines, header)
+    if start == -1:
+        raise KeyError(f"conf.toml 에 {header} 섹션이 없습니다.")
+
+    new_line = f"allowed_mcp_servers = {_toml_array(list(servers))}\n"
+
+    for i in range(start + 1, end):
+        if not re.match(r"^\s*allowed_mcp_servers\s*=", lines[i]):
+            continue
+        # 배열이 여러 줄에 걸쳐 있으면 닫는 대괄호까지 함께 걷어냅니다.
+        last = i
+        depth = lines[i].count("[") - lines[i].count("]")
+        while depth > 0 and last + 1 < end:
+            last += 1
+            depth += lines[last].count("[") - lines[last].count("]")
+        lines[i:last + 1] = [new_line]
+        break
+    else:
+        lines.insert(start + 1, new_line)
 
     path.write_text("".join(lines), encoding="utf-8")
     reload_config_if_active(path)
