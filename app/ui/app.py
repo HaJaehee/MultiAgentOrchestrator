@@ -70,6 +70,27 @@ def create_ui() -> None:
                 chat_feed.append_message(event.get("message", {}))
             elif etype == "artifacts_synthesized":
                 artifact_viewer.render_artifacts(event.get("artifacts", []))
+            elif etype == "stop_requested":
+                # 정지를 누른 화면뿐 아니라 같은 세션을 보고 있는 모든 화면이
+                # 같은 상태를 보아야 합니다.
+                chat_feed.set_busy(
+                    True,
+                    "정지 요청됨 — 진행 중인 발언을 마친 뒤 지금까지의 토론으로 합성합니다.",
+                    "Stopping",
+                )
+                chat_feed.set_stop_pending(True)
+                ui.notify(
+                    "정지를 요청했습니다. 진행 중인 발언을 마치는 대로 합성으로 넘어갑니다.",
+                    type="warning",
+                    position="bottom-right",
+                )
+            elif etype == "interjection_queued":
+                pending = event.get("pending", 0)
+                ui.notify(
+                    f"개입 메시지를 전달했습니다 (대기 {pending}건). 다음 발언 차례에 반영됩니다.",
+                    type="info",
+                    position="bottom-right",
+                )
             elif etype == "turn_completed":
                 failed = event.get("failed_agents") or []
                 if failed:
@@ -77,6 +98,19 @@ def create_ui() -> None:
                     ui.notify(
                         f"일부 에이전트가 LLM 엔드포인트에 연결하지 못했습니다: {', '.join(failed)}",
                         type="warning",
+                        position="bottom-right",
+                    )
+                elif event.get("stopped_early"):
+                    rounds = event.get("rounds_completed", 0)
+                    max_rounds = event.get("max_rounds", 0)
+                    chat_feed.set_busy(
+                        False,
+                        f"사용자 요청으로 정지 — {rounds}/{max_rounds} 라운드까지의 토론으로 합성했습니다.",
+                        "Stopped",
+                    )
+                    ui.notify(
+                        "정지 요청대로 지금까지의 토론만으로 최종 산출물을 만들었습니다.",
+                        type="info",
                         position="bottom-right",
                     )
                 else:
@@ -210,13 +244,37 @@ def create_ui() -> None:
             if run.status != "running":
                 chat_feed.set_busy(False, run.status_text, run.round_info)
 
+        async def on_interject(text: str) -> None:
+            """토론이 도는 중에 들어온 입력.
+
+            새 턴을 열지 않고(러너는 세션당 하나만 돌립니다) 진행 중인 토론의
+            다음 발언 차례에 유저 발언으로 끼워 넣습니다.
+            """
+            if not current_session_id or not runner.interject(current_session_id, text):
+                # 마지막 발언과 화면 갱신 사이에 눌린 경우. 글을 삼키지 않습니다.
+                chat_feed.restore_input(text)
+                chat_feed.set_busy(False, "진행 중인 토론이 없습니다 (Ready for prompt)", "Ready")
+                ui.notify(
+                    "토론이 이미 끝나 개입을 전달하지 못했습니다. 그대로 다시 보내면 새 턴으로 진행됩니다.",
+                    type="warning",
+                    position="bottom-right",
+                )
+
+        async def on_stop() -> None:
+            """남은 라운드를 접고 지금까지의 토론으로 마무리하도록 요청합니다."""
+            if not current_session_id or not runner.request_stop(current_session_id):
+                chat_feed.set_busy(False, "진행 중인 토론이 없습니다 (Ready for prompt)", "Ready")
+                return
+            # 화면 갱신과 알림은 러너가 돌려주는 stop_requested 이벤트에서 합니다.
+            # 이 세션을 보고 있는 다른 화면도 같은 경로로 알게 됩니다.
+
         # ------------------------------------------------------------ 레이아웃
 
         sidebar = SessionSidebar(on_session_selected, on_new_session)
         drawer = sidebar.build_ui()
 
         roster_control = AgentRosterControl(on_config_changed)
-        chat_feed = ChatFeed(on_send_message)
+        chat_feed = ChatFeed(on_send_message, on_interject=on_interject, on_stop=on_stop)
         artifact_viewer = ArtifactViewer()
 
         # Top Header
@@ -360,6 +418,9 @@ def create_ui() -> None:
 
             if running:
                 chat_feed.set_busy(run.busy, run.status_text, run.round_info)
+                # 새로고침 뒤에도 "정지 중" 이라는 사실이 남아 있어야, 이미 접수된
+                # 요청을 다시 누르지 않습니다.
+                chat_feed.set_stop_pending(bool(snapshot["stop_requested"]))
                 attach_to_run(run)
             else:
                 chat_feed.set_busy(False, "대기 중 (Ready for prompt)", "Ready")

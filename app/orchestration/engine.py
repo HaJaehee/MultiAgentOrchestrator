@@ -12,6 +12,7 @@ from app.config import resolve_workspace_dir
 from app.mcp.manager import get_mcp_manager
 from app.database.models import ArtifactModel, MessageModel, SessionModel, ToolCallRecordModel
 from app.database.session import get_session_factory
+from app.orchestration.control import TurnControl
 from app.orchestration.state import ArtifactItem, DebateMessage, DebateState
 from app.orchestration.strategies import get_strategy
 
@@ -221,6 +222,86 @@ class OrchestratorEngine:
             await on_event({"type": "message_added", "message": message.model_dump()})
         return message
 
+    # ------------------------------------------------------------------ 유저 발언
+
+    async def _record_user_message(
+        self,
+        *,
+        db,
+        state: DebateState,
+        content: str,
+        round_number: int,
+        on_event: Optional[EventCallback],
+    ) -> DebateMessage:
+        """유저 발언을 기록에 남기고 화면에 흘립니다.
+
+        턴을 여는 최초 요청과 토론 도중의 개입이 같은 자리에 같은 모양으로
+        들어가야, 다음 발언자의 맥락(`_build_context_for_agent`)과 합성 전사가
+        둘을 구분 없이 읽습니다.
+        """
+        msg_id = str(uuid.uuid4())
+        db.add(MessageModel(
+            id=msg_id,
+            session_id=state.session_id,
+            sender_key="user",
+            sender_name="User",
+            sender_role="Client / Requestor",
+            content=content,
+            round_number=round_number,
+            msg_type="user",
+        ))
+        await db.commit()
+
+        message = DebateMessage(
+            id=msg_id,
+            sender_key="user",
+            sender_name="User",
+            sender_role="Client / Requestor",
+            content=content,
+            round_number=round_number,
+            msg_type="user",
+        )
+        state.messages.append(message)
+
+        if on_event:
+            await on_event({"type": "message_added", "message": message.model_dump()})
+        return message
+
+    async def _apply_interjections(
+        self,
+        *,
+        db,
+        state: DebateState,
+        control: Optional[TurnControl],
+        round_number: int,
+        on_event: Optional[EventCallback],
+    ) -> int:
+        """대기 중인 사용자 개입을 지금 시점의 토론 기록에 밀어 넣습니다.
+
+        발언이 진행되는 중간에 끼워 넣으면, 그 발언의 프롬프트는 이미 만들어진
+        뒤라 반영되지도 않으면서 기록 순서만 어긋납니다. 그래서 호출 지점은 항상
+        발언과 발언 사이입니다. 여기서 들어간 메모는 다음 발언자의 맥락에 그대로
+        실립니다.
+        """
+        if control is None:
+            return 0
+        notes = control.drain_notes()
+        for note in notes:
+            await self._record_user_message(
+                db=db,
+                state=state,
+                content=f"[토론 중 사용자 개입]\n{note}",
+                round_number=round_number,
+                on_event=on_event,
+            )
+        state.interjection_count += len(notes)
+        if notes:
+            logger.info(
+                f"Applied {len(notes)} user interjection(s) to session {state.session_id} "
+                f"at round {round_number}"
+            )
+        return len(notes)
+
     # ------------------------------------------------------------------ 턴
 
     async def run_turn(
@@ -228,8 +309,15 @@ class OrchestratorEngine:
         session_id: str,
         user_prompt: str,
         on_event: Optional[EventCallback] = None,
+        control: Optional[TurnControl] = None,
     ) -> DebateState:
-        """Executes a full multi-agent collaborative debate and synthesis turn."""
+        """Executes a full multi-agent collaborative debate and synthesis turn.
+
+        `control` 이 주어지면 발언과 발언 사이마다 사용자의 정지 요청과 개입
+        메모를 확인합니다. 정지는 태스크를 죽이는 것이 아니라 남은 라운드를
+        건너뛰고 최종 합성으로 넘어가는 것이라, 지금까지의 토론으로도 산출물이
+        나옵니다.
+        """
         async with self.session_factory() as db:
             # 1. Load session config from DB
             stmt = select(SessionModel).where(SessionModel.id == session_id)
@@ -295,37 +383,13 @@ class OrchestratorEngine:
                 )
 
             # 3. Record User Message in DB
-            user_msg_id = str(uuid.uuid4())
-            user_msg_db = MessageModel(
-                id=user_msg_id,
-                session_id=session_id,
-                sender_key="user",
-                sender_name="User",
-                sender_role="Client / Requestor",
+            await self._record_user_message(
+                db=db,
+                state=state,
                 content=user_prompt,
                 round_number=0,
-                msg_type="user",
+                on_event=on_event,
             )
-            db.add(user_msg_db)
-            await db.commit()
-
-            state.messages.append(
-                DebateMessage(
-                    id=user_msg_id,
-                    sender_key="user",
-                    sender_name="User",
-                    sender_role="Client / Requestor",
-                    content=user_prompt,
-                    round_number=0,
-                    msg_type="user",
-                )
-            )
-
-            if on_event:
-                await on_event({
-                    "type": "message_added",
-                    "message": state.messages[-1].model_dump(),
-                })
 
             # 4. Phase 1: Master Orchestrator Goal Analysis & Planning
             state.status = "planning"
@@ -368,7 +432,17 @@ class OrchestratorEngine:
             strategy = get_strategy(strategy_name)
             state.status = "debating"
 
+            # 계획 발언과 첫 라운드 사이도 개입이 반영되는 지점입니다.
+            await self._apply_interjections(
+                db=db, state=state, control=control, round_number=0, on_event=on_event
+            )
+
+            stopped_early = False
             for round_num in range(1, max_rounds + 1):
+                if control is not None and control.stop_requested:
+                    stopped_early = True
+                    break
+
                 state.current_round = round_num
                 if on_event:
                     await on_event({
@@ -380,6 +454,16 @@ class OrchestratorEngine:
                 speakers = strategy.get_speakers_for_round(active_agents, round_num, state)
 
                 for agent in speakers:
+                    # 발언과 발언 사이. 사용자의 개입과 정지는 여기서만 반영됩니다.
+                    # 진행 중이던 발언을 끊지 않으므로 잘린 기록이 남지 않습니다.
+                    await self._apply_interjections(
+                        db=db, state=state, control=control,
+                        round_number=round_num, on_event=on_event,
+                    )
+                    if control is not None and control.stop_requested:
+                        stopped_early = True
+                        break
+
                     state.current_speaker = agent.name
                     if on_event:
                         await on_event({
@@ -421,6 +505,22 @@ class OrchestratorEngine:
                         on_event=on_event,
                         on_tool_call=handle_tool_call,
                     )
+
+                if stopped_early:
+                    break
+
+            # 정지 요청이 마지막 발언 도중에 들어왔더라도, 그때까지 쌓인 개입은
+            # 합성 전사에 실어 보냅니다.
+            await self._apply_interjections(
+                db=db, state=state, control=control,
+                round_number=state.current_round, on_event=on_event,
+            )
+            state.stopped_early = stopped_early
+            if stopped_early:
+                logger.info(
+                    f"Debate for session {session_id} stopped early by the user at "
+                    f"round {state.current_round}/{max_rounds}; synthesizing what we have."
+                )
 
             # 6. Phase 3: Final Consensus & Artifact Synthesis
             state.status = "synthesizing"
@@ -464,7 +564,8 @@ class OrchestratorEngine:
             await db.commit()
 
             state.status = "completed"
-            state.is_consensus_reached = not state.failed_agent_keys
+            # 사용자가 도중에 끊었다면 합의에 이른 것이 아닙니다.
+            state.is_consensus_reached = not state.failed_agent_keys and not state.stopped_early
             if state.failed_agent_keys:
                 state.error_message = (
                     "다음 에이전트가 LLM 엔드포인트에 닿지 못했습니다: "
@@ -481,6 +582,9 @@ class OrchestratorEngine:
                     "status": "completed",
                     "failed_agents": list(state.failed_agent_keys),
                     "error_message": state.error_message,
+                    "stopped_early": state.stopped_early,
+                    "rounds_completed": state.current_round,
+                    "max_rounds": state.max_rounds,
                 })
 
             return state
@@ -562,6 +666,17 @@ class OrchestratorEngine:
 
         full_transcript = "\n".join(kept)
 
+        early_stop = ""
+        if state.stopped_early:
+            # 남은 라운드에서 나왔을 반론을 지어내면, 검증되지 않은 결론이 검증된
+            # 것처럼 보고서에 올라갑니다.
+            early_stop = (
+                f"\n[주의] 사용자가 예정된 라운드보다 일찍 토론을 정지시켰습니다 "
+                f"(진행: {state.current_round}/{state.max_rounds} 라운드). 남은 라운드에서 "
+                f"나왔을 의견을 추측해 채우지 말고, 지금까지 오간 논의만으로 정리하되 "
+                f"아직 검토되지 못한 쟁점을 보고서에 명시하세요.\n"
+            )
+
         missing = ""
         if state.failed_agent_keys:
             # 누가 빠졌는지 알려야, 오케스트레이터가 없는 의견을 있는 것처럼 요약하지 않습니다.
@@ -574,6 +689,7 @@ class OrchestratorEngine:
         prompt = (
             f"[User Goal]: {state.user_prompt}\n\n"
             f"[Full Multi-Agent Debate Transcript]:\n{full_transcript}\n"
+            f"{early_stop}"
             f"{missing}\n"
             f"수석 오케스트레이터로서 모든 토론과 피드백을 통합하여 최종 합의 보고서를 작성하세요.\n"
             f"반드시 다음 항목들을 포함해야 합니다:\n"

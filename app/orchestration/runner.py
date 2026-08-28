@@ -24,6 +24,7 @@ import logging
 from typing import Any, Dict, List, Optional, Set
 
 from app.config import resolve_workspace_dir
+from app.orchestration.control import TurnControl
 from app.orchestration.engine import OrchestratorEngine, get_orchestrator_engine
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,9 @@ class TurnRun:
         self.task: Optional[asyncio.Task] = None
         self._subscribers: Set["asyncio.Queue[Dict[str, Any]]"] = set()
 
+        # 사람이 이 턴에 끼어드는 통로. 엔진이 발언 사이마다 꺼내 봅니다.
+        self.control = TurnControl()
+
     # -------------------------------------------------- 구독
 
     def subscribe(self) -> "asyncio.Queue[Dict[str, Any]]":
@@ -89,7 +93,48 @@ class TurnRun:
                 logger.warning("Dropping a slow debate subscriber for session %s", self.session_id)
                 self._subscribers.discard(queue)
 
+    # -------------------------------------------------- 사람의 개입
+
+    def request_stop(self) -> bool:
+        """남은 라운드를 접고 지금까지의 토론으로 합성하도록 요청합니다.
+
+        `DebateRunner.cancel()` 과 다릅니다. 태스크를 죽이지 않으므로 진행 중인
+        발언이 중간에 잘리지 않고, 최종 합성과 아티팩트도 그대로 나옵니다.
+        이미 요청했거나 끝난 토론이면 아무것도 하지 않고 False 를 돌려줍니다.
+        """
+        if self.status != "running" or self.control.stop_requested:
+            return False
+        self.control.request_stop()
+        self._emit({"type": "stop_requested"})
+        return True
+
+    def interject(self, text: str) -> bool:
+        """토론 중인 에이전트들에게 사용자 메시지를 끼워 넣습니다.
+
+        곧바로 반영되지는 않습니다. 지금 발언 중인 에이전트의 프롬프트는 이미
+        만들어져 나갔으므로, 엔진이 다음 발언자로 넘어가는 지점에서 꺼내 갑니다.
+        """
+        if self.status != "running":
+            return False
+        if not self.control.add_note(text):
+            return False
+        self._emit({
+            "type": "interjection_queued",
+            "text": text.strip(),
+            "pending": len(self.control.pending_notes),
+        })
+        return True
+
     # -------------------------------------------------- 상태 적용
+
+    def _emit(self, event: Dict[str, Any]) -> None:
+        """엔진이 아니라 사람이 만든 이벤트를 스냅샷과 구독자에게 함께 보냅니다."""
+        self.apply(event)
+        self._fanout(event)
+
+    def _pending_prefix(self, text: str) -> str:
+        """정지를 기다리는 중이라는 표시. 다음 상태 문구가 덮어써도 계속 붙습니다."""
+        return f"(정지 대기) {text}" if self.control.stop_requested else text
 
     def apply(self, event: Dict[str, Any]) -> None:
         """이벤트를 정본 스냅샷에 반영합니다. 새로 붙는 화면이 이걸 그립니다."""
@@ -100,14 +145,15 @@ class TurnRun:
             status = event.get("status", "")
             round_num = event.get("round", "")
             self.busy = True
-            self.status_text = f"[{speaker}] 발언 및 분석 중..." if speaker else f"상태: {status}"
+            label = f"[{speaker}] 발언 및 분석 중..." if speaker else f"상태: {status}"
+            self.status_text = self._pending_prefix(label)
             self.round_info = f"Round {round_num}" if round_num else "Debating"
 
         elif etype == "round_started":
             r = event.get("round", 1)
             mr = event.get("max_rounds", 3)
             self.busy = True
-            self.status_text = f"Round {r}/{mr} 전문가 토론 진행 중..."
+            self.status_text = self._pending_prefix(f"Round {r}/{mr} 전문가 토론 진행 중...")
             self.round_info = f"Round {r}/{mr}"
 
         elif etype == "message_stream_start":
@@ -130,6 +176,17 @@ class TurnRun:
                 self._upsert(msg)
                 self.streaming_ids.discard(msg_id)
 
+        elif etype == "stop_requested":
+            self.busy = True
+            self.status_text = "정지 요청됨 — 진행 중인 발언을 마친 뒤 지금까지의 토론으로 합성합니다."
+            self.round_info = "Stopping"
+
+        elif etype == "interjection_queued":
+            pending = event.get("pending", 0)
+            self.status_text = self._pending_prefix(
+                f"사용자 개입 {pending}건 대기 — 다음 발언 차례에 반영됩니다."
+            )
+
         elif etype == "artifacts_synthesized":
             self.artifacts = list(event.get("artifacts", []))
 
@@ -140,6 +197,14 @@ class TurnRun:
             if failed:
                 self.status_text = f"토론 완료 — 응답하지 못한 에이전트: {', '.join(failed)}"
                 self.round_info = "Incomplete"
+            elif event.get("stopped_early"):
+                rounds = event.get("rounds_completed", 0)
+                max_rounds = event.get("max_rounds", 0)
+                self.status_text = (
+                    f"사용자 요청으로 정지 — {rounds}/{max_rounds} 라운드까지의 토론으로 "
+                    f"합성을 마쳤습니다."
+                )
+                self.round_info = "Stopped"
             else:
                 self.status_text = "토론 완료 및 최종 아티팩트 합성 완료"
                 self.round_info = "Done"
@@ -165,6 +230,8 @@ class TurnRun:
             "messages": [dict(m) for m in self.messages],
             "streaming_ids": set(self.streaming_ids),
             "artifacts": [dict(a) for a in self.artifacts],
+            "stop_requested": self.control.stop_requested,
+            "pending_notes": len(self.control.pending_notes),
         }
 
 
@@ -217,7 +284,8 @@ class DebateRunner:
         async def driver() -> None:
             try:
                 await self.engine.run_turn(
-                    session_id=session_id, user_prompt=user_prompt, on_event=on_event
+                    session_id=session_id, user_prompt=user_prompt, on_event=on_event,
+                    control=run.control,
                 )
                 run.status = "completed"
             except asyncio.CancelledError:
@@ -247,6 +315,16 @@ class DebateRunner:
         # 즉 이 안에서는 UI 엘리먼트를 만들 수 없고, 만들 일도 없습니다.
         run.task = asyncio.create_task(driver(), name=f"debate-{session_id}")
         return run
+
+    def request_stop(self, session_id: str) -> bool:
+        """진행 중인 토론을 지금까지의 내용으로 마무리하도록 요청합니다."""
+        run = self._runs.get(session_id)
+        return run.request_stop() if run is not None else False
+
+    def interject(self, session_id: str, text: str) -> bool:
+        """진행 중인 토론에 사용자 메시지를 끼워 넣습니다."""
+        run = self._runs.get(session_id)
+        return run.interject(text) if run is not None else False
 
     async def cancel(self, session_id: str) -> bool:
         run = self._runs.get(session_id)

@@ -7,6 +7,13 @@ from app.agents.base import AGENT_STYLE_MAP
 logger = logging.getLogger(__name__)
 
 
+# 입력창 문구. 토론이 도는 중에는 같은 칸이 "새 요청" 이 아니라 "개입" 으로
+# 동작하므로, 무엇이 될지 문구로 먼저 알려 줍니다. props 로 넘어가는 값이라
+# 큰따옴표는 쓰지 않습니다.
+IDLE_PLACEHOLDER = "멀티 에이전트에게 토론 및 설계를 요청할 목표/질문을 입력하세요..."
+INTERJECT_PLACEHOLDER = "토론 진행 중 — 지금 보내면 다음 발언 차례에 개입으로 전달됩니다"
+
+
 def _card_classes(msg_type: str, sender_key: str) -> str:
     """말풍선 배경. 실패 안내는 발언과 확실히 구분되어야 합니다."""
     if msg_type == "error":
@@ -21,8 +28,17 @@ def _card_classes(msg_type: str, sender_key: str) -> str:
 class ChatFeed:
     """Interactive multi-agent debate timeline with styled chat bubbles and collapsible MCP tool logs."""
 
-    def __init__(self, on_send_message: Callable[[str], Coroutine[None, None, None]]):
+    def __init__(
+        self,
+        on_send_message: Callable[[str], Coroutine[None, None, None]],
+        on_interject: Optional[Callable[[str], Coroutine[None, None, None]]] = None,
+        on_stop: Optional[Callable[[], Coroutine[None, None, None]]] = None,
+    ):
         self.on_send_message = on_send_message
+        # 토론이 도는 중에 들어온 입력과 정지 버튼의 행선지. 주어지지 않으면
+        # 예전처럼 토론 중에는 입력을 잠그고 정지 버튼도 숨깁니다.
+        self.on_interject = on_interject
+        self.on_stop = on_stop
         self.scroll_area: Optional[ui.scroll_area] = None
         self.message_container: Optional[ui.column] = None
         self.status_bar: Optional[ui.row] = None
@@ -30,8 +46,10 @@ class ChatFeed:
         self.status_spinner: Optional[ui.spinner] = None
         self.input_field: Optional[ui.input] = None
         self.send_button: Optional[ui.button] = None
+        self.stop_button: Optional[ui.button] = None
         self.round_badge: Optional[ui.badge] = None
         self.is_busy: bool = False
+        self._stop_pending: bool = False
         self._active_streams: Dict[str, Dict[str, Any]] = {}
         self._placeholder: Optional[ui.column] = None
 
@@ -62,7 +80,17 @@ class ChatFeed:
                     self.status_spinner = ui.spinner("dots", size="sm", color="indigo-4")
                     self.status_spinner.set_visibility(False)
                     self.status_label = ui.label("대기 중 (Ready for prompt)").classes("font-semibold text-slate-300")
-                self.round_badge = ui.badge("Ready", color="slate-700").props("dense")
+                with ui.row().classes("items-center gap-2"):
+                    self.stop_button = (
+                        ui.button("정지", icon="stop_circle", on_click=self._handle_stop)
+                        .props("flat dense no-caps color=rose-4 size=sm")
+                        .tooltip(
+                            "남은 라운드를 건너뛰고 지금까지의 토론으로 최종 산출물을 만듭니다. "
+                            "진행 중인 발언은 끝까지 받습니다."
+                        )
+                    )
+                    self.stop_button.set_visibility(False)
+                    self.round_badge = ui.badge("Ready", color="slate-700").props("dense")
 
             # 2. Scrollable Messages Timeline (Fills all remaining vertical space)
             with ui.scroll_area().classes("w-full flex-grow my-2 pr-2 min-h-0") as self.scroll_area:
@@ -73,7 +101,7 @@ class ChatFeed:
             # 3. Input Bar
             with ui.row().classes("w-full items-center gap-2 p-2 bg-slate-900 border border-slate-800 rounded-xl shadow-lg flex-shrink-0"):
                 self.input_field = ui.input(
-                    placeholder="멀티 에이전트에게 토론 및 설계를 요청할 목표/질문을 입력하세요...",
+                    placeholder=IDLE_PLACEHOLDER,
                 ).props("outlined dark dense autogrow").classes("flex-grow text-sm").on("keydown.enter", self._handle_enter)
 
                 self.send_button = ui.button(
@@ -92,14 +120,36 @@ class ChatFeed:
     # ------------------------------------------------------------------ 입력
 
     async def _handle_send(self) -> None:
-        if self.is_busy or not self.input_field:
+        """같은 입력칸이 상황에 따라 새 턴이 되기도, 개입이 되기도 합니다.
+
+        토론이 도는 중에 보낸 글로 새 턴을 시작할 수는 없습니다 (러너가 세션당
+        하나만 돌립니다). 그렇다고 입력을 잠가 버리면 사람이 방향을 고칠 방법이
+        토론이 끝날 때까지 없으므로, 진행 중이면 개입으로 보냅니다.
+        """
+        if not self.input_field:
             return
         text = (self.input_field.value or "").strip()
         if not text:
             return
+
+        if self.is_busy:
+            if self.on_interject is None:
+                return
+            self.input_field.value = ""
+            await self.on_interject(text)
+            return
+
         self.input_field.value = ""
         self.set_busy(True, "토론 준비 중...")
         await self.on_send_message(text)
+
+    async def _handle_stop(self) -> None:
+        if not self.is_busy or self.on_stop is None or self._stop_pending:
+            return
+        # 요청이 반영되기까지 진행 중인 발언 하나가 남아 있을 수 있습니다.
+        # 그동안 버튼을 눌러 봐야 할 일이 없으므로 잠가 둡니다.
+        self.set_stop_pending(True)
+        await self.on_stop()
 
     async def _handle_enter(self, e) -> None:
         await self._handle_send()
@@ -108,10 +158,23 @@ class ChatFeed:
         if not self.alive:
             return
         self.is_busy = busy
+        # 개입 통로가 연결돼 있으면 토론 중에도 입력을 열어 둡니다. 그때 보낸 글은
+        # 새 턴이 아니라 진행 중인 토론으로 들어갑니다.
+        can_interject = busy and self.on_interject is not None
         if self.send_button:
-            self.send_button.disable() if busy else self.send_button.enable()
+            self.send_button.disable() if (busy and not can_interject) else self.send_button.enable()
+            self.send_button.props(
+                "icon=bolt color=amber-7" if can_interject else "icon=send color=indigo-6"
+            )
         if self.input_field:
-            self.input_field.disable() if busy else self.input_field.enable()
+            self.input_field.disable() if (busy and not can_interject) else self.input_field.enable()
+            self.input_field.props(
+                f'placeholder="{INTERJECT_PLACEHOLDER if can_interject else IDLE_PLACEHOLDER}"'
+            )
+        if self.stop_button:
+            self.stop_button.set_visibility(busy and self.on_stop is not None)
+        if not busy:
+            self.set_stop_pending(False)
         if self.status_spinner:
             self.status_spinner.set_visibility(busy)
         if self.status_label and status_text:
@@ -119,10 +182,32 @@ class ChatFeed:
         if self.round_badge and round_info:
             self.round_badge.set_text(round_info)
 
+    def restore_input(self, text: str) -> None:
+        """보내지 못한 입력을 입력칸에 되돌려 놓습니다.
+
+        개입을 전달하려는 순간 토론이 막 끝나 있으면 글이 갈 곳을 잃습니다.
+        사용자가 쓴 것을 삼키지 않도록 되돌립니다 (그 사이에 새로 쓴 글이 있으면
+        건드리지 않습니다).
+        """
+        if not self.alive or self.input_field is None:
+            return
+        if (self.input_field.value or "").strip():
+            return
+        self.input_field.value = text
+
+    def set_stop_pending(self, pending: bool) -> None:
+        """정지 요청이 접수돼 마지막 발언과 합성을 기다리는 중임을 표시합니다."""
+        self._stop_pending = pending
+        if not self.alive or self.stop_button is None:
+            return
+        self.stop_button.set_text("정지 중..." if pending else "정지")
+        self.stop_button.disable() if pending else self.stop_button.enable()
+
     # ------------------------------------------------------------------ 렌더링
 
     def clear(self) -> None:
         self._active_streams.clear()
+        self._stop_pending = False
         if not self.alive:
             return
         self._placeholder = None
