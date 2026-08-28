@@ -86,3 +86,75 @@ set "PYTHONUTF8=1"
 - **CLI Parameter Forwarding**: Both `run_offline.ps1` (`$args`) and `run_offline.bat` (`%*`) pass all command-line arguments directly to `app.main`. Users can run `.\run_offline.ps1 --port 9000` to override the bound port dynamically.
 - **UTF-8 BOM Protection**: `run_offline.ps1` is saved with UTF-8 BOM (`utf-8-sig`) and configures `[Console]::OutputEncoding = UTF8`, preventing PowerShell parser errors on Korean Windows systems.
 - **Zero Configuration Drift**: Because paths and settings are injected via environment variables, [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml) requires **zero manual adjustments** when moving between environments.
+
+
+---
+
+## 4. Source-Only Updates (`package_source.py`)
+
+The full bundle is hundreds of megabytes because it carries a portable CPython, `node.exe`,
+the pip wheel archive, and the installed MCP servers. None of that changes when you fix a
+bug in `app/`. Re-transferring it means re-doing the transfer review from scratch every time.
+
+[`package_source.py`](file:///d:/MultiAgentOrchestrator/package_source.py) packages **only
+source and configuration** — roughly 200 KB — to be applied on top of an already-transferred
+bundle.
+
+```powershell
+python package_source.py                       # dist\MultiAgentOrchestrator_source_YYYYMMDD.zip
+python package_source.py --no-tests --no-docs  # app/ + config only, smaller still
+```
+
+### What goes in
+
+| Included | Excluded |
+| :--- | :--- |
+| `app/` | `python_runtime/`, `node_runtime/` |
+| `tests/`, `wiki/` (opt-out) | `wheels/`, `mcp_node/`, `mcp_sandbox/` |
+| `conf.example.toml`, `.env.example`, `requirements.txt` | `workspace/`, `multiagent.db` |
+| `setup_mcp.py`, `package_offline.py|ps1`, `package_source.py|ps1` | `dist/`, `.git/`, `__pycache__/` |
+| `README.md`, `CLAUDE.md` | |
+
+The include list is an **allow-list**, not a deny-list. With a deny-list, a directory added
+later rides along silently; with an allow-list it is simply absent, and absence is visible.
+
+### Three things the script refuses to do
+
+1. **Overwrite the target's `conf.toml`.** The local file is shipped as `conf.toml.new`.
+   The deployed one holds that network's real endpoints; replacing it would point every
+   agent at nothing.
+2. **Ship an oversized file.** Anything above `--max-file-mb` (default 2 MB) aborts the run.
+   A source package has no business containing a megabyte-scale file — if one appears, a
+   runtime artifact leaked into the tree.
+3. **Ship something that looks like a credential.** API keys, tokens, and private-key headers
+   are scanned for and abort the run (`--allow-secrets` to override). `conf.toml` is
+   gitignored, so nothing stops someone from pasting a real key into it, and a transfer
+   review is the wrong place to discover that.
+
+### Applying on the target
+
+The package carries `apply_update.ps1` and `README_SOURCE.md`:
+
+```powershell
+.\apply_update.ps1 -Target "C:\Apps\MultiAgentOrchestrator_bundle"
+```
+
+It backs up `app/`, `conf.toml`, and `requirements.txt` into `_backup_<timestamp>/`, then
+**replaces `app/` wholesale** rather than copying file by file — otherwise a module deleted
+in this release stays behind on the target and keeps getting imported. `conf.toml` is left
+alone; if it differs from `conf.toml.new`, the script says so and points at both.
+
+`MANIFEST.txt` lists SHA-256 per file, for the transfer record and for verifying the
+extracted tree on the far side.
+
+### When a source-only update is not enough
+
+If `requirements.txt` changed, a package the runtime does not have was added, and the source
+package alone will not run. Compare against the backup after applying:
+
+```powershell
+Compare-Object (Get-Content _backup_*
+equirements.txt) (Get-Content requirements.txt)
+```
+
+Any difference means the full bundle has to be rebuilt and re-transferred.

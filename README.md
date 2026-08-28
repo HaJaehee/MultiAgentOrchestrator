@@ -76,6 +76,7 @@ MultiAgentOrchestrator/
 ├── conf.example.toml         # 설정 템플릿 (저장소에 커밋되는 원본)
 ├── setup_mcp.py              # 개발 PC용 MCP 서버 일괄 설치
 ├── package_offline.py        # 폐쇄망 배포 번들 패키징 (런타임 + MCP 서버 동봉)
+├── package_source.py         # 소스·설정만 패키징 (런타임 제외, 갱신 반입용)
 ├── conf.toml                 # 실제 시스템 설정 파일 (로컬 전용, .gitignore 대상)
 ├── .env.example              # 환경 변수 템플릿
 ├── requirements.txt          # 파이썬 의존성 패키지
@@ -376,6 +377,52 @@ git init ./workspace              # git MCP 서버는 유효한 저장소를 요
 > **Python MCP 서버는 앱과 같은 인터프리터로 실행됩니다.** `PYTHON_BIN` 을 지정하지 않으면
 > `sys.executable` 이 기본값입니다. PATH 의 `python` 을 쓰면 가상환경에서 앱을 돌릴 때
 > 의존성이 없는 다른 인터프리터를 가리켜 서버가 기동에 실패합니다.
+
+#### 소스만 갱신해 반입하기
+
+런타임(포터블 파이썬 · node.exe · wheel · MCP 서버)은 한 번 반입하면 버전을 올릴 때까지
+그대로 씁니다. 코드만 고쳤을 때 수백 MB 를 다시 넣는 것은 용량 문제이기 이전에 **반입 심사를
+매번 처음부터 다시 받는 일**입니다.
+
+```bash
+python package_source.py                       # dist/MultiAgentOrchestrator_source_YYYYMMDD.zip (약 200KB)
+python package_source.py --no-tests --no-docs  # app/ 과 설정만
+```
+
+| 담기는 것 | 빠지는 것 |
+|---|---|
+| `app/` | `python_runtime/`, `node_runtime/` |
+| `tests/`, `wiki/` (옵션으로 제외 가능) | `wheels/`, `mcp_node/`, `mcp_sandbox/` |
+| `conf.example.toml`, `.env.example`, `requirements.txt` | `workspace/`, `multiagent.db` |
+| `setup_mcp.py`, `package_offline.py|ps1`, `package_source.py|ps1` | `dist/`, `.git/`, `__pycache__/` |
+| `README.md`, `CLAUDE.md` | |
+
+포함 목록은 제외 목록이 아니라 **허용 목록**입니다. 제외 목록으로 짜면 나중에 생긴 디렉터리가
+조용히 딸려 들어가지만, 허용 목록이면 그냥 빠지고 빠진 것은 눈에 띕니다.
+
+스크립트가 거부하는 세 가지:
+
+1. **대상의 `conf.toml` 덮어쓰기.** 로컬 설정은 `conf.toml.new` 라는 이름으로 들어갑니다.
+   배포본의 `conf.toml` 에는 그 망의 실제 엔드포인트가 있습니다.
+2. **큰 파일.** `--max-file-mb`(기본 2MB)를 넘으면 중단합니다. 소스 패키지에 메가바이트급
+   파일이 있다면 런타임 산출물이 새어 들어온 것입니다.
+3. **키처럼 보이는 값.** API 키·토큰·개인 키 헤더를 스캔해 중단합니다(`--allow-secrets` 로 강행).
+   `conf.toml` 은 gitignore 대상이라 누군가 실제 키를 적어 두었을 수 있고, 그것을 반입 심사에서
+   발견하는 것은 곤란합니다.
+
+대상 장비에서는 압축을 풀고:
+
+```powershell
+.\apply_update.ps1 -Target "C:\Apps\MultiAgentOrchestrator_bundle"
+```
+
+`app/`, `conf.toml`, `requirements.txt` 를 `_backup_<시각>/` 에 백업한 뒤 **`app/` 을 통째로
+교체**합니다. 파일 단위로 덮어쓰면 이번 갱신에서 삭제된 모듈이 대상에 남아 계속 import 되기
+때문입니다. `conf.toml` 은 건드리지 않고, `conf.toml.new` 와 다르면 알려만 줍니다.
+동봉된 `MANIFEST.txt` 에 파일별 SHA-256 이 있습니다.
+
+> `requirements.txt` 가 이전 반입본과 다르면 런타임에 없는 패키지가 생긴 것이므로 소스 갱신만으로는
+> 실행되지 않습니다. 그때는 `package_offline.py` 로 전체 번들을 다시 만들어야 합니다.
 
 #### 실행 경로 재정의
 
