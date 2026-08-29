@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Any, Callable, Coroutine, Dict, Iterable, List, Optional, Set
 from nicegui import ui
-from app.agents.base import AGENT_STYLE_MAP
+from app.agents.base import AGENT_STYLE_MAP, DEFAULT_STYLE
 
 logger = logging.getLogger(__name__)
 
@@ -343,7 +343,9 @@ class ChatFeed:
         round_num = msg.get("round_number", 0)
         tool_calls = msg.get("tool_calls", [])
 
-        style = AGENT_STYLE_MAP.get(sender_key, AGENT_STYLE_MAP["user"])
+        # conf.toml 에 새로 추가한 에이전트는 이 표에 없습니다. 예전에는 그때
+        # 사용자 스타일로 떨어져, 에이전트 발언이 사용자 말풍선처럼 보였습니다.
+        style = AGENT_STYLE_MAP.get(sender_key, DEFAULT_STYLE)
 
         with ui.card().classes(
             f"w-full p-3.5 rounded-xl border {_card_classes(msg_type, sender_key)} shadow-md"

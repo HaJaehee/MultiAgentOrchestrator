@@ -21,6 +21,13 @@ class SessionModel(Base):
     strategy: Mapped[str] = mapped_column(String(50), default="free_debate")
     max_rounds: Mapped[int] = mapped_column(Integer, default=3)
     active_agents: Mapped[List[str]] = mapped_column(JSON, default=list)
+    # 이 대화의 로스터를 마지막으로 저장할 때 **존재하던** 에이전트 전부.
+    #
+    # `active_agents` 는 켜 둔 것만 담는 허용 목록이라, 목록에 없는 키가 "사용자가
+    # 끈 에이전트" 인지 "그때는 없던 에이전트" 인지 구분할 수 없습니다. 그래서
+    # conf.toml 에 에이전트를 새로 추가하면 기존 대화에서 전부 꺼진 것으로 보였습니다.
+    # 그때 무엇이 있었는지를 함께 적어 두면 둘을 가릴 수 있습니다.
+    known_agents: Mapped[List[str]] = mapped_column(JSON, default=list)
     custom_instructions: Mapped[str] = mapped_column(Text, default="")
     # 첫 유저 메시지가 기록되는 순간 True 가 되며, 이후 페르소나 수정이 금지됩니다.
     personas_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

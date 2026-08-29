@@ -864,6 +864,39 @@ class AgentRosterControl:
         if self.on_config_changed:
             ui.timer(0.01, self.on_config_changed, once=True)
 
+    @staticmethod
+    def _is_selected(
+        key: str, active_keys: List[str], known_keys: Optional[List[str]]
+    ) -> bool:
+        """이 대화에서 이 에이전트를 켜 둘지.
+
+        `active_keys` 는 켜 둔 것만 담는 허용 목록이라, 목록에 없다는 사실만으로는
+        "사용자가 끈 것" 과 "그 대화를 설정할 때는 없던 것" 을 구분할 수 없습니다.
+        구분하지 않으면 둘 중 하나가 반드시 틀립니다 — conf.toml 에 에이전트를
+        추가했더니 기존 대화에서 전부 꺼진 것으로 보이거나(지금까지의 증상),
+        반대로 사용자가 끈 에이전트가 새로고침할 때마다 되살아납니다.
+
+        `known_keys` 는 그 대화의 로스터를 저장할 때 존재하던 에이전트 전부입니다.
+        여기에 없는 키는 그 뒤에 추가된 것이므로, 기본값(켜짐)으로 둡니다.
+        """
+        if not active_keys:
+            # 로스터가 아예 비어 있는 대화 (예전 기록이나 손상된 행). 켤지 끌지를
+            # 말해 주는 정보가 없으므로 기본값인 "전부 켜짐" 으로 둡니다.
+            return True
+        if key in active_keys:
+            return True
+        if known_keys:
+            return key not in known_keys          # 저장 이후에 생긴 에이전트
+        # 이 컬럼이 생기기 전에 만들어진 대화입니다. 그때 무엇이 있었는지 알 수 없어
+        # 둘 중 하나는 틀리는데, 지금 있는 에이전트를 켜는 쪽을 고릅니다. 새 에이전트가
+        # 모든 옛 대화에서 꺼져 보이는 것보다, 예전에 꺼 둔 에이전트가 한 번 되살아나고
+        # 그 대화를 열어 보는 순간 기록이 남아 다시 정확해지는 편이 낫습니다.
+        return True
+
+    def known_agent_keys(self) -> List[str]:
+        """지금 이 앱이 알고 있는 에이전트 전부 (선택 여부와 무관)."""
+        return [agent.key for agent in self.agent_pool.list_all()]
+
     def get_active_agent_keys(self) -> List[str]:
         keys = [k for k, v in self.selected_agents.items() if v]
         if "orchestrator" not in keys:
@@ -880,10 +913,11 @@ class AgentRosterControl:
         workspace_dir: str = "",
         personas_locked: bool = False,
         personas: Optional[Dict[str, Any]] = None,
+        known_keys: Optional[List[str]] = None,
     ) -> None:
         self.agent_pool = get_agent_pool()
         for k in self.agent_pool.list_all():
-            self.selected_agents[k.key] = (k.key in active_keys) if active_keys else True
+            self.selected_agents[k.key] = self._is_selected(k.key, active_keys, known_keys)
         self.strategy_name = strategy
         self.max_rounds = max_rounds
         self.custom_instructions = instructions

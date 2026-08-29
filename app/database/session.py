@@ -12,6 +12,9 @@ _ADDED_COLUMNS = {
     "sessions": {
         "personas_locked": "BOOLEAN NOT NULL DEFAULT 0",
         "workspace_dir": "TEXT NOT NULL DEFAULT ''",
+        # 비어 있으면 "그때 무엇이 있었는지 모른다" 는 뜻입니다. 화면은 그 경우
+        # 지금 있는 에이전트를 모두 새것으로 보고 켜 둡니다.
+        "known_agents": "TEXT NOT NULL DEFAULT '[]'",
     },
 }
 

@@ -220,6 +220,9 @@ def create_ui() -> None:
                 curr = res.scalar_one_or_none()
                 if curr:
                     curr.active_agents = roster_control.get_active_agent_keys()
+                    # 지금 무엇이 있었는지 함께 남깁니다. 나중에 에이전트가 추가되면
+                    # 이 목록과 비교해 "새로 생긴 것" 만 켜진 채로 보여줍니다.
+                    curr.known_agents = roster_control.known_agent_keys()
                     curr.strategy = roster_control.strategy_name
                     curr.max_rounds = roster_control.max_rounds
                     curr.custom_instructions = roster_control.custom_instructions
@@ -346,6 +349,7 @@ def create_ui() -> None:
                     strategy=roster_control.strategy_name,
                     max_rounds=roster_control.max_rounds,
                     active_agents=roster_control.get_active_agent_keys(),
+                    known_agents=roster_control.known_agent_keys(),
                     custom_instructions=roster_control.custom_instructions,
                     workspace_dir=roster_control.workspace_dir,
                 )
@@ -369,6 +373,7 @@ def create_ui() -> None:
                     personas = await effective_personas(db, sid, roster_control.agent_pool)
                     roster_control.load_from_session(
                         active_keys=s_obj.active_agents or [],
+                        known_keys=s_obj.known_agents or [],
                         strategy=s_obj.strategy or "free_debate",
                         max_rounds=s_obj.max_rounds or 3,
                         instructions=s_obj.custom_instructions or "",
