@@ -54,6 +54,7 @@ class AgentRosterControl:
         self.session_id: Optional[str] = None
         self.personas_locked: bool = False
         self.persona_button: Optional[ui.button] = None
+        self.reload_conf_btn: Optional[ui.button] = None
         self.persona_tooltip: Optional[ui.tooltip] = None
         self.persona_badge: Optional[ui.badge] = None
         self.mcp_row: Optional[ui.row] = None
@@ -103,6 +104,16 @@ class AgentRosterControl:
                         self.persona_badge = ui.badge("고정됨", color="amber-8").props("dense text-[9px]")
                         self.persona_badge.set_visibility(False)
                     with ui.row().classes("items-center gap-2"):
+                        self.reload_conf_btn = (
+                            ui.button("conf.toml 다시 읽기", icon="sync",
+                                      on_click=self._on_reload_conf)
+                            .props("flat dense no-caps color=teal-4")
+                            .classes("text-[11px]")
+                        )
+                        self.reload_conf_btn.tooltip(
+                            "앱을 다시 띄우지 않고 conf.toml 을 다시 읽어 에이전트 목록과 "
+                            "모델·도구 설정을 갱신합니다"
+                        )
                         self.persona_button = (
                             ui.button("페르소나 편집", icon="badge", on_click=self._open_persona_editor)
                             .props("flat dense color=indigo-4")
@@ -448,6 +459,10 @@ class AgentRosterControl:
             self.mcp_lock_hint.set_visibility(self.mcp_locked)
         if self.mcp_add_btn and not self.mcp_add_btn.is_deleted:
             self.mcp_add_btn.disable() if self.mcp_locked else self.mcp_add_btn.enable()
+        if self.reload_conf_btn and not self.reload_conf_btn.is_deleted:
+            # 설정을 다시 읽으면 에이전트 풀이 통째로 바뀌고, MCP 서버까지 다시
+            # 띄울 수 있습니다. 진행 중인 토론 밑에서 할 일이 아닙니다.
+            self.reload_conf_btn.disable() if self.mcp_locked else self.reload_conf_btn.enable()
         self.refresh_mcp_status()
         # 카드의 도구 버튼도 같은 규칙으로 잠깁니다.
         self.refresh_agent_cards()
@@ -635,6 +650,96 @@ class AgentRosterControl:
                 ui.button("삭제", on_click=do_delete).props("unelevated color=red-6")
 
         dialog.open()
+
+    # ------------------------------------------------------------------ 설정 다시 읽기
+
+    def _mcp_fingerprint(self) -> Dict[str, Any]:
+        """지금 떠 있어야 할 MCP 서버 구성. 값이 달라지면 다시 띄워야 합니다."""
+        try:
+            servers = get_config().enabled_mcp_servers
+        except Exception:  # noqa: BLE001
+            return {}
+        return {
+            name: (cfg.command, tuple(cfg.args), tuple(sorted(cfg.env.items())))
+            for name, cfg in servers.items()
+        }
+
+    def sync_agents_with_pool(self) -> None:
+        """선택 상태를 지금 풀에 있는 에이전트에 맞춥니다.
+
+        새로 생긴 에이전트는 켠 채로 둡니다 (기존 대화에서도 흐리게 보이지 않도록).
+        설정에서 사라진 에이전트는 선택 목록에서도 지웁니다. 남겨 두면 그 키가
+        대화의 `active_agents` 에 계속 저장되어, 있지도 않은 에이전트가 기록에
+        쌓입니다.
+        """
+        live_keys = [agent.key for agent in self.agent_pool.list_all()]
+        self.selected_agents = {
+            key: self.selected_agents.get(key, True) for key in live_keys
+        }
+
+    async def _on_reload_conf(self) -> None:
+        """conf.toml 을 다시 읽어 에이전트 풀(과 필요하면 MCP 서버)을 갱신합니다.
+
+        앱을 다시 띄우지 않고 에이전트를 추가·수정하기 위한 버튼입니다. 설정
+        파일이 깨져 있으면 아무것도 바꾸지 않고 돌아옵니다 — `get_config()` 는
+        새 설정을 다 읽은 뒤에야 전역 값을 갈아 끼우므로, 실패하면 지금 돌고
+        있는 구성이 그대로 남습니다.
+        """
+        if self._blocked_by_running_debate():
+            return
+
+        before_agents = {agent.key for agent in self.agent_pool.list_all()}
+        before_mcp = self._mcp_fingerprint()
+
+        progress = self._progress_toast("conf.toml 을 다시 읽는 중입니다...")
+        try:
+            try:
+                get_config(reload=True, config_path=self._conf_path())
+            except Exception as e:  # noqa: BLE001 - 깨진 설정으로 앱이 죽으면 안 됩니다
+                logger.error(f"Could not reload conf.toml: {e}", exc_info=True)
+                ui.notify(
+                    f"conf.toml 을 읽지 못했습니다. 실행 중인 설정은 그대로입니다: {e}",
+                    type="negative", position="bottom-right", multi_line=True,
+                )
+                return
+
+            self.agent_pool = reload_agent_pool()
+            self.sync_agents_with_pool()
+
+            after_agents = {agent.key for agent in self.agent_pool.list_all()}
+            added = sorted(after_agents - before_agents)
+            removed = sorted(before_agents - after_agents)
+
+            # MCP 구성까지 바뀌었다면 서버도 맞춰야 합니다. 그러지 않으면 화면은
+            # 새 설정을, 도구는 옛 서버를 가리키게 됩니다.
+            if self._mcp_fingerprint() != before_mcp:
+                try:
+                    await get_mcp_manager().reload_from_config()
+                    ui.notify("MCP 서버 구성도 바뀌어 함께 다시 띄웠습니다.",
+                              type="info", position="bottom-right")
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"MCP reload after conf reload failed: {e}", exc_info=True)
+                    ui.notify(f"에이전트는 갱신했지만 MCP 서버를 다시 띄우지 못했습니다: {e}",
+                              type="negative", position="bottom-right")
+
+            parts = [f"에이전트 {len(after_agents)}개"]
+            if added:
+                parts.append(f"추가: {', '.join(added)}")
+            if removed:
+                parts.append(f"제거: {', '.join(removed)}")
+            if not added and not removed:
+                parts.append("목록은 그대로 (모델·프롬프트 등은 갱신됨)")
+            ui.notify("conf.toml 을 다시 읽었습니다 — " + " · ".join(parts),
+                      type="positive", position="bottom-right", multi_line=True)
+        finally:
+            self._dismiss_toast(progress)
+            self.refresh_agent_cards()
+            self._update_summary_badge()
+            self.refresh_mcp_status()
+            self._refresh_workspace_hint()
+            if self.on_config_changed:
+                # 갱신된 로스터를 이 대화의 설정으로 저장합니다 (known_agents 포함).
+                ui.timer(0.01, self.on_config_changed, once=True)
 
     def _open_agent_tools_dialog(self, agent_key: str) -> None:
         """이 에이전트가 호출할 수 있는 MCP 서버를 고릅니다.
