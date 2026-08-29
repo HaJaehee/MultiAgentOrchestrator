@@ -349,7 +349,9 @@ class AgentRosterControl:
         display_role = persona.role if (persona and getattr(persona, "role", None)) else agent.role
         is_customized = getattr(persona, "is_customized", False) if persona else False
 
-        card_cls = "p-2 rounded-lg border flex-grow max-w-[240px] min-w-[180px] transition-all "
+        # 이름 줄 양쪽으로 드래그 손잡이와 (체크박스 + ⋮) 가 붙으면서 가운데가
+        # 좁아졌습니다. 폭을 넓혀 이름·역할·뱃지가 제 자리를 갖게 합니다.
+        card_cls = "p-2 rounded-lg border flex-grow max-w-[340px] min-w-[270px] transition-all "
         card_cls += "bg-slate-800/90 border-indigo-500/60" if is_active else "bg-slate-900/60 border-slate-800 opacity-50"
 
         # 순서를 바꿀 수 있을 때만 집어 들 수 있게 합니다. 오케스트레이터는 라운드
@@ -369,30 +371,40 @@ class AgentRosterControl:
 
         with card:
             with ui.row().classes("w-full items-center justify-between no-wrap"):
-                with ui.row().classes("items-center gap-2 min-w-0"):
+                with ui.row().classes("items-center gap-2 min-w-0 overflow-hidden"):
                     if reorderable:
                         ui.icon("drag_indicator", size="14px").classes(
                             "text-slate-600 flex-shrink-0"
                         ).tooltip("끌어서 발언 순서를 바꿉니다")
-                    ui.avatar(agent.avatar, color=agent.color, text_color="white", size="xs")
+                    ui.avatar(agent.avatar, color=agent.color, text_color="white", size="xs").classes(
+                        "flex-shrink-0"
+                    )
                     with ui.column().classes("gap-0 min-w-0"):
-                        with ui.row().classes("items-center gap-1 no-wrap"):
-                            ui.label(display_name).classes("text-xs font-bold truncate")
+                        with ui.row().classes(
+                            "items-center gap-1 no-wrap min-w-0 w-full overflow-hidden"
+                        ):
+                            # 좁아지면 줄어드는 것은 이름입니다. 뱃지는 짧고,
+                            # 잘리면 무슨 뱃지인지 알 수 없게 됩니다.
+                            ui.label(display_name).classes(
+                                "text-xs font-bold truncate min-w-0"
+                            )
                             if is_customized:
-                                ui.badge("수정됨", color="indigo-7").props("dense text-[8px]")
+                                ui.badge("수정됨", color="indigo-7").props("dense text-[8px]").classes(
+                                    "flex-shrink-0"
+                                )
                             # conf.toml 에서는 사라졌지만 이 대화의 스냅샷에는 남아
                             # 있는 에이전트. 계속 발언하므로 카드에도 나와야 합니다.
                             if agent.debate_stance != "neutral":
                                 ui.badge(
                                     STANCE_LABELS[agent.debate_stance],
                                     color=STANCE_COLORS[agent.debate_stance],
-                                ).props("dense text-[8px]").tooltip(
+                                ).props("dense text-[8px]").classes("flex-shrink-0").tooltip(
                                     "디베이트 전략에서의 진영"
                                 )
                             if self.personas_locked and self.agent_pool.get(agent.key) is None:
                                 ui.badge("이 대화 전용", color="amber-8").props(
                                     "dense text-[8px]"
-                                ).tooltip(
+                                ).classes("flex-shrink-0").tooltip(
                                     "conf.toml 에서는 지워졌지만, 이 대화는 토론을 시작할 때 "
                                     "굳은 구성으로 계속 씁니다"
                                 )
