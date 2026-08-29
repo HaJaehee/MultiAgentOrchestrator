@@ -113,7 +113,7 @@ without rebuilding the whole bundle:
 python package_offline.py --launchers-only "C:\path\to\MultiAgentOrchestrator_bundle"
 ```
 
-`apply_update.ps1` runs this automatically after copying the sources.
+Run it on the target after copying new sources when the launcher itself changed.
 
 ### Parameter Forwarding & Encoding
 - **CLI Parameter Forwarding**: Both `run_offline.ps1` (`$args`) and `run_offline.bat` (`%*`) pass all command-line arguments directly to `app.main`. Users can run `.\run_offline.ps1 --port 9000` to override the bound port dynamically.
@@ -134,28 +134,28 @@ source and configuration** — roughly 200 KB — to be applied on top of an alr
 bundle.
 
 ```powershell
-python package_source.py                       # dist\MultiAgentOrchestrator_source_YYYYMMDD.zip
-python package_source.py --no-tests --no-docs  # app/ + config only, smaller still
+python package_source.py   # dist\MultiAgentOrchestrator_source_YYYYMMDD.zip
 ```
 
 ### What goes in
 
+Only what a running installation needs in order to be updated.
+
 | Included | Excluded |
 | :--- | :--- |
-| `app/` | `python_runtime/`, `node_runtime/` |
-| `tests/`, `wiki/` (opt-out) | `wheels/`, `mcp_node/`, `mcp_sandbox/` |
-| `conf.example.toml`, `.env.example`, `requirements.txt` | `workspace/`, `multiagent.db` |
-| `setup_mcp.py`, `package_offline.py|ps1`, `package_source.py|ps1` | `dist/`, `.git/`, `__pycache__/` |
-| `README.md`, `CLAUDE.md` | |
+| `app/`, `mcp_servers/` | `python_runtime/`, `node_runtime/`, `wheels/`, `mcp_sandbox/` |
+| `mcp_node/memory-scoped.mjs` (the forked server's runnable copy) | `workspace/`, `multiagent.db`, `conf.toml` |
+| `conf.example.toml`, `.env.example`, `requirements.txt` | `tests/`, `wiki/`, `CLAUDE.md` |
+| `setup_mcp.py`, `open_browser.py`, `README.md` | the packaging scripts themselves |
 
 The include list is an **allow-list**, not a deny-list. With a deny-list, a directory added
 later rides along silently; with an allow-list it is simply absent, and absence is visible.
 
 ### Three things the script refuses to do
 
-1. **Overwrite the target's `conf.toml`.** The local file is shipped as `conf.toml.new`.
-   The deployed one holds that network's real endpoints; replacing it would point every
-   agent at nothing.
+1. **Overwrite the target's `conf.toml`.** The local file is not shipped at all. The
+   deployed one holds that network's real endpoints; replacing it would point every agent
+   at nothing. New settings are carried over by hand from `conf.example.toml`.
 2. **Ship an oversized file.** Anything above `--max-file-mb` (default 2 MB) aborts the run.
    A source package has no business containing a megabyte-scale file — if one appears, a
    runtime artifact leaked into the tree.
@@ -166,24 +166,22 @@ later rides along silently; with an allow-list it is simply absent, and absence 
 
 ### Applying on the target
 
-The package carries `apply_update.ps1` and `README_SOURCE.md`:
+Overwrite the installation with the extracted files (replace `app/` wholesale rather than file by file, so modules deleted in this update do not linger and keep getting imported). `conf.toml` is not in the package, so the target's own endpoints survive:
+
+Back up `app/` and `conf.toml` first. `MANIFEST.txt` lists SHA-256 per file, for the
+transfer record and for verifying the extracted tree on the far side:
 
 ```powershell
-.\apply_update.ps1 -Target "C:\Apps\MultiAgentOrchestrator_bundle"
+Get-Content MANIFEST.txt | Where-Object { $_ -notmatch '^#' } | ForEach-Object {
+    $sha, $size, $rel = ($_ -split '\s+', 3)
+    if ((Get-FileHash $rel -Algorithm SHA256).Hash -ne $sha.ToUpper()) { "differs: $rel" }
+}
 ```
-
-It backs up `app/`, `conf.toml`, and `requirements.txt` into `_backup_<timestamp>/`, then
-**replaces `app/` wholesale** rather than copying file by file — otherwise a module deleted
-in this release stays behind on the target and keeps getting imported. `conf.toml` is left
-alone; if it differs from `conf.toml.new`, the script says so and points at both.
-
-`MANIFEST.txt` lists SHA-256 per file, for the transfer record and for verifying the
-extracted tree on the far side.
 
 ### When a source-only update is not enough
 
 If `requirements.txt` changed, a package the runtime does not have was added, and the source
-package alone will not run. Compare against the backup after applying:
+package alone will not run. Compare against the backup you took before applying:
 
 ```powershell
 Compare-Object (Get-Content _backup_*

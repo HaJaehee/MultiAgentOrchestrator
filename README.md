@@ -471,41 +471,43 @@ stderr 에 경고를 남깁니다. 공용으로 떨어뜨리면 주입이 깨졌
 매번 처음부터 다시 받는 일**입니다.
 
 ```bash
-python package_source.py                       # dist/MultiAgentOrchestrator_source_YYYYMMDD.zip (약 200KB)
-python package_source.py --no-tests --no-docs  # app/ 과 설정만
+python package_source.py   # dist/MultiAgentOrchestrator_source_YYYYMMDD.zip (약 200KB)
 ```
+
+담는 것은 **돌아가는 앱을 갱신하는 데 필요한 것뿐**입니다.
 
 | 담기는 것 | 빠지는 것 |
 |---|---|
-| `app/`, `mcp_servers/` | `python_runtime/`, `node_runtime/` |
-| `tests/`, `wiki/` (옵션으로 제외 가능) | `wheels/`, `mcp_node/`, `mcp_sandbox/` |
-| `conf.example.toml`, `.env.example`, `requirements.txt` | `workspace/`, `multiagent.db` |
-| `setup_mcp.py`, `package_offline.py|ps1`, `package_source.py|ps1` | `dist/`, `.git/`, `__pycache__/` |
-| `README.md`, `CLAUDE.md` | |
+| `app/`, `mcp_servers/` | `python_runtime/`, `node_runtime/`, `wheels/`, `mcp_sandbox/` |
+| `mcp_node/memory-scoped.mjs` (포크한 서버의 실행 사본) | `workspace/`, `multiagent.db`, `conf.toml` |
+| `conf.example.toml`, `.env.example`, `requirements.txt` | `tests/`, `wiki/`, `CLAUDE.md` |
+| `setup_mcp.py`, `open_browser.py`, `README.md` | 패키징 스크립트 (`package_*.py|ps1`) |
 
 포함 목록은 제외 목록이 아니라 **허용 목록**입니다. 제외 목록으로 짜면 나중에 생긴 디렉터리가
 조용히 딸려 들어가지만, 허용 목록이면 그냥 빠지고 빠진 것은 눈에 띕니다.
 
 스크립트가 거부하는 세 가지:
 
-1. **대상의 `conf.toml` 덮어쓰기.** 로컬 설정은 `conf.toml.new` 라는 이름으로 들어갑니다.
-   배포본의 `conf.toml` 에는 그 망의 실제 엔드포인트가 있습니다.
+1. **대상의 `conf.toml` 덮어쓰기.** 로컬 `conf.toml` 은 아예 담지 않습니다. 배포본의
+   `conf.toml` 에는 그 망의 실제 엔드포인트가 있고, 새 설정 항목은 `conf.example.toml`
+   과 비교해 손으로 옮깁니다.
 2. **큰 파일.** `--max-file-mb`(기본 2MB)를 넘으면 중단합니다. 소스 패키지에 메가바이트급
    파일이 있다면 런타임 산출물이 새어 들어온 것입니다.
 3. **키처럼 보이는 값.** API 키·토큰·개인 키 헤더를 스캔해 중단합니다(`--allow-secrets` 로 강행).
    `conf.toml` 은 gitignore 대상이라 누군가 실제 키를 적어 두었을 수 있고, 그것을 반입 심사에서
    발견하는 것은 곤란합니다.
 
-대상 장비에서는 압축을 풀고:
+대상 장비에서는 압축을 푼 내용을 설치본 위에 덮어씁니다. `app/` 은 파일 단위로 덮지 말고
+**통째로 교체**하세요 — 이번 갱신에서 삭제된 모듈이 대상에 남으면 계속 import 됩니다.
+`conf.toml` 은 패키지에 없으므로 그대로 살아남습니다. 동봉된 `MANIFEST.txt` 에 파일별
+SHA-256 이 있어 반입 심사와 무결성 확인에 씁니다.
 
 ```powershell
-.\apply_update.ps1 -Target "C:\Apps\MultiAgentOrchestrator_bundle"
+Get-Content MANIFEST.txt | Where-Object { $_ -notmatch '^#' } | ForEach-Object {
+    $sha, $size, $rel = ($_ -split '\s+', 3)
+    if ((Get-FileHash $rel -Algorithm SHA256).Hash -ne $sha.ToUpper()) { "다름: $rel" }
+}
 ```
-
-`app/`, `conf.toml`, `requirements.txt` 를 `_backup_<시각>/` 에 백업한 뒤 **`app/` 을 통째로
-교체**합니다. 파일 단위로 덮어쓰면 이번 갱신에서 삭제된 모듈이 대상에 남아 계속 import 되기
-때문입니다. `conf.toml` 은 건드리지 않고, `conf.toml.new` 와 다르면 알려만 줍니다.
-동봉된 `MANIFEST.txt` 에 파일별 SHA-256 이 있습니다.
 
 > `requirements.txt` 가 이전 반입본과 다르면 런타임에 없는 패키지가 생긴 것이므로 소스 갱신만으로는
 > 실행되지 않습니다. 그때는 `package_offline.py` 로 전체 번들을 다시 만들어야 합니다.

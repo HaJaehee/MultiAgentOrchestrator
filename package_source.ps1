@@ -14,5 +14,5 @@ if (-not $RootDir) { $RootDir = (Get-Location).Path }
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUTF8 = "1"
 
-# 인자는 그대로 전달됩니다. 예: .\package_source.ps1 --no-tests --no-docs
+# 인자는 그대로 전달됩니다. 예: .\package_source.ps1 --out-dir dist
 python (Join-Path $RootDir "package_source.py") @args
