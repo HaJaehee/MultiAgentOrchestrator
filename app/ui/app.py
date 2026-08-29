@@ -279,7 +279,7 @@ def create_ui() -> None:
             if not current_session_id or not runner.interject(current_session_id, text):
                 # 마지막 발언과 화면 갱신 사이에 눌린 경우. 글을 삼키지 않습니다.
                 chat_feed.restore_input(text)
-                chat_feed.set_busy(False, "진행 중인 토론이 없습니다 (Ready for prompt)", "Ready")
+                chat_feed.set_busy(False, "진행 중인 토론이 없습니다", "Ready")
                 ui.notify(
                     "토론이 이미 끝나 개입을 전달하지 못했습니다. 그대로 다시 보내면 새 턴으로 진행됩니다.",
                     type="warning",
@@ -289,7 +289,7 @@ def create_ui() -> None:
         async def on_stop() -> None:
             """남은 라운드를 접고 지금까지의 토론으로 마무리하도록 요청합니다."""
             if not current_session_id or not runner.request_stop(current_session_id):
-                chat_feed.set_busy(False, "진행 중인 토론이 없습니다 (Ready for prompt)", "Ready")
+                chat_feed.set_busy(False, "진행 중인 토론이 없습니다", "Ready")
                 return
             # 화면 갱신과 알림은 러너가 돌려주는 stop_requested 이벤트에서 합니다.
             # 이 세션을 보고 있는 다른 화면도 같은 경로로 알게 됩니다.
@@ -453,7 +453,7 @@ def create_ui() -> None:
                 chat_feed.set_stop_pending(bool(snapshot["stop_requested"]))
                 attach_to_run(run)
             else:
-                chat_feed.set_busy(False, "대기 중 (Ready for prompt)", "Ready")
+                chat_feed.set_busy(False, "대기 중", "Ready")
 
         # Initialize on initial load: select most recent session or create new
         async with session_factory() as db:

@@ -100,7 +100,7 @@ class ChatFeed:
                 with ui.row().classes("items-center gap-2"):
                     self.status_spinner = ui.spinner("dots", size="sm", color="indigo-4")
                     self.status_spinner.set_visibility(False)
-                    self.status_label = ui.label("대기 중 (Ready for prompt)").classes("font-semibold text-slate-300")
+                    self.status_label = ui.label("대기 중").classes("font-semibold text-slate-300")
                 with ui.row().classes("items-center gap-2"):
                     self.stop_button = (
                         ui.button("정지", icon="stop_circle", on_click=self._handle_stop)

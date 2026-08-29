@@ -114,7 +114,7 @@ def create_personas_page() -> None:
                         icon="arrow_back",
                         on_click=lambda: ui.navigate.to("/"),
                     ).props("unelevated color=amber-8 dense").classes("mt-2 text-xs").tooltip(
-                        "사이드바의 '+ New Debate Chat' 으로 새 세션을 만들면 다시 편집할 수 있습니다"
+                        "사이드바의 '+ 새 토론 세션' 으로 새 세션을 만들면 다시 편집할 수 있습니다"
                     )
             else:
                 with ui.card().classes(
@@ -243,18 +243,18 @@ def _build_agent_card(
 
         with ui.row().classes("w-full gap-3 no-wrap"):
             fields["name"] = (
-                ui.input(label="이름 (Name)", value=persona.name)
+                ui.input(label="이름", value=persona.name)
                 .props(common)
                 .classes("flex-grow text-sm")
             )
             fields["role"] = (
-                ui.input(label="역할 (Role)", value=persona.role)
+                ui.input(label="역할", value=persona.role)
                 .props(common)
                 .classes("flex-grow text-sm")
             )
 
         fields["system_prompt"] = (
-            ui.textarea(label="시스템 프롬프트 (System Prompt)", value=persona.system_prompt)
+            ui.textarea(label="시스템 프롬프트", value=persona.system_prompt)
             .props(common + " autogrow rows=5")
             .classes("w-full text-xs font-mono")
         )

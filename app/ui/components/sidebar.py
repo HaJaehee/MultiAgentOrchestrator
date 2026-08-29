@@ -33,20 +33,17 @@ class SessionSidebar:
 
         with self.drawer:
             with ui.column().classes("w-full flex-grow overflow-hidden"):
-                with ui.row().classes("w-full items-center justify-between mb-3 px-1"):
-                    with ui.row().classes("items-center gap-2"):
-                        ui.icon("forum", size="md").classes("text-indigo-400")
-                        ui.label("Debate Sessions").classes("text-base font-bold tracking-wide")
-                    ui.button(
-                        icon="add",
-                        on_click=self._handle_create_new,
-                    ).props("flat round dense color=indigo-4").tooltip("새 세션 시작")
+                # 새 세션을 만드는 길은 아래 버튼 하나로 충분합니다. 머리에 있던
+                # 작은 + 버튼은 같은 일을 하면서 자리만 차지했습니다.
+                with ui.row().classes("w-full items-center gap-2 mb-3 px-1"):
+                    ui.icon("forum", size="md").classes("text-indigo-400")
+                    ui.label("토론 세션").classes("text-base font-bold tracking-wide")
 
                 ui.button(
-                    "+ New Debate Chat",
+                    "+ 새 토론 세션",
                     icon="chat",
                     on_click=self._handle_create_new,
-                ).props("unelevated color=indigo-6").classes("w-full mb-3 font-semibold shadow-md text-xs py-2")
+                ).props("unelevated color=indigo-6 no-caps").classes("w-full mb-3 font-semibold shadow-md text-xs py-2")
 
                 ui.separator().classes("bg-slate-800 mb-2.5")
 

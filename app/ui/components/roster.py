@@ -85,7 +85,7 @@ class AgentRosterControl:
     def build_ui(self) -> ui.expansion:
         # Expansion defaulted to open as requested
         self.expansion = ui.expansion(
-            "⚙️ 에이전트 풀 & 토론 설정 (Agent Roster & Settings)",
+            "⚙️ 에이전트 풀, 도구, 토론 설정",
             icon="tune",
             value=True,  # Expanded by default
         ).classes("w-full bg-slate-900 border border-slate-800 rounded-xl shadow-md text-slate-100 flex-shrink-0")

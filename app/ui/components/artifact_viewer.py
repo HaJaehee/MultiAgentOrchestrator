@@ -28,7 +28,7 @@ class ArtifactViewer:
             with ui.row().classes("w-full items-center justify-between pb-2 border-b border-slate-800 flex-shrink-0"):
                 with ui.row().classes("items-center gap-2"):
                     ui.icon("inventory_2", size="sm").classes("text-indigo-400")
-                    ui.label("Artifact & Output Viewer").classes("text-sm font-bold tracking-wide")
+                    ui.label("아티팩트와 토론 결과 뷰어").classes("text-sm font-bold tracking-wide")
                 self.count_badge = ui.badge("0 Items", color="slate-700").props("dense")
 
             # Main content area (Fills vertical space)
