@@ -7,6 +7,7 @@ from app.agents.base import Agent
 from app.agents.pool import AgentPool, get_agent_pool, reload_agent_pool
 from app.config import (
     BARE_KEY_PATTERN,
+    DEBATE_STANCES,
     active_config_path,
     add_agent_to_conf_file,
     add_mcp_server_to_conf_file,
@@ -17,12 +18,14 @@ from app.config import (
     remove_mcp_server_from_conf_file,
     resolve_workspace_dir,
     set_agent_allowed_mcp_servers_in_conf_file,
+    set_agent_debate_order_in_conf_file,
+    set_agent_debate_stance_in_conf_file,
     set_agent_enabled_in_conf_file,
     set_mcp_server_enabled_in_conf_file,
 )
 from app.mcp.manager import get_mcp_manager
 from app.orchestration.runner import get_debate_runner
-from app.orchestration.strategies import STRATEGY_MAP
+from app.orchestration.strategies import ORCHESTRATOR_KEY, STRATEGY_MAP, order_by_priority
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,10 @@ PROGRESS_TOAST_TIMEOUT = 8
 # 새 에이전트 폼에서 정수로 적어야 하는 항목. `ui.number` 는 무엇을 넣든 float 를
 # 돌려주므로, 그대로 쓰면 conf.toml 에 `max_tokens = 4096.0` 이 적힙니다.
 INT_AGENT_FIELDS = ("max_tokens", "max_context_window", "num_retries", "max_tool_iterations")
+
+# 디베이트 전략의 진영. conf.toml 에는 영문 키가 들어가고 화면에는 이 이름이 뜹니다.
+STANCE_LABELS = {"proponent": "제안자", "critic": "비판자", "neutral": "중립"}
+STANCE_COLORS = {"proponent": "teal-8", "critic": "amber-9", "neutral": "slate-7"}
 FLOAT_AGENT_FIELDS = ("temperature", "top_p", "timeout")
 
 
@@ -94,6 +101,8 @@ class AgentRosterControl:
         # 잠긴 대화가 잠글 때 굳힌 에이전트. 살아 있는 풀 대신 이것을 그립니다.
         self.session_agents: Optional[List[Agent]] = None
         self.resync_btn: Optional[ui.button] = None
+        # 드래그로 순서를 바꾸는 중에 집어 든 에이전트 키.
+        self.dragging_key: Optional[str] = None
         self.workspace_input: Optional[ui.input] = None
         self.workspace_hint: Optional[ui.label] = None
         self.workspace_apply_btn: Optional[ui.button] = None
@@ -293,9 +302,19 @@ class AgentRosterControl:
         씁니다. 이것을 쓰지 않으면 conf.toml 에서 지운 에이전트가 카드도 없이
         발언하는 대화가 생깁니다 — 실행은 스냅샷을 보는데 화면만 풀을 보기 때문에.
         """
-        if self.personas_locked and self.session_agents:
-            return list(self.session_agents)
-        return self.agent_pool.list_all()
+        agents = (
+            list(self.session_agents)
+            if (self.personas_locked and self.session_agents)
+            else self.agent_pool.list_all()
+        )
+        # 카드가 놓인 순서가 곧 발언 순서입니다. 그래야 드래그로 순서를 바꾼다는
+        # 말이 성립합니다. 오케스트레이터는 라운드 밖에서 계획·합성을 맡으므로
+        # 순서와 무관하게 늘 맨 앞에 둡니다.
+        ordered = order_by_priority(agents)
+        return (
+            [a for a in ordered if a.key == ORCHESTRATOR_KEY]
+            + [a for a in ordered if a.key != ORCHESTRATOR_KEY]
+        )
 
     def set_session_agents(self, agents: Optional[List[Agent]]) -> None:
         """이 대화가 실제로 쓰는 에이전트 목록을 갈아 끼웁니다 (잠긴 대화의 스냅샷)."""
@@ -327,9 +346,28 @@ class AgentRosterControl:
         card_cls = "p-2 rounded-lg border flex-grow max-w-[240px] min-w-[180px] transition-all "
         card_cls += "bg-slate-800/90 border-indigo-500/60" if is_active else "bg-slate-900/60 border-slate-800 opacity-50"
 
-        with ui.card().classes(card_cls):
+        # 순서를 바꿀 수 있을 때만 집어 들 수 있게 합니다. 오케스트레이터는 라운드
+        # 밖에 서므로 순서에 넣지 않습니다.
+        reorderable = not is_orchestrator and not self._agent_admin_lock_reason()
+        if reorderable:
+            card_cls += " cursor-grab"
+
+        card = ui.card().classes(card_cls)
+        if reorderable:
+            card.props('draggable="true"')
+            card.on("dragstart", lambda _, k=agent.key: self._on_drag_start(k))
+            card.on("dragend", lambda _: self._on_drag_end())
+            # `.prevent` 가 없으면 브라우저가 드롭을 아예 허용하지 않습니다.
+            card.on("dragover.prevent", lambda _: None)
+            card.on("drop", lambda _, k=agent.key: self._on_drop_on(k))
+
+        with card:
             with ui.row().classes("w-full items-center justify-between no-wrap"):
                 with ui.row().classes("items-center gap-2 min-w-0"):
+                    if reorderable:
+                        ui.icon("drag_indicator", size="14px").classes(
+                            "text-slate-600 flex-shrink-0"
+                        ).tooltip("끌어서 발언 순서를 바꿉니다")
                     ui.avatar(agent.avatar, color=agent.color, text_color="white", size="xs")
                     with ui.column().classes("gap-0 min-w-0"):
                         with ui.row().classes("items-center gap-1 no-wrap"):
@@ -338,6 +376,13 @@ class AgentRosterControl:
                                 ui.badge("수정됨", color="indigo-7").props("dense text-[8px]")
                             # conf.toml 에서는 사라졌지만 이 대화의 스냅샷에는 남아
                             # 있는 에이전트. 계속 발언하므로 카드에도 나와야 합니다.
+                            if agent.debate_stance != "neutral":
+                                ui.badge(
+                                    STANCE_LABELS[agent.debate_stance],
+                                    color=STANCE_COLORS[agent.debate_stance],
+                                ).props("dense text-[8px]").tooltip(
+                                    "디베이트 전략에서의 진영"
+                                )
                             if self.personas_locked and self.agent_pool.get(agent.key) is None:
                                 ui.badge("이 대화 전용", color="amber-8").props(
                                     "dense text-[8px]"
@@ -369,6 +414,19 @@ class AgentRosterControl:
                         else:
                             admin_btn.tooltip("conf.toml 에서 이 에이전트 끄기/삭제")
                             with admin_btn, ui.menu().props("dark").classes("bg-slate-800"):
+                                ui.label("디베이트 진영").classes(
+                                    "px-4 pt-2 pb-1 text-[10px] font-bold text-slate-500"
+                                )
+                                for stance in DEBATE_STANCES:
+                                    chosen = agent.debate_stance == stance
+                                    ui.menu_item(
+                                        ("✓ " if chosen else "　") + STANCE_LABELS[stance],
+                                        on_click=lambda k=agent.key, s=stance:
+                                            self._on_stance_change(k, s),
+                                    ).classes(
+                                        "text-xs " + ("text-indigo-300" if chosen else "")
+                                    )
+                                ui.separator().classes("bg-slate-700")
                                 ui.menu_item(
                                     "비활성화 (설정은 남김)",
                                     on_click=lambda k=agent.key: self._on_agent_disable(k),
@@ -408,11 +466,11 @@ class AgentRosterControl:
                     tools_button.tooltip("이 에이전트가 호출할 수 있는 MCP 서버 고르기")
 
             ui.tooltip(
-                f"model: {agent.model}\n"
-                f"endpoint: {agent.endpoint_label}\n"
-                f"temperature: {agent.temperature} / max_tokens: {agent.max_tokens}\n"
+                f"model: {agent.model}\r\n"
+                f"endpoint: {agent.endpoint_label}\r\n"
+                f"temperature: {agent.temperature} / max_tokens: {agent.max_tokens}\r\n"
                 f"sequential thinking: "
-                f"{f'{agent.sequential_thinking.mode} (max {agent.sequential_thinking.max_steps} steps)' if agent.sequential_thinking.enabled else 'disabled'}\n"
+                f"{f'{agent.sequential_thinking.mode} (max {agent.sequential_thinking.max_steps} steps)' if agent.sequential_thinking.enabled else 'disabled'}\r\n"
                 f"mcp: {', '.join(agent.allowed_mcp_servers) or '-'}"
             ).classes("whitespace-pre-line text-[10px]")
 
@@ -478,14 +536,14 @@ class AgentRosterControl:
                     connected_count += 1
                     icon, icon_cls, color = "check_circle", "text-emerald-400", "green-8"
                     detail = f"툴 {info['tool_count']}"
-                    tip = f"{name}: 연결됨\ncommand: {info['command']}\n등록된 툴: {info['tool_count']}개"
+                    tip = f"{name}: 연결됨\r\ncommand: {info['command']}\r\n등록된 툴: {info['tool_count']}개"
                 elif info["available"]:
                     icon, icon_cls, color, detail = "sync_problem", "text-amber-400", "amber-9", "연결 끊김"
                     tip = f"{name}: 세션이 끊겼습니다. 다음 도구 호출 시 자동 재연결을 시도합니다."
                 else:
                     icon, icon_cls, color, detail = "error", "text-rose-400", "red-9", "연결 실패"
-                    tip = (f"{name}: 기동 실패\ncommand: {info['command']}\n"
-                           f"{info.get('error') or '원인을 확인할 수 없습니다'}\n"
+                    tip = (f"{name}: 기동 실패\r\ncommand: {info['command']}\r\n"
+                           f"{info.get('error') or '원인을 확인할 수 없습니다'}\r\n"
                            f"에이전트는 이 서버의 도구 없이 토론을 진행합니다.")
 
                 with ui.element("div").classes(
@@ -731,6 +789,53 @@ class AgentRosterControl:
             if self.resync_btn is not None and not self.resync_btn.is_deleted:
                 self.resync_btn.enable()
 
+
+    # ------------------------------------------------------------ 발언 순서 / 진영
+
+    def _on_drag_start(self, agent_key: str) -> None:
+        self.dragging_key = agent_key
+
+    def _on_drag_end(self) -> None:
+        self.dragging_key = None
+
+    async def _on_drop_on(self, target_key: str) -> None:
+        """집어 든 카드를 이 카드 자리에 놓습니다.
+
+        conf.toml 의 `debate_priority` 를 다시 매깁니다. 화면에 보이는 순서가 곧
+        발언 순서이므로, 눈에 보이는 것과 실제로 도는 것이 같아야 합니다.
+        """
+        source_key = self.dragging_key
+        self.dragging_key = None
+        if not source_key or source_key == target_key:
+            return
+        if self._blocked_for_agent_admin():
+            return
+
+        keys = [a.key for a in self._roster_agents()]
+        if source_key not in keys or target_key not in keys:
+            return
+        keys.remove(source_key)
+        keys.insert(keys.index(target_key), source_key)
+
+        await self._apply_agent_change(
+            lambda: set_agent_debate_order_in_conf_file(keys, self._conf_path()),
+            "발언 순서를 저장했습니다: "
+            + " → ".join(
+                a.name for a in self._roster_agents() if a.key != ORCHESTRATOR_KEY
+            ),
+        )
+
+    async def _on_stance_change(self, agent_key: str, stance: str) -> None:
+        """디베이트 전략에서의 진영을 바꿉니다."""
+        if self._blocked_for_agent_admin():
+            return
+        agent = next((a for a in self._roster_agents() if a.key == agent_key), None)
+        display = agent.name if agent is not None else agent_key
+        await self._apply_agent_change(
+            lambda: set_agent_debate_stance_in_conf_file(agent_key, stance, self._conf_path()),
+            f"'{display}' 를 {STANCE_LABELS[stance]} 으로 바꿨습니다.",
+        )
+
     async def _apply_agent_change(self, write, done_message: str) -> None:
         """에이전트 구성을 바꾸고, 이 대화의 로스터 기록까지 맞춥니다.
 
@@ -873,16 +978,28 @@ class AgentRosterControl:
                     name_in = ui.input("이름", placeholder="Data Analyst").props(
                         "outlined dense dark"
                     ).classes("flex-grow text-xs")
-                role_in = ui.input(
-                    "역할", placeholder="Data & Metrics Analysis"
-                ).props("outlined dense dark").classes("w-full text-xs")
+                with ui.row().classes("w-full gap-2 no-wrap"):
+                    role_in = ui.input(
+                        "역할", placeholder="Data & Metrics Analysis"
+                    ).props("outlined dense dark").classes("flex-grow text-xs")
+                    stance_in = ui.select(
+                        {s: STANCE_LABELS[s] for s in DEBATE_STANCES},
+                        value="neutral", label="디베이트 진영",
+                    ).props("outlined dense dark options-dense").classes("w-36 text-xs")
+                    stance_in.tooltip(
+                        "디베이트 전략에서 제안하는 쪽인지 검증하는 쪽인지. "
+                        "다른 전략에서는 쓰이지 않습니다"
+                    )
+                ui.label(
+                    "발언 순서는 목록의 맨 뒤에 붙습니다. 추가한 뒤 카드를 끌어서 바꾸세요."
+                ).classes("text-[10px] text-slate-500 -mt-1 leading-snug")
 
                 ui.label("페르소나 (시스템 프롬프트)").classes(
                     "text-[11px] font-semibold text-slate-400 mt-1"
                 )
                 prompt_in = ui.textarea(
                     placeholder=(
-                        "이 에이전트가 토론에서 맡을 관점과 책임, 지켜야 할 원칙을 적으세요.\n"
+                        "이 에이전트가 토론에서 맡을 관점과 책임, 지켜야 할 원칙을 적으세요.\r\n"
                         "예: 당신은 데이터 분석가입니다. 주장에 근거가 되는 지표를 요구하고, "
                         "표본과 측정 방식의 한계를 지적합니다."
                     ),
@@ -1024,6 +1141,7 @@ class AgentRosterControl:
                         allowed_mcp_servers=chosen,
                         overrides=overrides,
                         sequential_thinking=thinking,
+                        debate_stance=stance_in.value or "neutral",
                         config_path=self._conf_path(),
                     ),
                     f"'{name}' 에이전트를 추가했습니다."
@@ -1127,7 +1245,7 @@ class AgentRosterControl:
             ).props("outlined dense dark").classes("w-full")
             args_in = ui.textarea(
                 "인자 (args) — 한 줄에 하나",
-                placeholder="-y\n@modelcontextprotocol/server-everything",
+                placeholder="-y\r\n@modelcontextprotocol/server-everything",
             ).props("outlined dense dark rows=3").classes("w-full text-xs")
             env_in = ui.textarea(
                 "환경변수 (env) — KEY=VALUE, 한 줄에 하나",

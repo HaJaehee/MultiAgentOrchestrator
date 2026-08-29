@@ -14,7 +14,7 @@ from app.database.models import ArtifactModel, MessageModel, SessionModel, ToolC
 from app.database.session import get_session_factory
 from app.orchestration.control import TurnControl
 from app.orchestration.state import ArtifactItem, DebateMessage, DebateState
-from app.orchestration.strategies import get_strategy
+from app.orchestration.strategies import BaseDebateStrategy, get_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -484,9 +484,18 @@ class OrchestratorEngine:
                         "max_rounds": max_rounds,
                     })
 
-                speakers = strategy.get_speakers_for_round(active_agents, round_num, state)
+                speakers = await self._select_speakers(
+                    db=db,
+                    state=state,
+                    strategy=strategy,
+                    orchestrator=orchestrator_agent,
+                    active_agents=active_agents,
+                    round_num=round_num,
+                    custom_instructions=custom_instructions,
+                    on_event=on_event,
+                )
 
-                for agent in speakers:
+                for speaker_index, agent in enumerate(speakers):
                     # 발언과 발언 사이. 사용자의 개입과 정지는 여기서만 반영됩니다.
                     # 진행 중이던 발언을 끊지 않으므로 잘린 기록이 남지 않습니다.
                     await self._apply_interjections(
@@ -510,7 +519,11 @@ class OrchestratorEngine:
                         db=db,
                         state=state,
                         agent=agent,
-                        prompt_messages=self._build_context_for_agent(state, agent),
+                        prompt_messages=self._build_context_for_agent(
+                            state,
+                            agent,
+                            strategy.turn_instruction(agent, speakers, speaker_index, state),
+                        ),
                         custom_instructions=custom_instructions,
                         round_number=round_num,
                         msg_type="agent",
@@ -610,8 +623,219 @@ class OrchestratorEngine:
 
             return state
 
-    def _build_context_for_agent(self, state: DebateState, agent: Agent) -> List[Dict[str, Any]]:
-        """Prepares discussion transcript for agent turn."""
+    # ------------------------------------------------------------ 발언자 선정
+
+    async def _record_note(
+        self,
+        *,
+        db,
+        state: DebateState,
+        on_event: Optional[EventCallback],
+        agent: Agent,
+        content: str,
+        round_number: int,
+        msg_type: str,
+    ) -> DebateMessage:
+        """LLM 발언이 아닌 기록을 남깁니다 (지명 결과, 지명 실패 안내 등).
+
+        `_speak` 과 같은 자리에 같은 모양으로 들어갑니다. 그래야 새로고침한 화면과
+        저장 파일이 이것을 다른 발언과 똑같이 읽습니다.
+        """
+        msg_id = str(uuid.uuid4())
+        db.add(MessageModel(
+            id=msg_id,
+            session_id=state.session_id,
+            sender_key=agent.key,
+            sender_name=agent.name,
+            sender_role=agent.role,
+            content=content,
+            round_number=round_number,
+            msg_type=msg_type,
+        ))
+        await db.commit()
+
+        message = DebateMessage(
+            id=msg_id,
+            sender_key=agent.key,
+            sender_name=agent.name,
+            sender_role=agent.role,
+            content=content,
+            round_number=round_number,
+            msg_type=msg_type,
+        )
+        state.messages.append(message)
+        if on_event:
+            await on_event({"type": "message_added", "message": message.model_dump()})
+        return message
+
+    async def _select_speakers(
+        self,
+        *,
+        db,
+        state: DebateState,
+        strategy: BaseDebateStrategy,
+        orchestrator: Agent,
+        active_agents: List[Agent],
+        round_num: int,
+        custom_instructions: str,
+        on_event: Optional[EventCallback],
+    ) -> List[Agent]:
+        """이번 라운드에 누가 발언할지 정합니다.
+
+        보통은 전략이 결정적으로 정합니다. '오케스트레이터 지명' 전략일 때만
+        오케스트레이터에게 물어, 지금 필요한 에이전트만 부릅니다.
+
+        지명에 실패하면 (엔드포인트가 없거나, 응답에서 아는 키를 하나도 못 찾거나)
+        전략의 결정적 순서로 물러섭니다. 물러섰다는 사실은 피드에 남깁니다 —
+        조용히 다른 순서로 도는 것이 제일 나쁩니다.
+        """
+        fallback = strategy.get_speakers_for_round(active_agents, round_num, state)
+        if not strategy.orchestrator_selects_speakers or len(fallback) <= 1:
+            return fallback
+
+        async def _fall_back(why: str) -> List[Agent]:
+            await self._record_note(
+                db=db, state=state, on_event=on_event, agent=orchestrator,
+                round_number=round_num, msg_type="error",
+                content=(
+                    f"[발언자 지명 실패] {why}\n"
+                    f"우선순위 순서로 진행합니다: {', '.join(a.name for a in fallback)}"
+                ),
+            )
+            return fallback
+
+        try:
+            picked, reason = await self._ask_orchestrator_for_speakers(
+                orchestrator=orchestrator,
+                candidates=fallback,
+                state=state,
+                round_num=round_num,
+                custom_instructions=custom_instructions,
+            )
+        except LLMUnavailableError as exc:
+            logger.warning(f"Speaker selection failed; using the deterministic order: {exc}")
+            return await _fall_back(str(exc))
+
+        if not picked:
+            logger.warning("Orchestrator named no known agent; using the deterministic order.")
+            return await _fall_back(
+                "오케스트레이터의 응답에서 이번 라운드에 부를 에이전트를 찾지 못했습니다."
+            )
+
+        # 누가 왜 불렸는지는 기록에 남아야 합니다. 부르지 않은 에이전트가 있다는
+        # 사실도 토론 기록을 읽는 사람에게 보여야 합니다.
+        skipped = [a.name for a in fallback if a not in picked]
+        summary = f"[Round {round_num} 발언권] {' → '.join(a.name for a in picked)}"
+        if skipped:
+            summary += f"\n(이번 라운드 미지명: {', '.join(skipped)})"
+        if reason:
+            summary += f"\n\n{reason}"
+        await self._record_note(
+            db=db, state=state, on_event=on_event, agent=orchestrator,
+            round_number=round_num, msg_type="orchestrator", content=summary,
+        )
+        return picked
+
+    async def _ask_orchestrator_for_speakers(
+        self,
+        *,
+        orchestrator: Agent,
+        candidates: List[Agent],
+        state: DebateState,
+        round_num: int,
+        custom_instructions: str,
+    ) -> "tuple[List[Agent], str]":
+        """오케스트레이터에게 이번 라운드 발언자와 순서를 물어봅니다.
+
+        도구와 단계적 사고를 **끈 사본**으로 부릅니다. 이건 JSON 한 줄을 받는
+        라우팅 호출이지 발언이 아닙니다. 도구를 붙이면 지명하려다 파일을 읽기
+        시작하고, 단계적 사고 프로토콜이 주입되면 `Thought 1..N` 을 쓰다가 형식을
+        놓칩니다.
+        """
+        selector = orchestrator.model_copy(update={
+            "allowed_mcp_servers": [],
+            "sequential_thinking": orchestrator.sequential_thinking.model_copy(
+                update={"enabled": False}
+            ),
+        })
+
+        roster = "\n".join(f"- {a.key}: {a.name} ({a.role})" for a in candidates)
+        recent = [
+            f"{m.sender_name}({m.sender_role}): {m.content[:300]}"
+            for m in state.messages if m.msg_type != "error"
+        ][-8:]
+
+        prompt = [{"role": "user", "content": (
+            f"[목표]\n{state.user_prompt}\n\n"
+            f"[지금까지의 토론]\n" + ("\n".join(recent) or "(아직 없음)") + "\n\n"
+            f"[이번 라운드에 부를 수 있는 에이전트]\n{roster}\n\n"
+            f"지금은 Round {round_num}/{state.max_rounds} 입니다. 논의를 진전시키기 위해 "
+            f"이번 라운드에 **꼭 필요한 에이전트만** 골라 발언 순서를 정하세요. 전원을 부를 "
+            f"필요는 없고, 한 명만 불러도 됩니다.\n\n"
+            f"다음 JSON 형식으로만 답하세요:\n"
+            f'{{"speakers": ["에이전트키", ...], "reason": "한두 문장으로 지명 사유"}}'
+        )}]
+
+        content, _ = await self.llm_caller.call_agent(
+            selector, prompt, custom_instructions, session_id=state.session_id
+        )
+        return self._parse_speaker_selection(content, candidates)
+
+    @staticmethod
+    def _parse_speaker_selection(
+        content: str, candidates: List[Agent]
+    ) -> "tuple[List[Agent], str]":
+        """응답에서 지명된 에이전트와 사유를 뽑습니다.
+
+        JSON 이 온전하면 그것을 쓰고, 아니면 본문에서 아는 키를 **등장 순서대로**
+        긁습니다. 모델이 설명을 곁들이거나 펜스를 두르는 일은 흔하고, 그때마다
+        지명을 포기하면 이 전략은 결국 우선순위 순서와 같아집니다.
+        """
+        by_key = {a.key: a for a in candidates}
+        reason = ""
+        keys: List[str] = []
+
+        block = re.search(r"\{.*\}", content or "", re.DOTALL)
+        if block:
+            try:
+                data = json.loads(block.group(0))
+            except (ValueError, TypeError):
+                data = None
+            if isinstance(data, dict):
+                raw = data.get("speakers")
+                if isinstance(raw, list):
+                    keys = [str(k).strip() for k in raw]
+                reason = str(data.get("reason") or "").strip()
+
+        if not any(k in by_key for k in keys):
+            # 본문에서 키를 긁습니다. 등장 순서가 곧 발언 순서입니다.
+            found = []
+            for key in by_key:
+                match = re.search(rf"\b{re.escape(key)}\b", content or "")
+                if match:
+                    found.append((match.start(), key))
+            keys = [key for _, key in sorted(found)]
+
+        picked: List[Agent] = []
+        for key in keys:
+            agent = by_key.get(key)
+            if agent is not None and agent not in picked:
+                picked.append(agent)
+        return picked, reason
+
+    def _build_context_for_agent(
+        self,
+        state: DebateState,
+        agent: Agent,
+        turn_instruction: str = "",
+    ) -> List[Dict[str, Any]]:
+        """Prepares discussion transcript for agent turn.
+
+        `turn_instruction` 은 전략이 이 차례에 붙이는 지침입니다. 전략이 순서만
+        정하던 시절에는 '자유 토론' 과 '순차 검증' 이 똑같은 프롬프트를 받아,
+        발언 순서 말고는 다를 것이 없었습니다. 두 전략의 실제 차이가 여기서
+        갈립니다.
+        """
         context: List[Dict[str, Any]] = []
         context.append({
             "role": "user",
@@ -635,10 +859,13 @@ class OrchestratorEngine:
                     "content": f"{role_label}:\n{msg.content}"
                 })
 
-        context.append({
-            "role": "user",
-            "content": f"이제 {agent.name}({agent.role})님의 차례입니다. 앞선 전체 논의 맥락과 직전 발언들을 충실히 반영하여 전문적인 의견을 발언하고 필요시 도구를 활용해 주세요."
-        })
+        turn_prompt = (
+            f"이제 {agent.name}({agent.role})님의 차례입니다. 앞선 전체 논의 맥락과 직전 "
+            f"발언들을 충실히 반영하여 전문적인 의견을 발언하고 필요시 도구를 활용해 주세요."
+        )
+        if turn_instruction:
+            turn_prompt += f"\n\n{turn_instruction}"
+        context.append({"role": "user", "content": turn_prompt})
         return context
 
     def _build_synthesis_prompt(

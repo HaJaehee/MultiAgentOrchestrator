@@ -35,8 +35,15 @@ class _FakeRunner:
 
 
 class _StubAgent:
-    def __init__(self, key: str):
+    """로스터가 필요로 하는 것만 흉내 냅니다.
+
+    `debate_priority` 는 로스터가 카드를 발언 순서대로 놓을 때 읽습니다
+    (`order_by_priority`). 전부 같은 값이라 여기서는 넘긴 순서가 그대로 나옵니다.
+    """
+
+    def __init__(self, key: str, debate_priority: int = 100):
         self.key = key
+        self.debate_priority = debate_priority
 
 
 class _StubPool:

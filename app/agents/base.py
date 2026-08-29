@@ -1,7 +1,7 @@
 import zlib
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
-from app.config import AgentConfig, SequentialThinkingConfig
+from app.config import DEFAULT_DEBATE_PRIORITY, AgentConfig, SequentialThinkingConfig
 
 # Color and avatar mappings for UI styling
 AGENT_STYLE_MAP: Dict[str, Dict[str, str]] = {
@@ -59,6 +59,10 @@ class Agent(BaseModel):
     extra_body: Dict[str, Any] = Field(default_factory=dict)
     max_tool_iterations: int = 30
     allowed_mcp_servers: List[str] = Field(default_factory=list)
+    # 토론에서의 자리. 전략이 이 값으로 순서와 진영을 정합니다 (에이전트 키를
+    # 문자열로 박아 두던 방식을 대신합니다).
+    debate_priority: int = DEFAULT_DEBATE_PRIORITY
+    debate_stance: Literal["proponent", "critic", "neutral"] = "neutral"
     sequential_thinking: SequentialThinkingConfig = Field(default_factory=SequentialThinkingConfig)
     system_prompt: str = ""
     avatar: str = "forum"

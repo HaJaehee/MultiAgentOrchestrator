@@ -210,6 +210,14 @@ def _is_blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+# 순서를 지정하지 않은 에이전트의 발언 우선순위. 전부 같은 값이라 정렬이 안정적으로
+# 유지되어 conf.toml 에 적힌 순서가 그대로 나옵니다. 화면에서 순서를 바꾸면 그때
+# 10, 20, 30... 이 실제로 적힙니다 (사이에 끼워 넣을 자리를 남겨 둡니다).
+DEFAULT_DEBATE_PRIORITY = 100
+DEBATE_PRIORITY_STEP = 10
+DEBATE_STANCES = ("proponent", "critic", "neutral")
+
+
 class LLMConfig(BaseModel):
     """Global LLM defaults ([llm] section). Every agent inherits these unless it overrides them."""
 
@@ -275,6 +283,23 @@ class AgentConfig(BaseModel):
     max_tool_iterations: int = Field(default=30, ge=1, le=50, description="Max MCP tool-loop iterations per turn")
     allowed_mcp_servers: List[str] = Field(
         default_factory=list, description="List of MCP server keys this agent can access"
+    )
+    # 토론에서의 자리. 예전에는 전략 코드가 'architect' 다음 'coder' 하는 식으로
+    # 키를 문자열로 박아 두었는데, 화면에서 에이전트를 만들 수 있게 되면서 그
+    # 방식으로는 새 에이전트가 언제나 맨 뒤로 밀렸습니다. 이제 순서와 진영은
+    # 에이전트 자신이 들고 다닙니다.
+    debate_priority: int = Field(
+        default=DEFAULT_DEBATE_PRIORITY,
+        ge=0,
+        le=999,
+        description="Speaking order within a round; lower speaks earlier. Ties keep conf.toml order.",
+    )
+    debate_stance: Literal["proponent", "critic", "neutral"] = Field(
+        default="neutral",
+        description=(
+            "Role in the adversarial-debate strategy. "
+            "proponent: proposes and defends | critic: challenges | neutral: neither side"
+        ),
     )
     sequential_thinking: SequentialThinkingConfig = Field(default_factory=SequentialThinkingConfig)
     system_prompt: str = Field(default="", description="Base system instructions")
@@ -953,6 +978,7 @@ def add_agent_to_conf_file(
     allowed_mcp_servers: Optional[List[str]] = None,
     overrides: Optional[Dict[str, Any]] = None,
     sequential_thinking: Optional[Dict[str, Any]] = None,
+    debate_stance: str = "neutral",
     enabled: bool = True,
     config_path: str | Path = "conf.toml",
 ) -> None:
@@ -989,6 +1015,12 @@ def add_agent_to_conf_file(
     if unknown_st:
         raise ValueError(f"모르는 단계적 사고 항목입니다: {', '.join(sorted(unknown_st))}")
 
+    if debate_stance not in DEBATE_STANCES:
+        raise ValueError(
+            f"'{debate_stance}' 는 쓸 수 없는 진영입니다. "
+            f"{' | '.join(DEBATE_STANCES)} 중에서 고르세요."
+        )
+
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     if _find_toml_section(lines, header)[0] != -1:
         raise ValueError(f"'{agent_key}' 에이전트가 이미 conf.toml 에 있습니다.")
@@ -1003,6 +1035,8 @@ def add_agent_to_conf_file(
     for field in AGENT_OVERRIDE_FIELDS:
         if field in overrides:
             block.append(f"{field} = {_toml_value(overrides[field])}\n")
+    if debate_stance != "neutral":
+        block.append(f"debate_stance = {_toml_string(debate_stance)}\n")
     block.append(f"allowed_mcp_servers = {_toml_array(servers)}\n")
     if (system_prompt or "").strip():
         block.append(f"system_prompt = {_toml_multiline_string(system_prompt)}\n")
@@ -1095,6 +1129,60 @@ def remove_agent_from_conf_file(
         ):
             del lines[start - 1]
             start -= 1
+
+    path.write_text("".join(lines), encoding="utf-8")
+    reload_config_if_active(path)
+def set_agent_debate_order_in_conf_file(
+    order: List[str],
+    config_path: str | Path = "conf.toml",
+) -> None:
+    """화면에서 정한 발언 순서를 각 [agents.<key>].debate_priority 에 적습니다.
+
+    `order` 에 담긴 차례대로 10, 20, 30... 을 매깁니다. 사이에 자리를 남기는 것은
+    나중에 한 명을 둘 사이에 끼워 넣을 때 나머지를 다시 쓰지 않기 위해서입니다.
+
+    `order` 에 없는 에이전트는 건드리지 않습니다. 로스터가 늘 전원을 넘기지만,
+    이 함수만 놓고 보면 "모르는 에이전트의 값을 지우지 않는다" 가 맞습니다.
+    """
+    path = Path(config_path)
+    for key in order:
+        if not BARE_KEY_PATTERN.fullmatch(key or ""):
+            raise ValueError(f"에이전트 키 '{key}' 을 쓸 수 없습니다.")
+
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    missing = [key for key in order if _find_toml_section(lines, f"[agents.{key}]")[0] == -1]
+    if missing:
+        raise KeyError(f"conf.toml 에 없는 에이전트입니다: {', '.join(missing)}")
+
+    for position, key in enumerate(order):
+        start, end = _find_toml_section(lines, f"[agents.{key}]")
+        _set_key_in_section(
+            lines, start, end, "debate_priority", str((position + 1) * DEBATE_PRIORITY_STEP)
+        )
+
+    path.write_text("".join(lines), encoding="utf-8")
+    reload_config_if_active(path)
+
+
+def set_agent_debate_stance_in_conf_file(
+    agent_key: str,
+    stance: str,
+    config_path: str | Path = "conf.toml",
+) -> None:
+    """[agents.<key>].debate_stance 를 바꿉니다 (디베이트 전략의 진영)."""
+    if stance not in DEBATE_STANCES:
+        raise ValueError(
+            f"'{stance}' 는 쓸 수 없는 진영입니다. {' | '.join(DEBATE_STANCES)} 중에서 고르세요."
+        )
+    path = Path(config_path)
+    header = _agent_section_header(agent_key)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+    start, end = _find_toml_section(lines, header)
+    if start == -1:
+        raise KeyError(f"conf.toml 에 {header} 섹션이 없습니다.")
+
+    _set_key_in_section(lines, start, end, "debate_stance", _toml_string(stance))
 
     path.write_text("".join(lines), encoding="utf-8")
     reload_config_if_active(path)

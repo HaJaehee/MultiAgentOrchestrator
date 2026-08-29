@@ -21,6 +21,8 @@ from app.config import (
     agent_defaults_from_llm,
     prune_agent_overrides,
     remove_agent_from_conf_file,
+    set_agent_debate_order_in_conf_file,
+    set_agent_debate_stance_in_conf_file,
     set_agent_enabled_in_conf_file,
 )
 from app.ui.components import roster as roster_module
@@ -404,3 +406,67 @@ async def test_disable_writes_once_the_conversation_is_fresh(roster, monkeypatch
     await control._on_agent_disable("critic")
 
     assert [args[:2] for args in writes] == [("critic", False)]
+
+
+# --------------------------------------------------------------- 발언 순서 / 진영
+
+
+def test_debate_order_is_written_with_gaps(conf: Path):
+    """10, 20, 30... 으로 매깁니다. 사이에 자리를 남겨 두어야 한 명을 끼워 넣을 때
+    나머지를 다시 쓰지 않습니다."""
+    set_agent_debate_order_in_conf_file(["critic", "orchestrator"], conf)
+
+    agents = _load(conf)["agents"]
+    assert agents["critic"]["debate_priority"] == 10
+    assert agents["orchestrator"]["debate_priority"] == 20
+
+
+def test_reordering_rewrites_the_existing_value(conf: Path):
+    set_agent_debate_order_in_conf_file(["critic", "orchestrator"], conf)
+    set_agent_debate_order_in_conf_file(["orchestrator", "critic"], conf)
+
+    agents = _load(conf)["agents"]
+    assert agents["orchestrator"]["debate_priority"] == 10
+    assert agents["critic"]["debate_priority"] == 20
+    # 한 줄만 갈아 끼웠습니다. 프롬프트와 주석은 그대로입니다.
+    assert "[검토 항목]" in agents["critic"]["system_prompt"]
+    assert "# 1. 필수 오케스트레이터" in conf.read_text(encoding="utf-8")
+
+
+def test_reordering_an_unknown_agent_is_an_error(conf: Path):
+    with pytest.raises(KeyError):
+        set_agent_debate_order_in_conf_file(["orchestrator", "nope"], conf)
+    # 하나라도 없으면 아무것도 쓰지 않습니다.
+    assert "debate_priority" not in conf.read_text(encoding="utf-8")
+
+
+def test_stance_is_written_and_validated(conf: Path):
+    set_agent_debate_stance_in_conf_file("critic", "critic", conf)
+    assert _load(conf)["agents"]["critic"]["debate_stance"] == "critic"
+
+    set_agent_debate_stance_in_conf_file("critic", "neutral", conf)
+    assert _load(conf)["agents"]["critic"]["debate_stance"] == "neutral"
+
+    with pytest.raises(ValueError):
+        set_agent_debate_stance_in_conf_file("critic", "referee", conf)
+    with pytest.raises(KeyError):
+        set_agent_debate_stance_in_conf_file("nope", "critic", conf)
+
+
+def test_a_new_agent_can_declare_its_stance(conf: Path):
+    add_agent_to_conf_file(
+        "data_analyst", "Data Analyst", "Data",
+        debate_stance="critic", config_path=conf,
+    )
+    assert _load(conf)["agents"]["data_analyst"]["debate_stance"] == "critic"
+
+    with pytest.raises(ValueError):
+        add_agent_to_conf_file("other", "Other", "Role", debate_stance="referee", config_path=conf)
+
+
+def test_a_neutral_agent_does_not_clutter_the_file(conf: Path):
+    """기본값은 적지 않습니다. 설정 파일은 사람이 읽는 문서이기도 합니다."""
+    add_agent_to_conf_file("plain", "Plain", "Role", config_path=conf)
+
+    assert "debate_stance" not in conf.read_text(encoding="utf-8")
+    assert _load(conf)["agents"]["plain"].get("debate_stance") is None

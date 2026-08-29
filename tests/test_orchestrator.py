@@ -7,38 +7,128 @@ from app.orchestration.engine import OrchestratorEngine
 from app.orchestration.state import DebateState
 from tests.fake_llm import FakeLLMCaller
 from app.orchestration.strategies import (
+    STRATEGY_MAP,
     AdversarialDebateStrategy,
     FreeDebateStrategy,
     SequentialReviewStrategy,
 )
 
 
-def test_debate_strategies_sequencing():
-    a1 = Agent(key="orchestrator", name="Orch", role="Lead")
-    a2 = Agent(key="architect", name="Arch", role="Arch")
-    a3 = Agent(key="coder", name="Dev", role="Coder")
-    a4 = Agent(key="critic", name="Critic", role="Reviewer")
-    agents = [a1, a2, a3, a4]
+def _roster(**stances) -> list:
+    """오케스트레이터 + 전문가 셋. `stances` 로 진영을 지정합니다."""
+    return [
+        Agent(key="orchestrator", name="Orch", role="Lead", debate_priority=10),
+        Agent(key="architect", name="Arch", role="Arch", debate_priority=20,
+              debate_stance=stances.get("architect", "neutral")),
+        Agent(key="coder", name="Dev", role="Coder", debate_priority=30,
+              debate_stance=stances.get("coder", "neutral")),
+        Agent(key="critic", name="Critic", role="Reviewer", debate_priority=40,
+              debate_stance=stances.get("critic", "neutral")),
+    ]
 
+
+def test_the_orchestrator_never_speaks_inside_a_round():
+    """계획(round 0)과 최종 합성이 오케스트레이터의 자리입니다."""
     state = DebateState(session_id="test-1", user_prompt="Build App")
+    agents = _roster()
 
-    # 1. Free Debate
-    free_strat = FreeDebateStrategy()
-    speakers_free = free_strat.get_speakers_for_round(agents, 1, state)
-    assert len(speakers_free) == 3
-    assert a1 not in speakers_free
+    for strategy in STRATEGY_MAP.values():
+        speakers = strategy.get_speakers_for_round(agents, 1, state)
+        assert [s.key for s in speakers] == ["architect", "coder", "critic"], strategy.name
 
-    # 2. Sequential Review
-    seq_strat = SequentialReviewStrategy()
-    speakers_seq = seq_strat.get_speakers_for_round(agents, 1, state)
-    assert [s.key for s in speakers_seq] == ["architect", "coder", "critic"]
 
-    # 3. Adversarial Debate
-    adv_strat = AdversarialDebateStrategy()
-    speakers_adv = adv_strat.get_speakers_for_round(agents, 1, state)
-    assert len(speakers_adv) == 3
-    assert speakers_adv[0].key in ["architect", "coder"]
-    assert speakers_adv[1].key == "critic"
+def test_speaking_order_follows_debate_priority_not_the_agent_key():
+    """예전에는 `{"architect": 0, "coder": 1, ...}` 표가 순서를 정했습니다.
+
+    그 표에 없는 키(= 화면에서 만든 에이전트)는 언제나 맨 뒤로 밀렸습니다. 이제
+    순서는 에이전트가 들고 다니는 값이 정합니다.
+    """
+    state = DebateState(session_id="test-1", user_prompt="Build App")
+    agents = _roster()
+    # 화면에서 순서를 뒤집었습니다.
+    agents[1].debate_priority = 40   # architect
+    agents[3].debate_priority = 20   # critic
+
+    for strategy in (FreeDebateStrategy(), SequentialReviewStrategy()):
+        speakers = strategy.get_speakers_for_round(agents, 1, state)
+        assert [s.key for s in speakers] == ["critic", "coder", "architect"], strategy.name
+
+
+def test_a_newly_added_agent_can_speak_first():
+    """표에 없던 키가 맨 뒤로 밀리던 증상. 우선순위만 낮추면 맨 앞에 섭니다."""
+    state = DebateState(session_id="test-1", user_prompt="Build App")
+    agents = _roster()
+    agents.append(Agent(key="data_analyst", name="Analyst", role="Data", debate_priority=5))
+
+    speakers = SequentialReviewStrategy().get_speakers_for_round(agents, 1, state)
+    assert speakers[0].key == "data_analyst"
+
+
+def test_agents_without_an_explicit_priority_keep_the_conf_toml_order():
+    """아무도 순서를 지정하지 않은 설정에서는 파일에 적힌 순서가 그대로 나옵니다."""
+    state = DebateState(session_id="test-1", user_prompt="Build App")
+    agents = [
+        Agent(key="orchestrator", name="Orch", role="Lead"),
+        Agent(key="zeta", name="Zeta", role="Z"),
+        Agent(key="alpha", name="Alpha", role="A"),
+    ]
+
+    speakers = FreeDebateStrategy().get_speakers_for_round(agents, 1, state)
+    assert [s.key for s in speakers] == ["zeta", "alpha"], "알파벳순이 아니라 파일 순서"
+
+
+def test_the_debate_strategy_alternates_by_stance():
+    state = DebateState(session_id="test-1", user_prompt="Build App")
+    agents = _roster(architect="proponent", coder="proponent", critic="critic")
+
+    speakers = AdversarialDebateStrategy().get_speakers_for_round(agents, 1, state)
+
+    assert [s.key for s in speakers] == ["architect", "critic", "coder"]
+
+
+def test_the_debate_strategy_puts_neutral_agents_after_the_clash():
+    state = DebateState(session_id="test-1", user_prompt="Build App")
+    agents = _roster(architect="proponent", critic="critic")  # coder 는 neutral
+
+    speakers = AdversarialDebateStrategy().get_speakers_for_round(agents, 1, state)
+
+    assert [s.key for s in speakers] == ["architect", "critic", "coder"]
+
+
+def test_the_debate_strategy_falls_back_when_one_side_is_empty():
+    """진영을 아무도 지정하지 않은 설정에서 아무도 발언하지 못하면 안 됩니다."""
+    state = DebateState(session_id="test-1", user_prompt="Build App")
+    agents = _roster()  # 전원 neutral
+
+    speakers = AdversarialDebateStrategy().get_speakers_for_round(agents, 1, state)
+
+    assert [s.key for s in speakers] == ["architect", "coder", "critic"]
+
+
+def test_sequential_review_is_not_just_free_debate_with_a_different_order():
+    """두 전략의 순서는 같습니다. 다른 것은 발언 차례에 붙는 지침입니다.
+
+    이 지침이 없으면 두 전략은 완전히 같은 것이 됩니다.
+    """
+    state = DebateState(session_id="test-1", user_prompt="Build App")
+    agents = _roster()
+    speakers = SequentialReviewStrategy().get_speakers_for_round(agents, 1, state)
+
+    assert FreeDebateStrategy().turn_instruction(speakers[1], speakers, 1, state) == ""
+
+    first = SequentialReviewStrategy().turn_instruction(speakers[0], speakers, 0, state)
+    middle = SequentialReviewStrategy().turn_instruction(speakers[1], speakers, 1, state)
+    last = SequentialReviewStrategy().turn_instruction(speakers[2], speakers, 2, state)
+
+    assert "첫 순서" in first
+    assert speakers[0].name in middle, "직전 발언자를 이름으로 가리킵니다"
+    assert "마지막 순서" in last
+
+
+def test_only_the_orchestrator_led_strategy_asks_the_llm():
+    assert STRATEGY_MAP["orchestrator_led"].orchestrator_selects_speakers is True
+    for name in ("free_debate", "sequential_review", "adversarial_debate"):
+        assert STRATEGY_MAP[name].orchestrator_selects_speakers is False, name
 
 
 @pytest.mark.asyncio
