@@ -10,7 +10,7 @@ DB 를 모르는 순수 함수로 둡니다. 화면은 읽어 온 값을 넘기�
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 # 발언 종류별 머리표. 누가 무슨 자격으로 말했는지가 한눈에 보여야 합니다.
@@ -27,7 +27,11 @@ _UNSAFE_FILENAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
 
 
 def safe_filename(title: str, when: Optional[datetime] = None, ext: str = "md") -> str:
-    """제목으로 파일 이름을 만듭니다. 비면 날짜만으로도 이름이 남습니다."""
+    """제목으로 파일 이름을 만듭니다. 비면 날짜만으로도 이름이 남습니다.
+
+    `when` 은 받은 그대로 씁니다. DB 에서 읽은 값이라면 부르는 쪽에서
+    `to_local()` 로 옮겨 넘기세요 — 문서 안의 시각과 어긋나면 안 됩니다.
+    """
     stamp = (when or datetime.now()).strftime("%Y%m%d-%H%M")
     cleaned = _UNSAFE_FILENAME.sub(" ", title or "").strip()
     cleaned = re.sub(r"\s+", "_", cleaned)[:60].strip("_")
@@ -46,9 +50,22 @@ def _fence(content: str, language: str = "") -> str:
     return f"{fence}{language}\n{body}\n{fence}"
 
 
+def to_local(value: datetime) -> datetime:
+    """기록된 시각을 이 기계의 시간대로 옮깁니다.
+
+    기록은 UTC 로 적지만 SQLite 는 오프셋을 버리므로, 읽어 오면 시간대가 없는
+    UTC 벽시계입니다. 그대로 찍으면 한국에서는 9시간 전으로 보입니다.
+    """
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone()
+
+
 def _fmt_time(value: Any) -> str:
     if isinstance(value, datetime):
-        return value.strftime("%Y-%m-%d %H:%M:%S")
+        return to_local(value).strftime("%Y-%m-%d %H:%M:%S")
     return str(value or "")
 
 

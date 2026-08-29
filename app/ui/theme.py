@@ -106,6 +106,16 @@ body {
     height: auto;
 }
 
+/* --- 세션 목록의 가로 폭 -------------------------------------------------
+   Quasar 스크롤 영역의 내용 상자(.q-scrollarea__content)는 width:auto 라, 그 안의
+   `w-full` 이 "보이는 너비" 가 아니라 "내용 너비" 가 됩니다. 그래서 세션 이름이
+   길면 카드가 서랍보다 넓게 그려지고, 오른쪽 끝(이름 뒷부분과 수정·저장·삭제
+   버튼)이 서랍 밖으로 밀려나 잘렸습니다. 보이는 너비에 맞춰 고정합니다. */
+.session-list .q-scrollarea__content {
+    width: 100%;
+    max-width: 100%;
+}
+
 /* Custom Scrollbars */
 ::-webkit-scrollbar {
     width: 6px;

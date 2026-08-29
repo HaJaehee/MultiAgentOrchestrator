@@ -1,12 +1,12 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Callable, Coroutine, Dict, List, Optional
 from nicegui import ui
 from sqlalchemy import desc, func, select, delete
 from app.database.models import ArtifactModel, MessageModel, SessionModel, ToolCallRecordModel
 from app.database.session import get_session_factory
-from app.export import build_session_markdown, safe_filename
+from app.export import build_session_markdown, safe_filename, to_local
 from app.orchestration.runner import get_debate_runner
 
 logger = logging.getLogger(__name__)
@@ -31,17 +31,7 @@ async def first_user_message_times(db) -> Dict[str, datetime]:
     return {session_id: started for session_id, started in result.all() if started}
 
 
-def to_local(value: datetime) -> datetime:
-    """DB 의 시각을 이 기계의 시간대로 옮깁니다.
-
-    기록은 UTC 로 적지만 SQLite 는 오프셋을 버리므로, 읽어 오면 시간대가 없는
-    UTC 벽시계입니다. 그대로 찍으면 한국에서는 9시간 전으로 보입니다.
-    """
-    if isinstance(value, str):
-        value = datetime.fromisoformat(value)
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone()
+# `to_local()` 은 저장 문서와 같은 규칙을 써야 해서 app.export 에 둡니다.
 
 
 class SessionSidebar:
@@ -62,7 +52,7 @@ class SessionSidebar:
     def build_ui(self) -> ui.left_drawer:
         self.drawer = ui.left_drawer(value=True, elevated=True).classes(
             "bg-slate-900 text-slate-100 p-3.5 border-r border-slate-800 flex flex-col justify-between"
-        ).props("width=290")
+        ).props("width=360")
 
         with self.drawer:
             with ui.column().classes("w-full flex-grow overflow-hidden"):
@@ -83,7 +73,11 @@ class SessionSidebar:
                 ui.label("세션 목록").classes("text-xs font-semibold text-slate-400 mb-2 px-1 tracking-wider")
 
                 # Scrollable session list with adequate right padding so borders never clip
-                with ui.scroll_area().classes("w-full flex-grow h-[calc(100vh-220px)] pr-2 py-1"):
+                # session-list: Quasar 스크롤 영역의 내용 상자가 카드를 서랍보다
+                # 넓게 그리는 것을 막습니다 (theme.py 참고).
+                with ui.scroll_area().classes(
+                    "session-list w-full flex-grow h-[calc(100vh-220px)] pr-2 py-1"
+                ):
                     self.container = ui.column().classes("w-full gap-2.5 p-0.5")
 
         return self.drawer
@@ -121,41 +115,50 @@ class SessionSidebar:
                     + ("bg-indigo-950/90 border-2 border-indigo-400 text-white shadow-lg" if is_active else "bg-slate-800/70 hover:bg-slate-800 text-slate-300 border border-slate-700/60")
                 )
 
+                # 제목이 첫 줄을 통째로 씁니다. 버튼을 같은 줄에 두면 이름이 그만큼
+                # 잘리는데, 목록에서 대화를 찾는 단서는 이름뿐입니다.
                 with ui.card().classes(card_classes):
-                    with ui.row().classes("w-full items-center justify-between no-wrap"):
-                        # Clickable session selection area
-                        with ui.column().classes("flex-grow cursor-pointer gap-0 min-w-0 mr-1").on(
+                    # Clickable session selection area
+                    with ui.column().classes("w-full cursor-pointer gap-0 min-w-0").on(
+                        "click", lambda _, sid=s.id: self._select_session(sid)
+                    ):
+                        with ui.row().classes("w-full items-center gap-1.5 no-wrap"):
+                            if is_running:
+                                # 다른 화면에 있어도 토론은 계속됩니다. 어느 세션이
+                                # 돌고 있는지 목록에서 바로 보이게 합니다.
+                                ui.spinner("dots", size="xs", color="indigo-4")
+                            # 이름 변경은 연필 버튼으로만 합니다. 제목 더블클릭도 달아
+                            # 봤지만, 첫 클릭이 세션 선택으로 이어져 목록이 다시
+                            # 그려지면서 라벨이 사라지는 탓에 두 번째 클릭이 갈 곳이
+                            # 없었습니다. 긴 이름은 손을 올리면 전체가 보입니다.
+                            title_text = s.title or "Untitled Debate"
+                            ui.label(title_text).classes(
+                                "text-xs font-semibold truncate min-w-0"
+                            ).tooltip(title_text)
+
+                    with ui.row().classes(
+                        "w-full items-center justify-between no-wrap mt-1 text-xs text-slate-400"
+                    ):
+                        with ui.row().classes("items-center gap-1.5 min-w-0 cursor-pointer").on(
                             "click", lambda _, sid=s.id: self._select_session(sid)
                         ):
-                            with ui.row().classes("w-full items-center gap-1.5 no-wrap"):
-                                if is_running:
-                                    # 다른 화면에 있어도 토론은 계속됩니다. 어느 세션이
-                                    # 돌고 있는지 목록에서 바로 보이게 합니다.
-                                    ui.spinner("dots", size="xs", color="indigo-4")
-                                # 이름 변경은 오른쪽 연필 버튼으로만 합니다. 제목
-                                # 더블클릭도 달아 봤지만, 첫 클릭이 세션 선택으로
-                                # 이어져 목록이 다시 그려지면서 라벨이 사라지는 탓에
-                                # 두 번째 클릭이 갈 곳이 없었습니다.
-                                ui.label(s.title or "Untitled Debate").classes("text-xs font-semibold truncate")
-                            
-                            with ui.row().classes("w-full items-center justify-between mt-1 text-xs text-slate-400"):
-                                started = started_times.get(s.id)
-                                date_str = (
-                                    to_local(started).strftime("%m-%d %H:%M") if started
-                                    else "시작 전"
-                                )
-                                ui.label(date_str).classes("text-[10px]")
-                                
-                                agents_count = len(s.active_agents) if s.active_agents else 0
-                                ui.badge(f"{agents_count} Agents", color="slate-700").props("dense text-[9px] text-color=grey-3")
+                            started = started_times.get(s.id)
+                            date_str = (
+                                to_local(started).strftime("%m-%d %H:%M") if started
+                                else "시작 전"
+                            )
+                            ui.label(date_str).classes("text-[10px]")
 
-                        # Action Buttons (Edit / Delete) - Isolated from card click
+                            agents_count = len(s.active_agents) if s.active_agents else 0
+                            ui.badge(f"{agents_count} Agents", color="slate-700").props("dense text-[9px] text-color=grey-3")
+
+                        # Action Buttons (Edit / Save / Delete) - Isolated from card click
                         with ui.row().classes("items-center gap-0.5 flex-shrink-0"):
                             ui.button(
                                 icon="edit",
                                 on_click=lambda _, s_obj=s: self._show_rename_dialog(s_obj),
                             ).props("flat round dense size=xs color=grey-4").tooltip("이름 변경")
-                            
+
                             ui.button(
                                 icon="save",
                                 on_click=lambda _, sid=s.id: self._save_session_markdown(sid),
@@ -265,7 +268,8 @@ class SessionSidebar:
             return
 
         markdown = build_session_markdown(session_data, messages, artifacts, tool_calls)
-        filename = safe_filename(session_data["title"], session_data.get("created_at"))
+        created = session_data.get("created_at")
+        filename = safe_filename(session_data["title"], to_local(created) if created else None)
         ui.download(markdown.encode("utf-8"), filename)
         ui.notify(
             f"'{filename}' 저장을 시작했습니다 (발언 {len(messages)}건).",
