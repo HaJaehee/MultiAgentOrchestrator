@@ -14,10 +14,21 @@
    해석할 수 없게 됩니다.
 3. **세션 재개** — 저장된 값이 그대로 사용됩니다. 그 사이 `conf.toml` 이
    바뀌었더라도 세션은 잠글 때의 페르소나를 유지합니다.
+
+**시작한 대화는 자기완결적입니다.** 잠그는 시점에 인격(이름·역할·시스템 프롬프트)만이
+아니라 `AgentConfig` 전체 — 모델·엔드포인트·API 키·샘플링 값·도구 권한·단계적 사고까지 —
+를 `session_agents.config_snapshot` 에 굳힙니다. 그 뒤 `conf.toml` 에서 그 에이전트를
+지우거나, 끄거나, 모델을 바꿔도 이 대화는 잠글 때의 구성 그대로 이어집니다.
+
+그래서 편집 화면의 잠금 규칙과 실행이 같은 말을 합니다 — "이미 시작한 대화에는 영향이
+없다" 가 인격뿐 아니라 구성 전체에 대해 참입니다.
+
+바꾼 게이트웨이 주소나 새 API 키를 옛 대화에도 먹여야 한다면 `resync_agent_configs()`
+가 스냅샷을 지금 `conf.toml` 값으로 다시 굳힙니다 (인격은 그대로 둡니다).
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
@@ -25,11 +36,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.base import Agent
 from app.agents.pool import AgentPool
+from app.config import AgentConfig
 from app.database.models import SessionAgentModel, SessionModel
 
 logger = logging.getLogger(__name__)
 
-# 편집 가능한 항목. 모델/엔드포인트/도구 권한은 운영 설정이므로 conf.toml 에 둡니다.
+# 세션별로 편집할 수 있는 항목. 나머지 운영 설정은 conf.toml 이 정본이되, 대화를
+# 잠그는 순간 `config_snapshot` 으로 함께 굳습니다.
 EDITABLE_FIELDS = ("name", "role", "system_prompt")
 
 
@@ -76,20 +89,28 @@ def default_personas(pool: AgentPool) -> Dict[str, AgentPersona]:
     return {a.key: persona_from_agent(a) for a in pool.list_all()}
 
 
+async def _stored_rows(db: AsyncSession, session_id: str) -> List[SessionAgentModel]:
+    """이 세션의 `session_agents` 행 전부 (저장된 순서)."""
+    result = await db.execute(
+        select(SessionAgentModel)
+        .where(SessionAgentModel.session_id == session_id)
+        .order_by(SessionAgentModel.created_at, SessionAgentModel.id)
+    )
+    return list(result.scalars().all())
+
+
+def _persona_from_row(row: SessionAgentModel) -> AgentPersona:
+    return AgentPersona(
+        agent_key=row.agent_key,
+        name=row.name,
+        role=row.role,
+        system_prompt=row.system_prompt or "",
+    )
+
+
 async def load_stored_personas(db: AsyncSession, session_id: str) -> Dict[str, AgentPersona]:
     """DB 에 저장된 페르소나(초안 또는 잠긴 스냅샷)를 읽습니다."""
-    result = await db.execute(
-        select(SessionAgentModel).where(SessionAgentModel.session_id == session_id)
-    )
-    stored: Dict[str, AgentPersona] = {}
-    for row in result.scalars().all():
-        stored[row.agent_key] = AgentPersona(
-            agent_key=row.agent_key,
-            name=row.name,
-            role=row.role,
-            system_prompt=row.system_prompt or "",
-        )
-    return stored
+    return {row.agent_key: _persona_from_row(row) for row in await _stored_rows(db, session_id)}
 
 
 async def effective_personas(
@@ -163,7 +184,11 @@ async def reset_persona(db: AsyncSession, session_model: SessionModel, agent_key
 async def freeze_personas(
     db: AsyncSession, session_model: SessionModel, pool: AgentPool
 ) -> Dict[str, AgentPersona]:
-    """첫 유저 메시지 시점의 유효 페르소나를 전부 기록하고 세션을 잠급니다.
+    """첫 유저 메시지 시점의 유효 구성을 전부 기록하고 세션을 잠급니다.
+
+    인격뿐 아니라 `AgentConfig` 전체를 `config_snapshot` 에 굳힙니다. 이 대화는
+    이 순간부터 conf.toml 에 의존하지 않습니다 — 에이전트가 지워지든 모델이
+    바뀌든 잠글 때의 구성 그대로 이어집니다.
 
     이미 잠긴 세션이면 저장된 값을 그대로 돌려줍니다 (멱등).
     """
@@ -171,47 +196,158 @@ async def freeze_personas(
         return await effective_personas(db, session_model.id, pool)
 
     personas = await effective_personas(db, session_model.id, pool)
-    stored_keys = set((await load_stored_personas(db, session_model.id)).keys())
+    rows = {row.agent_key: row for row in await _stored_rows(db, session_model.id)}
+    live = {agent.key: agent for agent in pool.list_all()}
 
     for key, persona in personas.items():
-        if key in stored_keys:
-            continue  # 초안이 이미 있으면 그대로 둡니다
-        db.add(
-            SessionAgentModel(
+        row = rows.get(key)
+        if row is None:
+            # 초안이 없던 에이전트. conf.toml 기본값이 그대로 이 대화의 값이 됩니다.
+            row = SessionAgentModel(
                 session_id=session_model.id,
                 agent_key=key,
                 name=persona.name,
                 role=persona.role,
                 system_prompt=persona.system_prompt,
             )
-        )
+            db.add(row)
+        # 초안이 이미 있으면 인격은 그대로 두고 운영 설정만 굳힙니다.
+        agent = live.get(key)
+        if agent is not None:
+            row.config_snapshot = config_snapshot_of(_with_persona(agent, persona))
 
     session_model.personas_locked = True
     await db.commit()
     logger.info(
-        f"Personas frozen for session={session_model.id}: {sorted(personas.keys())}"
+        f"Agent configuration frozen for session={session_model.id}: {sorted(personas.keys())}"
     )
     return personas
 
 
+def _with_persona(agent: Agent, persona: Optional[AgentPersona]) -> Agent:
+    """에이전트에 페르소나를 입힌 사본 (원본은 건드리지 않습니다)."""
+    if persona is None:
+        return agent
+    return agent.model_copy(
+        update={
+            "name": persona.name or agent.name,
+            "role": persona.role or agent.role,
+            "system_prompt": persona.system_prompt or agent.system_prompt,
+        }
+    )
+
+
 def apply_personas(agents: List[Agent], personas: Dict[str, AgentPersona]) -> List[Agent]:
     """에이전트 목록에 페르소나를 입힌 사본을 만듭니다 (원본 풀은 건드리지 않음)."""
-    applied: List[Agent] = []
-    for agent in agents:
-        persona = personas.get(agent.key)
-        if persona is None:
-            applied.append(agent)
+    return [_with_persona(agent, personas.get(agent.key)) for agent in agents]
+
+
+# --------------------------------------------------------------- 구성 스냅샷
+
+
+def config_snapshot_of(agent: Agent) -> Dict[str, Any]:
+    """`Agent` 에서 `AgentConfig` 로 되돌릴 수 있는 값만 JSON 으로 뽑습니다.
+
+    아바타·색 같은 화면용 값은 키에서 다시 만들 수 있으므로 담지 않습니다.
+    """
+    config = AgentConfig.model_validate(
+        {field: getattr(agent, field) for field in AgentConfig.model_fields}
+    )
+    return config.model_dump(mode="json")
+
+
+def agent_from_snapshot(agent_key: str, snapshot: Any) -> Optional[Agent]:
+    """스냅샷에서 에이전트를 복원합니다. 읽을 수 없으면 None.
+
+    스냅샷이 깨졌다고 대화를 못 열게 하지는 않습니다. 부르는 쪽이 살아 있는 풀로
+    물러섭니다.
+    """
+    if not isinstance(snapshot, dict) or not snapshot:
+        return None
+    try:
+        return Agent.from_config(agent_key, AgentConfig.model_validate(snapshot))
+    except Exception as exc:  # noqa: BLE001 - 깨진 스냅샷으로 대화를 막지 않습니다
+        logger.warning(f"Could not restore agent '{agent_key}' from its snapshot: {exc}")
+        return None
+
+
+async def frozen_agents(
+    db: AsyncSession, session_id: str, pool: AgentPool
+) -> List[Agent]:
+    """이 대화가 잠길 때 굳은 에이전트 전부.
+
+    스냅샷이 없는 행은 이 기능이 생기기 전에 잠긴 대화입니다. 그런 행은 살아 있는
+    풀에서 찾아 페르소나만 입혀 씁니다 — 그 대화가 지금까지 돌아왔던 그대로입니다.
+    풀에도 없으면 되살릴 방법이 없으므로 건너뜁니다.
+
+    순서는 화면에 그대로 나가므로 결정적이어야 합니다. `session_agents` 의 행들은
+    잠글 때 한 커밋에 들어가 `created_at` 이 같고, 그러면 정렬이 무작위 UUID 로
+    떨어져 카드가 열 때마다 뒤바뀝니다. 오케스트레이터를 맨 앞에 두고, 그 뒤는
+    conf.toml 순서를 따르며, 이 대화에만 남은 에이전트는 맨 뒤에 모읍니다.
+    """
+    agents: List[Agent] = []
+    for row in await _stored_rows(db, session_id):
+        agent = agent_from_snapshot(row.agent_key, row.config_snapshot)
+        if agent is None:
+            live = pool.get(row.agent_key)
+            if live is None:
+                continue
+            agent = _with_persona(live, _persona_from_row(row))
+        agents.append(agent)
+    pool_order = {agent.key: i for i, agent in enumerate(pool.list_all())}
+    agents.sort(
+        key=lambda a: (a.key != "orchestrator", pool_order.get(a.key, len(pool_order)), a.key)
+    )
+    return agents
+
+
+async def session_roster_agents(
+    db: AsyncSession, session_model: SessionModel, pool: AgentPool
+) -> List[Agent]:
+    """이 대화의 로스터에 보여야 할 에이전트.
+
+    잠긴 대화는 잠글 때 굳은 구성, 아직 시작하지 않은 대화는 살아 있는 풀입니다.
+    화면이 이것을 쓰지 않으면 지워진 에이전트가 카드 없이 발언하게 됩니다.
+    """
+    if not session_model.personas_locked:
+        return pool.list_all()
+    agents = await frozen_agents(db, session_model.id, pool)
+    return agents or pool.list_all()
+
+
+async def resync_agent_configs(
+    db: AsyncSession, session_model: SessionModel, pool: AgentPool
+) -> List[str]:
+    """잠긴 대화의 구성 스냅샷을 지금 conf.toml 값으로 다시 굳힙니다.
+
+    인격(이름·역할·시스템 프롬프트)은 건드리지 않습니다. 바뀌는 것은 모델·
+    엔드포인트·키·도구처럼 운영에 속하는 값뿐입니다.
+
+    스냅샷이 없으면 옛 대화를 이어갈 수 없게 되는 상황 — 게이트웨이 주소가
+    바뀌었거나 API 키가 만료된 경우 — 을 위한 탈출구입니다. 지금 conf.toml 에
+    없는 에이전트는 그대로 둡니다. 이 대화에서만 살아 있는 에이전트를 지우는 것이
+    이 함수의 일은 아닙니다.
+
+    바꾼 에이전트 키 목록을 돌려줍니다.
+    """
+    if not session_model.personas_locked:
+        return []
+
+    live = {agent.key: agent for agent in pool.list_all()}
+    updated: List[str] = []
+    for row in await _stored_rows(db, session_model.id):
+        agent = live.get(row.agent_key)
+        if agent is None:
             continue
-        applied.append(
-            agent.model_copy(
-                update={
-                    "name": persona.name or agent.name,
-                    "role": persona.role or agent.role,
-                    "system_prompt": persona.system_prompt or agent.system_prompt,
-                }
-            )
+        row.config_snapshot = config_snapshot_of(_with_persona(agent, _persona_from_row(row)))
+        updated.append(row.agent_key)
+
+    if updated:
+        await db.commit()
+        logger.info(
+            f"Agent configuration re-synced for session={session_model.id}: {sorted(updated)}"
         )
-    return applied
+    return updated
 
 
 async def prepare_agents_for_turn(
@@ -222,7 +358,25 @@ async def prepare_agents_for_turn(
 ) -> List[Agent]:
     """토론 한 턴에 쓸 에이전트를 준비합니다.
 
-    첫 턴이면 페르소나를 기록하고 잠급니다. 이후 턴은 잠긴 값을 그대로 씁니다.
+    첫 턴이면 그 시점의 구성을 통째로 기록하고 잠급니다. 이후 턴은 그 스냅샷을
+    그대로 씁니다 — conf.toml 이 그 사이 어떻게 바뀌었든.
     """
     personas = await freeze_personas(db, session_model, pool)
-    return apply_personas(pool.get_active(active_keys), personas)
+    frozen = {agent.key: agent for agent in await frozen_agents(db, session_model.id, pool)}
+
+    ordered = ["orchestrator"] + [k for k in active_keys if k != "orchestrator"]
+    agents: List[Agent] = []
+    seen = set()
+    for key in ordered:
+        if key in seen:
+            continue
+        seen.add(key)
+        agent = frozen.get(key)
+        if agent is None:
+            # 스냅샷이 없는 옛 대화, 또는 잠근 뒤 사용자가 합류시킨 에이전트.
+            live = pool.get(key)
+            if live is None:
+                continue
+            agent = _with_persona(live, personas.get(key))
+        agents.append(agent)
+    return agents

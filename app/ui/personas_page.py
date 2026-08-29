@@ -10,14 +10,16 @@ from typing import Dict, Optional
 from nicegui import ui
 from sqlalchemy import func, select
 
-from app.agents.base import AGENT_STYLE_MAP, DEFAULT_STYLE
+from app.agents.base import style_for_agent
 from app.agents.personas import (
     AgentPersona,
     PersonasLockedError,
     default_personas,
     effective_personas,
+    persona_from_agent,
     reset_persona,
     save_persona,
+    session_roster_agents,
 )
 from app.agents.pool import get_agent_pool
 from app.config import update_agent_persona_in_conf_file
@@ -48,6 +50,9 @@ def create_personas_page() -> None:
                 return
 
             personas = await effective_personas(db, session_id, pool)
+            # 잠긴 대화는 잠글 때 굳은 에이전트를 보여줍니다. 그 사이 conf.toml 에서
+            # 지워진 에이전트도 이 대화에서는 계속 발언하므로 카드가 있어야 합니다.
+            agents = await session_roster_agents(db, session_model, pool)
             locked = session_model.personas_locked
             session_title = session_model.title
             msg_count = await db.scalar(
@@ -132,12 +137,15 @@ def create_personas_page() -> None:
                             ).classes("text-[11px] text-slate-400 leading-relaxed")
 
             # ---------------- 에이전트 카드 ----------------
-            for agent in pool.list_all():
-                persona = personas.get(agent.key) or defaults[agent.key]
+            for agent in agents:
+                # 이 대화에만 남은 에이전트는 conf.toml 기본값이 없습니다.
+                # 그때는 이 대화가 굳혀 둔 값이 곧 기본값입니다.
+                fallback = persona_from_agent(agent)
+                persona = personas.get(agent.key) or fallback
                 inputs[agent.key] = _build_agent_card(
                     agent_key=agent.key,
                     persona=persona,
-                    default_persona=defaults[agent.key],
+                    default_persona=defaults.get(agent.key, fallback),
                     model_label=agent.model,
                     endpoint_label=agent.endpoint_label,
                     locked=locked,
@@ -219,7 +227,7 @@ def _build_agent_card(
     on_save,
     on_reset,
 ) -> Dict[str, ui.element]:
-    style = AGENT_STYLE_MAP.get(agent_key, DEFAULT_STYLE)
+    style = style_for_agent(agent_key)
     fields: Dict[str, ui.element] = {}
 
     with ui.card().classes(

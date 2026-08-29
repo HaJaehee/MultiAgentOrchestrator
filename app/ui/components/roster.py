@@ -6,12 +6,18 @@ from nicegui import ui
 from app.agents.base import Agent
 from app.agents.pool import AgentPool, get_agent_pool, reload_agent_pool
 from app.config import (
+    BARE_KEY_PATTERN,
     active_config_path,
+    add_agent_to_conf_file,
     add_mcp_server_to_conf_file,
+    agent_defaults_from_llm,
     get_config,
+    prune_agent_overrides,
+    remove_agent_from_conf_file,
     remove_mcp_server_from_conf_file,
     resolve_workspace_dir,
     set_agent_allowed_mcp_servers_in_conf_file,
+    set_agent_enabled_in_conf_file,
     set_mcp_server_enabled_in_conf_file,
 )
 from app.mcp.manager import get_mcp_manager
@@ -25,6 +31,11 @@ logger = logging.getLogger(__name__)
 # 작업이 끝났을 때 부르는 dismiss() 는 더 일찍 치우기 위한 것입니다.
 PROGRESS_TOAST_TIMEOUT = 8
 
+# 새 에이전트 폼에서 정수로 적어야 하는 항목. `ui.number` 는 무엇을 넣든 float 를
+# 돌려주므로, 그대로 쓰면 conf.toml 에 `max_tokens = 4096.0` 이 적힙니다.
+INT_AGENT_FIELDS = ("max_tokens", "max_context_window", "num_retries", "max_tool_iterations")
+FLOAT_AGENT_FIELDS = ("temperature", "top_p", "timeout")
+
 
 class AgentRosterControl:
     """Agent selection cards and debate control panel (rounds, strategy, instructions)."""
@@ -32,8 +43,12 @@ class AgentRosterControl:
     def __init__(
         self,
         on_config_changed: Optional[Callable[[], Coroutine[None, None, None]]] = None,
+        on_resync_agents: Optional[Callable[[], Coroutine[None, None, None]]] = None,
     ):
         self.on_config_changed = on_config_changed
+        # 잠긴 대화의 구성 스냅샷을 지금 conf.toml 로 다시 굳히는 콜백. DB 를 만지므로
+        # 화면을 소유한 쪽(app.py)이 구현합니다.
+        self.on_resync_agents = on_resync_agents
         self.agent_pool: AgentPool = get_agent_pool()
         self.selected_agents: Dict[str, bool] = {}
         self.strategy_name: str = "free_debate"
@@ -68,6 +83,17 @@ class AgentRosterControl:
         self.mcp_locked: bool = False
         self.mcp_lock_reason: str = ""
         self.cards_row: Optional[ui.row] = None
+        # 에이전트 추가·삭제는 "이 대화가 아직 시작되지 않았고, 아무 대화도 토론
+        # 중이 아닐 때" 만 열립니다 (`_agent_admin_lock_reason`).
+        self.add_agent_btn: Optional[ui.button] = None
+        self.add_agent_tooltip: Optional[ui.tooltip] = None
+        self.agent_admin_hint: Optional[ui.label] = None
+        # conf.toml 에 있지만 꺼 둔 에이전트. 풀에는 등록되지 않아 카드로는 보이지
+        # 않으므로, 여기서 따로 보여주지 않으면 다시 켤 방법이 없습니다.
+        self.disabled_row: Optional[ui.row] = None
+        # 잠긴 대화가 잠글 때 굳힌 에이전트. 살아 있는 풀 대신 이것을 그립니다.
+        self.session_agents: Optional[List[Agent]] = None
+        self.resync_btn: Optional[ui.button] = None
         self.workspace_input: Optional[ui.input] = None
         self.workspace_hint: Optional[ui.label] = None
         self.workspace_apply_btn: Optional[ui.button] = None
@@ -104,6 +130,28 @@ class AgentRosterControl:
                         self.persona_badge = ui.badge("고정됨", color="amber-8").props("dense text-[9px]")
                         self.persona_badge.set_visibility(False)
                     with ui.row().classes("items-center gap-2"):
+                        self.add_agent_btn = (
+                            ui.button("에이전트 추가", icon="person_add",
+                                      on_click=self._open_agent_add_dialog)
+                            .props("flat dense no-caps color=indigo-4")
+                            .classes("text-[11px]")
+                        )
+                        # 페르소나 버튼과 같은 이유로 툴팁은 여기서 한 번만 만듭니다.
+                        with self.add_agent_btn:
+                            self.add_agent_tooltip = ui.tooltip("")
+                        # 잠긴 대화에만 나옵니다. 스냅샷이 정본이 되면서, 게이트웨이
+                        # 주소나 API 키를 바꾼 뒤 옛 대화를 이어갈 방법이 필요합니다.
+                        self.resync_btn = (
+                            ui.button("설정 갱신", icon="sync_alt",
+                                      on_click=self._on_resync_agent_configs)
+                            .props("flat dense no-caps color=amber-4")
+                            .classes("text-[11px]")
+                        )
+                        self.resync_btn.tooltip(
+                            "이 대화가 굳혀 둔 모델·엔드포인트·API 키·도구를 지금 conf.toml "
+                            "값으로 다시 맞춥니다 (페르소나는 그대로)"
+                        )
+                        self.resync_btn.set_visibility(False)
                         self.reload_conf_btn = (
                             ui.button("conf.toml 다시 읽기", icon="sync",
                                       on_click=self._on_reload_conf)
@@ -129,10 +177,18 @@ class AgentRosterControl:
                         self.summary_badge = ui.badge("4 Agents Active", color="indigo-7").props("dense text-xs")
                 self._refresh_persona_controls()
 
+                self.agent_admin_hint = ui.label("").classes(
+                    "text-[10px] text-slate-500 w-full leading-snug -mt-1"
+                )
+
                 self.cards_row = ui.row().classes("w-full gap-2 flex-wrap")
                 with self.cards_row:
-                    for ag in self.agent_pool.list_all():
+                    for ag in self._roster_agents():
                         self._build_agent_card(ag)
+
+                self.disabled_row = ui.row().classes("w-full gap-2 flex-wrap items-center")
+                self._refresh_disabled_agents()
+                self._refresh_agent_admin_controls()
 
                 ui.separator().classes("bg-slate-800 my-1")
 
@@ -230,6 +286,21 @@ class AgentRosterControl:
 
         return self.expansion
 
+    def _roster_agents(self) -> List[Agent]:
+        """이 대화의 로스터에 보일 에이전트.
+
+        잠긴 대화는 잠글 때 굳은 구성을, 아직 시작하지 않은 대화는 살아 있는 풀을
+        씁니다. 이것을 쓰지 않으면 conf.toml 에서 지운 에이전트가 카드도 없이
+        발언하는 대화가 생깁니다 — 실행은 스냅샷을 보는데 화면만 풀을 보기 때문에.
+        """
+        if self.personas_locked and self.session_agents:
+            return list(self.session_agents)
+        return self.agent_pool.list_all()
+
+    def set_session_agents(self, agents: Optional[List[Agent]]) -> None:
+        """이 대화가 실제로 쓰는 에이전트 목록을 갈아 끼웁니다 (잠긴 대화의 스냅샷)."""
+        self.session_agents = list(agents) if agents else None
+
     def refresh_agent_cards(self, personas: Optional[Dict[str, Any]] = None) -> None:
         """에이전트 카드 목록을 현재 페르소나 및 풀 상태로 다시 그립니다."""
         if self.cards_row is None or self.cards_row.is_deleted:
@@ -239,9 +310,11 @@ class AgentRosterControl:
         self.agent_pool = get_agent_pool()
         self.cards_row.clear()
         with self.cards_row:
-            for ag in self.agent_pool.list_all():
+            for ag in self._roster_agents():
                 p = self.current_personas.get(ag.key) if self.current_personas else None
                 self._build_agent_card(ag, persona=p)
+        self._refresh_disabled_agents()
+        self._refresh_agent_admin_controls()
 
     def _build_agent_card(self, agent: Agent, persona: Optional[Any] = None) -> None:
         is_orchestrator = (agent.key == "orchestrator")
@@ -263,15 +336,47 @@ class AgentRosterControl:
                             ui.label(display_name).classes("text-xs font-bold truncate")
                             if is_customized:
                                 ui.badge("수정됨", color="indigo-7").props("dense text-[8px]")
+                            # conf.toml 에서는 사라졌지만 이 대화의 스냅샷에는 남아
+                            # 있는 에이전트. 계속 발언하므로 카드에도 나와야 합니다.
+                            if self.personas_locked and self.agent_pool.get(agent.key) is None:
+                                ui.badge("이 대화 전용", color="amber-8").props(
+                                    "dense text-[8px]"
+                                ).tooltip(
+                                    "conf.toml 에서는 지워졌지만, 이 대화는 토론을 시작할 때 "
+                                    "굳은 구성으로 계속 씁니다"
+                                )
                         ui.label(display_role).classes("text-[9px] text-slate-400 truncate")
 
                 if is_orchestrator:
                     ui.badge("필수", color="indigo-9").props("dense text-[9px]")
                 else:
-                    ui.checkbox(
-                        value=is_active,
-                        on_change=lambda e, k=agent.key: self._on_agent_toggle(k, e.value),
-                    ).props("dense dark color=indigo-4")
+                    with ui.row().classes("items-center gap-0 no-wrap flex-shrink-0"):
+                        ui.checkbox(
+                            value=is_active,
+                            on_change=lambda e, k=agent.key: self._on_agent_toggle(k, e.value),
+                        ).props("dense dark color=indigo-4").tooltip(
+                            "이 대화의 토론에 참여시킬지 (conf.toml 은 그대로)"
+                        )
+                        # 끄기·삭제는 conf.toml 을 고치는 조작이라, 위의 참여
+                        # 체크박스와 나란히 두면 반드시 헷갈립니다. 한 겹 안에 둡니다.
+                        admin_btn = ui.button(icon="more_vert").props(
+                            "flat dense round size=xs color=slate-5"
+                        )
+                        admin_reason = self._agent_admin_lock_reason()
+                        if admin_reason:
+                            admin_btn.disable()
+                            admin_btn.tooltip(admin_reason)
+                        else:
+                            admin_btn.tooltip("conf.toml 에서 이 에이전트 끄기/삭제")
+                            with admin_btn, ui.menu().props("dark").classes("bg-slate-800"):
+                                ui.menu_item(
+                                    "비활성화 (설정은 남김)",
+                                    on_click=lambda k=agent.key: self._on_agent_disable(k),
+                                ).classes("text-xs")
+                                ui.menu_item(
+                                    "삭제",
+                                    on_click=lambda k=agent.key: self._open_agent_delete_dialog(k),
+                                ).classes("text-xs text-rose-300")
 
             # Model / endpoint / sequential-thinking summary (from conf.toml)
             with ui.row().classes("w-full items-center gap-1 mt-1 no-wrap"):
@@ -295,9 +400,10 @@ class AgentRosterControl:
                 ui.label(", ".join(allowed) or "없음").classes(
                     "text-[9px] text-slate-500 truncate"
                 )
-                if self.mcp_locked:
+                tools_reason = self._agent_admin_lock_reason()
+                if tools_reason:
                     tools_button.disable()
-                    tools_button.tooltip(self.mcp_lock_reason)
+                    tools_button.tooltip(tools_reason)
                 else:
                     tools_button.tooltip("이 에이전트가 호출할 수 있는 MCP 서버 고르기")
 
@@ -337,6 +443,9 @@ class AgentRosterControl:
     def set_personas_locked(self, locked: bool) -> None:
         self.personas_locked = locked
         self._refresh_persona_controls()
+        # 첫 발언과 함께 참여 에이전트도 고정됩니다. 추가·삭제 컨트롤과 카드의
+        # 메뉴가 같은 시점에 잠겨야 합니다.
+        self.refresh_agent_cards()
 
     def refresh_mcp_status(self) -> None:
         """conf.toml 의 MCP 서버별 연결 상태를 칩으로 다시 그립니다."""
@@ -475,6 +584,458 @@ class AgentRosterControl:
             return True
         return False
 
+    # ------------------------------------------------------- 에이전트 추가/끄기/삭제
+    #
+    # 에이전트 구성은 conf.toml 이 정본이라 모든 대화가 공유합니다. 그런데 대화는
+    # 첫 발언과 함께 참여 에이전트와 페르소나가 고정되므로, 여기서 바꾼 것은
+    # **앞으로 만드는 대화와 아직 시작하지 않은 대화**에만 걸립니다. 그래서 이
+    # 조작은 "이 대화가 아직 시작되지 않았고, 아무 대화도 토론 중이 아닐 때" 만
+    # 열립니다.
+
+    def _agent_admin_lock_reason(self) -> str:
+        """지금 에이전트를 추가·삭제하면 안 되는 이유. 해도 되면 빈 문자열.
+
+        두 가지를 봅니다.
+
+        하나는 **진행 중인 토론**. 에이전트 풀은 프로세스 전체가 하나를 공유하므로,
+        어느 대화든 돌고 있으면 그 토론의 발언자 목록이 도중에 바뀝니다. MCP 서버와
+        같은 이유라 같은 잠금을 그대로 씁니다.
+
+        다른 하나는 **이 대화가 이미 시작되었는지**. 첫 발언과 함께 구성이 고정되어
+        여기서 바꿔도 이 대화에는 반영되지 않으므로, 열어 두면 헷갈리기만 합니다.
+        """
+        if self.mcp_locked:
+            return self.mcp_lock_reason
+        if self.personas_locked:
+            return (
+                "이 대화는 이미 토론이 시작되어 참여 에이전트가 고정되었습니다. "
+                "에이전트를 추가·삭제하려면 새 대화를 시작하세요."
+            )
+        return ""
+
+    def _blocked_for_agent_admin(self) -> bool:
+        """잠겨 있으면 알리고 True. 화면이 낡았을 때를 위한 마지막 확인입니다."""
+        self._sync_mcp_lock()
+        reason = self._agent_admin_lock_reason()
+        if reason:
+            ui.notify(reason, type="warning", position="bottom-right")
+            return True
+        return False
+
+    def _refresh_agent_admin_controls(self) -> None:
+        """추가 버튼과 안내 문구를 잠금 상태에 맞춥니다."""
+        if not self.alive:
+            return
+        reason = self._agent_admin_lock_reason()
+
+        if self.add_agent_btn is not None and not self.add_agent_btn.is_deleted:
+            self.add_agent_btn.disable() if reason else self.add_agent_btn.enable()
+        if self.add_agent_tooltip is not None and not self.add_agent_tooltip.is_deleted:
+            self.add_agent_tooltip.set_text(
+                reason
+                or "conf.toml 에 새 에이전트를 추가합니다 (.env 와 [llm] 의 기본값이 미리 채워집니다)"
+            )
+
+        # 설정 갱신은 잠긴 대화에서만 뜻이 있습니다. 아직 시작하지 않은 대화는
+        # 애초에 살아 있는 conf.toml 을 보고 있으므로 갱신할 것이 없습니다.
+        if self.resync_btn is not None and not self.resync_btn.is_deleted:
+            self.resync_btn.set_visibility(bool(self.personas_locked))
+            if self.mcp_locked:
+                self.resync_btn.disable()
+            else:
+                self.resync_btn.enable()
+
+        if self.agent_admin_hint is not None and not self.agent_admin_hint.is_deleted:
+            if reason:
+                self.agent_admin_hint.set_text(f"🔒 {reason}")
+                self.agent_admin_hint.classes(
+                    replace="text-[10px] text-amber-400/90 w-full leading-snug -mt-1"
+                )
+            else:
+                self.agent_admin_hint.set_text(
+                    "⚠️ 에이전트 추가·삭제는 conf.toml 에 저장되어 앞으로 만드는 모든 대화에 "
+                    "적용됩니다. 이미 토론이 시작된 대화는 그때 고정된 구성을 그대로 씁니다."
+                )
+                self.agent_admin_hint.classes(
+                    replace="text-[10px] text-slate-500 w-full leading-snug -mt-1"
+                )
+
+    def _refresh_disabled_agents(self) -> None:
+        """conf.toml 에서 꺼 둔 에이전트를 칩으로 보여줍니다.
+
+        꺼진 에이전트는 풀에 등록되지 않아 카드로 나타나지 않습니다. 여기 없으면
+        화면에서 다시 켤 방법이 사라져 conf.toml 을 직접 열어야 합니다.
+        """
+        if self.disabled_row is None or self.disabled_row.is_deleted:
+            return
+
+        try:
+            configured = get_config().agents
+        except Exception as e:  # noqa: BLE001 - UI 는 설정 오류로 죽지 않아야 합니다
+            logger.warning(f"Could not read agents from conf.toml: {e}")
+            configured = {}
+
+        disabled = {k: c for k, c in configured.items() if not getattr(c, "enabled", True)}
+        self.disabled_row.clear()
+        self.disabled_row.set_visibility(bool(disabled))
+        if not disabled:
+            return
+
+        reason = self._agent_admin_lock_reason()
+        with self.disabled_row:
+            ui.label("꺼둔 에이전트:").classes("text-[10px] font-semibold text-slate-500")
+            for key, agent_cfg in disabled.items():
+                with ui.element("div").classes(
+                    "flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md "
+                    "bg-slate-900/70 border border-slate-800"
+                ):
+                    ui.icon("toggle_off", size="12px").classes("text-slate-500")
+                    ui.label(agent_cfg.name or key).classes("text-[10px] text-slate-400")
+                    ui.label(f"({key})").classes("text-[9px] text-slate-600")
+                    enable_btn = ui.button(
+                        icon="play_arrow",
+                        on_click=lambda _, k=key: self._on_agent_enable(k),
+                    ).props("flat dense round size=xs color=teal-4")
+                    delete_btn = ui.button(
+                        icon="delete_outline",
+                        on_click=lambda _, k=key: self._open_agent_delete_dialog(k),
+                    ).props("flat dense round size=xs color=rose-4")
+                    if reason:
+                        enable_btn.disable()
+                        delete_btn.disable()
+                        enable_btn.tooltip(reason)
+                        delete_btn.tooltip(reason)
+                    else:
+                        enable_btn.tooltip("이 에이전트를 다시 켭니다")
+                        delete_btn.tooltip("conf.toml 에서 이 에이전트를 삭제합니다")
+
+    async def _on_resync_agent_configs(self) -> None:
+        """잠긴 대화가 굳혀 둔 구성을 지금 conf.toml 값으로 다시 맞춥니다.
+
+        스냅샷이 정본이 된 대가입니다. 게이트웨이 주소가 바뀌거나 API 키가 만료되면
+        옛 대화가 죽은 엔드포인트를 계속 두드리게 되는데, 그때 이 버튼이 유일한
+        탈출구입니다. 페르소나는 건드리지 않으므로 기록의 화자는 그대로입니다.
+        """
+        if not self.personas_locked or self.on_resync_agents is None:
+            return
+        if self._blocked_by_running_debate():
+            return
+        if self.resync_btn is not None and not self.resync_btn.is_deleted:
+            self.resync_btn.disable()
+        try:
+            await self.on_resync_agents()
+        except Exception as e:  # noqa: BLE001 - 화면이 죽으면 안 됩니다
+            logger.error(f"Could not re-sync the frozen agent configuration: {e}", exc_info=True)
+            ui.notify(f"설정을 갱신하지 못했습니다: {e}", type="negative", position="bottom-right")
+        finally:
+            if self.resync_btn is not None and not self.resync_btn.is_deleted:
+                self.resync_btn.enable()
+
+    async def _apply_agent_change(self, write, done_message: str) -> None:
+        """에이전트 구성을 바꾸고, 이 대화의 로스터 기록까지 맞춥니다.
+
+        `_apply_conf_change` 가 파일 기록과 풀 재적재를 맡습니다. 여기서는 그 결과를
+        이 대화의 `active_agents` / `known_agents` 에 바로 저장합니다. 저장하지 않으면
+        다음에 이 대화를 열 때 방금 추가한 에이전트가 "로스터를 저장한 뒤에 생긴 것"
+        으로 보여 선택 상태가 어긋납니다.
+
+        MCP 서버 구성은 그대로이므로 서버를 다시 띄우지 않습니다.
+        """
+        await self._apply_conf_change(write, done_message, restart_servers=False)
+        if self.on_config_changed:
+            await self.on_config_changed()
+
+    async def _on_agent_disable(self, agent_key: str) -> None:
+        """conf.toml 에서 이 에이전트를 끕니다 (설정과 프롬프트는 남습니다)."""
+        if self._blocked_for_agent_admin():
+            return
+        await self._apply_agent_change(
+            lambda: set_agent_enabled_in_conf_file(agent_key, False, self._conf_path()),
+            f"'{agent_key}' 에이전트를 껐습니다. '꺼둔 에이전트' 에서 다시 켤 수 있습니다.",
+        )
+
+    async def _on_agent_enable(self, agent_key: str) -> None:
+        if self._blocked_for_agent_admin():
+            return
+        await self._apply_agent_change(
+            lambda: set_agent_enabled_in_conf_file(agent_key, True, self._conf_path()),
+            f"'{agent_key}' 에이전트를 다시 켰습니다.",
+        )
+
+    def _open_agent_delete_dialog(self, agent_key: str) -> None:
+        if self._blocked_for_agent_admin():
+            return
+        if agent_key == "orchestrator":
+            ui.notify("오케스트레이터는 삭제할 수 없습니다.", type="warning", position="bottom-right")
+            return
+
+        try:
+            agent_cfg = get_config().agents.get(agent_key)
+        except Exception:  # noqa: BLE001
+            agent_cfg = None
+        display = (agent_cfg.name if agent_cfg else "") or agent_key
+
+        with ui.dialog() as dialog, ui.card().classes(
+            "p-4 w-96 bg-slate-900 text-white border border-slate-700"
+        ):
+            ui.label("에이전트 삭제").classes("text-lg font-bold text-red-400 mb-1")
+            ui.label(
+                f"conf.toml 에서 [agents.{agent_key}] 을 지웁니다. 모델·프롬프트 설정이 "
+                f"함께 사라지며 되돌릴 수 없습니다."
+            ).classes("text-xs text-slate-300 leading-snug")
+            # 예전에는 여기서 "이어서 진행하면 더 이상 발언하지 않습니다" 를 경고해야
+            # 했습니다. 이제는 대화가 첫 발언 때 구성을 통째로 굳히므로 그렇지 않습니다.
+            ui.label(
+                "이미 토론이 시작된 대화는 영향을 받지 않습니다. 그 대화들은 첫 발언 때 "
+                "이 에이전트의 구성(모델·엔드포인트·키·도구·프롬프트)을 통째로 저장해 "
+                "두었고, 이어서 진행해도 그 구성 그대로 발언합니다."
+            ).classes("text-[11px] text-slate-400 mt-2 leading-snug")
+            ui.label(
+                "영향을 받는 것은 아직 시작하지 않은 대화와 앞으로 만드는 대화입니다. "
+                "설정을 남겨 두고 참여만 막으려면 대신 '비활성화' 를 쓰세요."
+            ).classes("text-[10px] text-slate-500 mt-2 leading-snug")
+
+            async def do_delete() -> None:
+                dialog.close()
+                await self._apply_agent_change(
+                    lambda: remove_agent_from_conf_file(agent_key, self._conf_path()),
+                    f"'{display}' 에이전트를 삭제했습니다.",
+                )
+
+            async def do_disable() -> None:
+                dialog.close()
+                await self._on_agent_disable(agent_key)
+
+            with ui.row().classes("w-full justify-end gap-2 mt-3"):
+                ui.button("취소", on_click=dialog.close).props("flat color=grey")
+                ui.button("대신 비활성화", on_click=do_disable).props("flat color=amber-6")
+                ui.button("삭제", on_click=do_delete).props("unelevated color=red-6")
+
+        dialog.open()
+
+    def _open_agent_add_dialog(self) -> None:
+        """새 에이전트를 만듭니다.
+
+        LLM 항목은 [llm] (즉 .env) 의 유효 기본값으로 미리 채워집니다. 그대로 둔
+        항목은 conf.toml 에 적지 않아 계속 [llm] 을 상속하므로, .env 를 바꾸면 이
+        에이전트도 함께 따라갑니다. 화면에 보이는 값은 이미 환경변수가 풀린 값이라
+        그대로 되쓰면 API 키가 파일에 평문으로 박히기도 합니다.
+        """
+        if self._blocked_for_agent_admin():
+            return
+
+        try:
+            cfg = get_config()
+        except Exception as e:  # noqa: BLE001
+            ui.notify(f"conf.toml 을 읽지 못했습니다: {e}", type="negative", position="bottom-right")
+            return
+
+        defaults = agent_defaults_from_llm(cfg.llm)
+        st_default = cfg.llm.sequential_thinking
+        existing_keys = set(cfg.agents.keys())
+        servers = cfg.mcp_servers
+
+        text_fields: Dict[str, ui.input] = {}
+        number_fields: Dict[str, ui.number] = {}
+        boxes: Dict[str, ui.checkbox] = {}
+
+        def _text(field: str, label: str, hint: str = "", password: bool = False) -> None:
+            default = defaults.get(field)
+            element = ui.input(
+                label, value="" if default is None else str(default), placeholder=hint
+            ).props("outlined dense dark" + (" type=password" if password else "")).classes(
+                "flex-grow min-w-[180px] text-xs"
+            )
+            text_fields[field] = element
+
+        def _number(field: str, label: str, step: float = 1, fmt: Optional[str] = None) -> None:
+            default = defaults.get(field)
+            element = ui.number(
+                label, value=default, step=step, format=fmt,
+            ).props("outlined dense dark").classes("w-40 text-xs")
+            number_fields[field] = element
+
+        with ui.dialog() as dialog, ui.card().classes(
+            "p-4 w-[660px] max-w-full bg-slate-900 text-white border border-slate-700"
+        ):
+            ui.label("에이전트 추가").classes("text-lg font-bold")
+            ui.label(
+                "conf.toml 에 저장되어 앞으로 만드는 모든 대화에서 쓰입니다. "
+                "이미 토론이 시작된 대화는 그때 고정된 구성을 그대로 씁니다."
+            ).classes("text-[11px] text-amber-400 mb-1 leading-snug")
+
+            with ui.column().classes("w-full gap-2 max-h-[62vh] overflow-y-auto pr-1"):
+                with ui.row().classes("w-full gap-2 no-wrap"):
+                    key_in = ui.input("에이전트 키", placeholder="data_analyst").props(
+                        "outlined dense dark"
+                    ).classes("w-44 text-xs")
+                    key_in.tooltip("conf.toml 의 [agents.<키>]. 영문/숫자/밑줄/하이픈만 쓸 수 있습니다")
+                    name_in = ui.input("이름", placeholder="Data Analyst").props(
+                        "outlined dense dark"
+                    ).classes("flex-grow text-xs")
+                role_in = ui.input(
+                    "역할", placeholder="Data & Metrics Analysis"
+                ).props("outlined dense dark").classes("w-full text-xs")
+
+                ui.label("페르소나 (시스템 프롬프트)").classes(
+                    "text-[11px] font-semibold text-slate-400 mt-1"
+                )
+                prompt_in = ui.textarea(
+                    placeholder=(
+                        "이 에이전트가 토론에서 맡을 관점과 책임, 지켜야 할 원칙을 적으세요.\n"
+                        "예: 당신은 데이터 분석가입니다. 주장에 근거가 되는 지표를 요구하고, "
+                        "표본과 측정 방식의 한계를 지적합니다."
+                    ),
+                ).props("outlined dense dark rows=5").classes("w-full text-xs")
+                ui.label(
+                    "페르소나는 대화별로 다시 고칠 수 있습니다 (로스터의 '페르소나 편집'). "
+                    "여기 적은 값은 그 기본값이 됩니다."
+                ).classes("text-[10px] text-slate-500 -mt-1 leading-snug")
+
+                with ui.expansion("LLM 설정", icon="smart_toy", value=False).classes(
+                    "w-full bg-slate-800/40 rounded-lg border border-slate-800"
+                ):
+                    ui.label(
+                        "아래 값은 .env 와 conf.toml 의 [llm] 에서 가져온 현재 기본값입니다. "
+                        "그대로 두면 파일에 적지 않고 [llm] 을 상속하므로 .env 를 바꾸면 이 "
+                        "에이전트도 함께 따라갑니다. 바꾼 항목만 기록됩니다."
+                    ).classes("text-[10px] text-slate-500 leading-snug px-2 pb-1")
+                    with ui.column().classes("w-full gap-2 p-2 pt-0"):
+                        with ui.row().classes("w-full gap-2 flex-wrap"):
+                            _text("model", "모델", "openai/gpt-4o")
+                            _text("provider", "provider", "openai / azure / ollama ...")
+                        with ui.row().classes("w-full gap-2 flex-wrap"):
+                            _text("api_base", "LLM API URL", "https://gateway/v1")
+                            _text("api_version", "api_version", "Azure 전용")
+                        _text("api_key", "API 키", "비우면 [llm] 값을 상속", password=True)
+                        with ui.row().classes("w-full gap-2 flex-wrap"):
+                            _number("temperature", "온도", step=0.05)
+                            _number("top_p", "top_p", step=0.05)
+                            _number("max_tokens", "응답 토큰", step=256, fmt="%.0f")
+                            _number("max_context_window", "컨텍스트 창", step=1024, fmt="%.0f")
+                        with ui.row().classes("w-full gap-2 flex-wrap items-center"):
+                            _number("timeout", "타임아웃(초)", step=10)
+                            _number("num_retries", "재시도", step=1, fmt="%.0f")
+                            _number("max_tool_iterations", "도구 루프 한도", step=1, fmt="%.0f")
+                            drop_in = ui.checkbox(
+                                "미지원 파라미터 자동 제거",
+                                value=bool(defaults.get("drop_params", True)),
+                            ).props("dense dark color=indigo-4").classes("text-xs")
+
+                with ui.expansion("단계적 사고 (Sequential Thinking)", icon="psychology",
+                                  value=False).classes(
+                    "w-full bg-slate-800/40 rounded-lg border border-slate-800"
+                ):
+                    with ui.column().classes("w-full gap-2 p-2"):
+                        st_enabled = ui.checkbox(
+                            "단계적 사고 사용", value=bool(st_default.enabled)
+                        ).props("dense dark color=teal-4").classes("text-xs")
+                        with ui.row().classes("w-full gap-2 items-center flex-wrap"):
+                            st_mode = ui.select(
+                                {"prompt": "prompt (프롬프트 주입)",
+                                 "native": "native (모델 추론 파라미터)",
+                                 "mcp": "mcp (sequential-thinking 서버)"},
+                                value=st_default.mode, label="모드",
+                            ).props("outlined dense dark options-dense").classes("w-56 text-xs")
+                            st_steps = ui.number(
+                                "최대 단계", value=st_default.max_steps, min=1, max=50, step=1,
+                                format="%.0f",
+                            ).props("outlined dense dark").classes("w-32 text-xs")
+                            st_show = ui.checkbox(
+                                "사고 과정 노출", value=bool(st_default.show_steps)
+                            ).props("dense dark color=teal-4").classes("text-xs")
+
+                ui.label("사용할 MCP 서버").classes(
+                    "text-[11px] font-semibold text-slate-400 mt-1"
+                )
+                if not servers:
+                    ui.label("conf.toml 에 등록된 MCP 서버가 없습니다.").classes(
+                        "text-xs text-slate-500"
+                    )
+                with ui.row().classes("w-full gap-x-4 gap-y-1 flex-wrap"):
+                    for server_name, server_cfg in servers.items():
+                        with ui.row().classes("items-center gap-1 no-wrap"):
+                            boxes[server_name] = ui.checkbox(value=False).props(
+                                "dense dark color=indigo-4"
+                            )
+                            ui.label(server_name).classes("text-xs text-slate-200")
+                            if not server_cfg.enabled:
+                                ui.badge("꺼짐", color="grey-8").props("dense text-[9px]")
+
+            async def do_add() -> None:
+                key = (key_in.value or "").strip()
+                name = (name_in.value or "").strip()
+                role = (role_in.value or "").strip()
+
+                if not key or not name or not role:
+                    ui.notify("키·이름·역할은 반드시 입력해야 합니다.",
+                              type="warning", position="bottom-right")
+                    return
+                if not BARE_KEY_PATTERN.fullmatch(key):
+                    ui.notify("키는 영문/숫자/밑줄/하이픈만 쓰고 숫자나 하이픈으로 "
+                              "시작하지 마세요.", type="warning", position="bottom-right")
+                    return
+                if key in existing_keys:
+                    ui.notify(f"'{key}' 에이전트가 이미 있습니다. 다른 키를 쓰세요.",
+                              type="warning", position="bottom-right")
+                    return
+
+                # 화면 값을 모아 기본값과 같은 것은 걷어냅니다. 남은 것만 파일에 적힙니다.
+                raw: Dict[str, Any] = {"drop_params": bool(drop_in.value)}
+                for field, element in text_fields.items():
+                    raw[field] = (element.value or "").strip()
+                for field, element in number_fields.items():
+                    if element.value is None or element.value == "":
+                        continue
+                    raw[field] = (
+                        int(element.value) if field in INT_AGENT_FIELDS else float(element.value)
+                    )
+                overrides = prune_agent_overrides(raw, defaults)
+
+                # 단계적 사고도 같은 규칙입니다. 전부 기본값과 같으면 하위 블록을
+                # 아예 만들지 않아 [llm.sequential_thinking] 을 그대로 상속합니다.
+                steps = int(st_steps.value or st_default.max_steps)
+                thinking: Dict[str, Any] = {}
+                if bool(st_enabled.value) != bool(st_default.enabled):
+                    thinking["enabled"] = bool(st_enabled.value)
+                if st_mode.value != st_default.mode:
+                    thinking["mode"] = st_mode.value
+                if steps != st_default.max_steps:
+                    thinking["max_steps"] = steps
+                if bool(st_show.value) != bool(st_default.show_steps):
+                    thinking["show_steps"] = bool(st_show.value)
+                if thinking and bool(st_enabled.value):
+                    # 하위 블록을 만들 거라면 어떤 설정으로 도는지 파일만 보고도
+                    # 알 수 있게 핵심 세 항목을 함께 적어 둡니다.
+                    thinking.setdefault("enabled", True)
+                    thinking.setdefault("mode", st_mode.value)
+                    thinking.setdefault("max_steps", steps)
+
+                chosen = [n for n, box in boxes.items() if box.value]
+                prompt = prompt_in.value or ""
+
+                dialog.close()
+                await self._apply_agent_change(
+                    lambda: add_agent_to_conf_file(
+                        key,
+                        name,
+                        role,
+                        system_prompt=prompt,
+                        allowed_mcp_servers=chosen,
+                        overrides=overrides,
+                        sequential_thinking=thinking,
+                        config_path=self._conf_path(),
+                    ),
+                    f"'{name}' 에이전트를 추가했습니다."
+                    + (f" (도구 {len(chosen)}개)" if chosen else " (도구 없음)"),
+                )
+
+            with ui.row().classes("w-full justify-end gap-2 mt-3"):
+                ui.button("취소", on_click=dialog.close).props("flat color=grey")
+                ui.button("추가", on_click=do_add).props("unelevated color=indigo-6")
+
+        dialog.open()
+
     # ------------------------------------------------------------------ MCP 구성 변경
 
     @staticmethod
@@ -527,7 +1088,12 @@ class AgentRosterControl:
         finally:
             self._dismiss_toast(progress)
             self.refresh_mcp_status()
+            # 풀을 다시 채웠으므로 선택 상태도 지금 있는 에이전트에 맞춥니다.
+            # (에이전트를 추가·삭제한 직후에는 이것이 없으면 방금 사라진 키가
+            # 계속 `active_agents` 에 저장됩니다.)
+            self.sync_agents_with_pool()
             self.refresh_agent_cards()
+            self._update_summary_badge()
             self._refresh_workspace_hint()
 
     async def _on_mcp_toggle(self, server_name: str, enabled: bool) -> None:
@@ -667,14 +1233,18 @@ class AgentRosterControl:
     def sync_agents_with_pool(self) -> None:
         """선택 상태를 지금 풀에 있는 에이전트에 맞춥니다.
 
-        새로 생긴 에이전트는 켠 채로 둡니다 (기존 대화에서도 흐리게 보이지 않도록).
+        새로 생긴 에이전트는 **아직 시작하지 않은 대화에서만** 켠 채로 둡니다.
+        이미 토론이 시작된 대화는 그때의 구성으로 고정된 것이므로, 나중에 추가된
+        에이전트가 슬쩍 끼어들면 안 됩니다 (`_is_selected` 와 같은 규칙).
+
         설정에서 사라진 에이전트는 선택 목록에서도 지웁니다. 남겨 두면 그 키가
         대화의 `active_agents` 에 계속 저장되어, 있지도 않은 에이전트가 기록에
         쌓입니다.
         """
-        live_keys = [agent.key for agent in self.agent_pool.list_all()]
+        live_keys = [agent.key for agent in self._roster_agents()]
+        default = not self.personas_locked
         self.selected_agents = {
-            key: self.selected_agents.get(key, True) for key in live_keys
+            key: self.selected_agents.get(key, default) for key in live_keys
         }
 
     async def _on_reload_conf(self) -> None:
@@ -744,14 +1314,15 @@ class AgentRosterControl:
     def _open_agent_tools_dialog(self, agent_key: str) -> None:
         """이 에이전트가 호출할 수 있는 MCP 서버를 고릅니다.
 
-        페르소나와 헷갈리기 쉽지만 다른 것입니다. 이름·역할·시스템 프롬프트는
-        대화별로 갈리고 첫 발언과 함께 잠기지만, 도구 할당은 conf.toml 이 정본이라
-        모든 대화에 함께 걸립니다. 그래서 잠금 규칙도 MCP 서버 쪽을 따릅니다.
+        도구 할당은 conf.toml 에 저장되어 **아직 시작하지 않은 대화**에 걸립니다.
+        이미 시작한 대화는 첫 발언 때 도구 권한까지 스냅샷으로 굳었으므로 여기서
+        바꿔도 그 대화에는 닿지 않습니다. 그래서 에이전트 추가·삭제와 같은 잠금을
+        씁니다 — 닿지 않는 조작을 열어 두면 바꿨다고 착각하게 됩니다.
         """
-        if self._blocked_by_running_debate():
+        if self._blocked_for_agent_admin():
             return
 
-        agent = self.agent_pool.get(agent_key)
+        agent = next((a for a in self._roster_agents() if a.key == agent_key), None)
         if agent is None:
             ui.notify(f"'{agent_key}' 에이전트를 찾을 수 없습니다.", type="warning", position="bottom-right")
             return
@@ -775,7 +1346,8 @@ class AgentRosterControl:
             ui.label(f"{agent.name} · 도구 할당").classes("text-lg font-bold")
             ui.label(
                 "이 에이전트가 발언 중 호출할 수 있는 MCP 서버입니다. conf.toml 에 저장되어 "
-                "지금 열려 있는 모든 대화와 앞으로 만드는 모든 대화에 함께 적용됩니다."
+                "아직 시작하지 않은 대화와 앞으로 만드는 대화에 적용됩니다. 이미 시작한 "
+                "대화는 그때 굳은 도구 권한을 그대로 씁니다."
             ).classes("text-[11px] text-amber-400 mb-2 leading-snug")
 
             if not configured and not orphans:
@@ -971,7 +1543,10 @@ class AgentRosterControl:
 
     @staticmethod
     def _is_selected(
-        key: str, active_keys: List[str], known_keys: Optional[List[str]]
+        key: str,
+        active_keys: List[str],
+        known_keys: Optional[List[str]],
+        personas_locked: bool = False,
     ) -> bool:
         """이 대화에서 이 에이전트를 켜 둘지.
 
@@ -983,6 +1558,11 @@ class AgentRosterControl:
 
         `known_keys` 는 그 대화의 로스터를 저장할 때 존재하던 에이전트 전부입니다.
         여기에 없는 키는 그 뒤에 추가된 것이므로, 기본값(켜짐)으로 둡니다.
+
+        단 **이미 토론이 시작된 대화**는 예외입니다. 첫 발언과 함께 참여 에이전트와
+        페르소나가 고정되므로, 그 뒤에 conf.toml 에 추가된 에이전트가 저절로
+        끼어들면 앞선 발언과 뒤의 발언이 서로 다른 구성에서 나오게 됩니다. 그런
+        키는 꺼 둔 채로 보여주고, 정말 합류시킬지는 사용자가 정합니다.
         """
         if not active_keys:
             # 로스터가 아예 비어 있는 대화 (예전 기록이나 손상된 행). 켤지 끌지를
@@ -991,7 +1571,9 @@ class AgentRosterControl:
         if key in active_keys:
             return True
         if known_keys:
-            return key not in known_keys          # 저장 이후에 생긴 에이전트
+            if key in known_keys:
+                return False                      # 사용자가 끈 에이전트
+            return not personas_locked            # 저장 이후에 생긴 에이전트
         # 이 컬럼이 생기기 전에 만들어진 대화입니다. 그때 무엇이 있었는지 알 수 없어
         # 둘 중 하나는 틀리는데, 지금 있는 에이전트를 켜는 쪽을 고릅니다. 새 에이전트가
         # 모든 옛 대화에서 꺼져 보이는 것보다, 예전에 꺼 둔 에이전트가 한 번 되살아나고
@@ -999,8 +1581,8 @@ class AgentRosterControl:
         return True
 
     def known_agent_keys(self) -> List[str]:
-        """지금 이 앱이 알고 있는 에이전트 전부 (선택 여부와 무관)."""
-        return [agent.key for agent in self.agent_pool.list_all()]
+        """이 대화가 알고 있는 에이전트 전부 (선택 여부와 무관)."""
+        return [agent.key for agent in self._roster_agents()]
 
     def get_active_agent_keys(self) -> List[str]:
         keys = [k for k, v in self.selected_agents.items() if v]
@@ -1019,16 +1601,21 @@ class AgentRosterControl:
         personas_locked: bool = False,
         personas: Optional[Dict[str, Any]] = None,
         known_keys: Optional[List[str]] = None,
+        session_agents: Optional[List[Agent]] = None,
     ) -> None:
         self.agent_pool = get_agent_pool()
-        for k in self.agent_pool.list_all():
-            self.selected_agents[k.key] = self._is_selected(k.key, active_keys, known_keys)
+        # 잠금 여부와 스냅샷이 선택 규칙과 카드 목록을 함께 정하므로 먼저 반영합니다.
+        self.personas_locked = personas_locked
+        self.set_session_agents(session_agents)
+        self.selected_agents = {
+            agent.key: self._is_selected(agent.key, active_keys, known_keys, personas_locked)
+            for agent in self._roster_agents()
+        }
         self.strategy_name = strategy
         self.max_rounds = max_rounds
         self.custom_instructions = instructions
         self.workspace_dir = workspace_dir or ""
         self.session_id = session_id
-        self.personas_locked = personas_locked
         if personas is not None:
             self.current_personas = personas
 

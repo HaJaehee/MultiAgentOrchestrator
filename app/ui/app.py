@@ -4,6 +4,11 @@ import uuid
 from typing import Any, Dict, List, Optional, Set
 from nicegui import ui
 from sqlalchemy import desc, select
+from app.agents.personas import (
+    effective_personas,
+    resync_agent_configs,
+    session_roster_agents,
+)
 from app.database.models import ArtifactModel, MessageModel, SessionModel
 from app.database.session import get_session_factory
 from app.orchestration.runner import TurnRun, WorkspaceConflictError, get_debate_runner
@@ -229,6 +234,41 @@ def create_ui() -> None:
                     curr.workspace_dir = roster_control.workspace_dir
                     await db.commit()
 
+        async def on_resync_agents() -> None:
+            """잠긴 대화가 굳혀 둔 에이전트 구성을 지금 conf.toml 값으로 다시 맞춥니다.
+
+            대화가 자기완결적이 된 대가입니다. 엔드포인트나 API 키가 바뀌면 옛 대화가
+            죽은 주소를 계속 두드리므로, 인격은 그대로 두고 운영 설정만 다시 굳힙니다.
+            """
+            if not current_session_id:
+                return
+            pool = roster_control.agent_pool
+            async with session_factory() as db:
+                res = await db.execute(
+                    select(SessionModel).where(SessionModel.id == current_session_id)
+                )
+                s_obj = res.scalar_one_or_none()
+                if s_obj is None:
+                    return
+                updated = await resync_agent_configs(db, s_obj, pool)
+                agents = await session_roster_agents(db, s_obj, pool)
+                personas = await effective_personas(db, current_session_id, pool)
+
+            roster_control.set_session_agents(agents)
+            roster_control.refresh_agent_cards(personas)
+            if updated:
+                ui.notify(
+                    f"에이전트 {len(updated)}개의 모델·엔드포인트·도구를 conf.toml 값으로 "
+                    f"갱신했습니다 ({', '.join(sorted(updated))}). 페르소나는 그대로입니다.",
+                    type="positive", position="bottom-right", multi_line=True,
+                )
+            else:
+                ui.notify(
+                    "갱신할 에이전트가 없습니다. 이 대화의 에이전트가 모두 conf.toml 에서 "
+                    "사라졌습니다.",
+                    type="warning", position="bottom-right", multi_line=True,
+                )
+
         async def on_send_message(prompt: str) -> None:
             """토론을 시작하고 이 화면을 붙입니다. 실제 실행은 러너가 맡습니다.
 
@@ -299,7 +339,7 @@ def create_ui() -> None:
         sidebar = SessionSidebar(on_session_selected, on_new_session)
         drawer = sidebar.build_ui()
 
-        roster_control = AgentRosterControl(on_config_changed)
+        roster_control = AgentRosterControl(on_config_changed, on_resync_agents)
         chat_feed = ChatFeed(on_send_message, on_interject=on_interject, on_stop=on_stop)
         artifact_viewer = ArtifactViewer()
 
@@ -369,8 +409,11 @@ def create_ui() -> None:
                 res_s = await db.execute(stmt_s)
                 s_obj = res_s.scalar_one_or_none()
                 if s_obj:
-                    from app.agents.personas import effective_personas
-                    personas = await effective_personas(db, sid, roster_control.agent_pool)
+                    pool = roster_control.agent_pool
+                    personas = await effective_personas(db, sid, pool)
+                    # 잠긴 대화는 잠글 때 굳은 에이전트로 로스터를 그립니다.
+                    # conf.toml 에서 지워진 에이전트도 이 대화에서는 계속 발언합니다.
+                    frozen = await session_roster_agents(db, s_obj, pool)
                     roster_control.load_from_session(
                         active_keys=s_obj.active_agents or [],
                         known_keys=s_obj.known_agents or [],
@@ -381,6 +424,7 @@ def create_ui() -> None:
                         personas_locked=bool(s_obj.personas_locked),
                         personas=personas,
                         workspace_dir=s_obj.workspace_dir or "",
+                        session_agents=frozen,
                     )
 
                 # Load messages

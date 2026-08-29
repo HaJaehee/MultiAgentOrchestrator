@@ -724,9 +724,10 @@ def set_agent_allowed_mcp_servers_in_conf_file(
 ) -> None:
     """[agents.<key>].allowed_mcp_servers 를 통째로 갈아 끼웁니다.
 
-    어떤 에이전트가 어떤 도구를 쓰는지도 배포 설정입니다. 대화별로 갈리고 첫
-    발언과 함께 잠기는 페르소나(이름·역할·시스템 프롬프트)와 달리 conf.toml 이
-    정본이고, 진행 중인 대화를 포함해 모든 대화에 적용됩니다.
+    어떤 에이전트가 어떤 도구를 쓰는지는 배포 설정이라 conf.toml 이 정본입니다.
+    다만 **아직 시작하지 않은 대화**에만 걸립니다. 대화는 첫 발언과 함께 도구
+    권한까지 `session_agents.config_snapshot` 으로 굳으므로, 이미 시작한 대화는
+    여기서 무엇을 바꾸든 그때의 권한을 그대로 씁니다.
     """
     path = Path(config_path)
     if not BARE_KEY_PATTERN.fullmatch(agent_key or ""):
@@ -791,3 +792,309 @@ def remove_mcp_server_from_conf_file(
     path.write_text("".join(remaining), encoding="utf-8")
     reload_config_if_active(path)
 
+
+
+# ---------------------------------------------------------------------------
+# [agents.*] 추가 / 끄기 / 삭제
+#
+# 에이전트 구성도 MCP 서버와 같은 배포 설정입니다. 대화마다 갈리는 페르소나(이름·
+# 역할·시스템 프롬프트)와 달리 conf.toml 이 정본이고, 화면에서 바꾼 것이 다음
+# 기동에서도 살아 있어야 합니다.
+#
+# 화면은 새 에이전트를 만들 때 [llm] 기본값을 미리 채워 보여주지만, **사용자가
+# 실제로 바꾼 값만** 파일에 적습니다. 화면이 보는 값은 이미 환경변수가 풀린
+# 값이라, 그대로 되쓰면 해석된 API 키가 conf.toml 에 평문으로 박히고 .env 를
+# 바꿔도 따라오지 않게 됩니다. 손대지 않은 항목은 아예 적지 않아 [llm] 을 그대로
+# 상속합니다.
+# ---------------------------------------------------------------------------
+
+# 화면에서 채울 수 있고 [llm] 에서 상속되는 항목. 여기 적힌 순서가 파일에 적히는
+# 순서입니다.
+AGENT_OVERRIDE_FIELDS = (
+    "model",
+    "api_base",
+    "api_key",
+    "api_version",
+    "provider",
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "max_context_window",
+    "timeout",
+    "num_retries",
+    "drop_params",
+    "max_tool_iterations",
+)
+
+SEQUENTIAL_THINKING_FIELDS = ("enabled", "mode", "max_steps", "show_steps")
+
+
+def agent_defaults_from_llm(llm: Optional[LLMConfig] = None) -> Dict[str, Any]:
+    """새 에이전트 폼에 미리 채울 값.
+
+    [llm] 에 값이 있으면 그것을, 없으면 `AgentConfig` 의 기본값을 씁니다. 곧
+    "아무것도 적지 않은 에이전트가 실제로 갖게 될 값" 입니다. 이 값과 같은 입력은
+    `prune_agent_overrides()` 가 걷어내어 파일에 적지 않습니다.
+    """
+    source = llm if llm is not None else get_config().llm
+    defaults: Dict[str, Any] = {}
+    for field in AGENT_OVERRIDE_FIELDS:
+        value = getattr(source, field, None)
+        if _is_blank(value):
+            value = AgentConfig.model_fields[field].get_default(call_default_factory=True)
+        defaults[field] = value
+    return defaults
+
+
+def _same_value(a: Any, b: Any) -> bool:
+    """화면 입력값과 기본값이 같은 값인지. 폼은 숫자도 문자열로 돌려줍니다."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return bool(a) is bool(b)
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return float(a) == float(b)
+    return str(a).strip() == str(b).strip()
+
+
+def prune_agent_overrides(
+    values: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """기본값과 같거나 비어 있는 항목을 걷어냅니다.
+
+    남은 것만 [agents.<key>] 에 적히고, 걷어낸 항목은 [llm] 에서 상속됩니다.
+    """
+    defaults = defaults if defaults is not None else agent_defaults_from_llm()
+    pruned: Dict[str, Any] = {}
+    for field in AGENT_OVERRIDE_FIELDS:
+        if field not in values:
+            continue
+        value = values[field]
+        if _is_blank(value):
+            continue  # 빈 칸은 "지정하지 않음" 입니다
+        default = defaults.get(field)
+        if not _is_blank(default) and _same_value(value, default):
+            continue
+        pruned[field] = value
+    return pruned
+
+
+def _toml_multiline_string(value: str) -> str:
+    """줄바꿈이 있으면 여러 줄 문자열로, 아니면 한 줄 문자열로 적습니다."""
+    text = str(value).strip()
+    if "\n" not in text:
+        return _toml_string(text)
+    return '"""' + text.replace('"""', r"\"\"\"") + '"""'
+
+
+def _toml_value(value: Any) -> str:
+    # bool 은 int 의 하위형이라 반드시 먼저 봅니다.
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, str):
+        return _toml_multiline_string(value)
+    if isinstance(value, (list, tuple)):
+        return _toml_array([str(v) for v in value])
+    if isinstance(value, dict):
+        return _toml_inline_table({str(k): str(v) for k, v in value.items()})
+    raise ValueError(f"conf.toml 에 적을 수 없는 값입니다: {value!r}")
+
+
+def _agent_section_header(agent_key: str) -> str:
+    if not BARE_KEY_PATTERN.fullmatch(agent_key or ""):
+        raise ValueError(
+            f"에이전트 키 '{agent_key}' 을 쓸 수 없습니다. "
+            f"영문/숫자/밑줄/하이픈만 쓰고 숫자나 하이픈으로 시작하지 마세요."
+        )
+    return f"[agents.{agent_key}]"
+
+
+def _top_level_headers(lines: List[str]) -> List[str]:
+    """파일에 있는 섹션 헤더 목록. 여러 줄 문자열 안은 건너뜁니다.
+
+    system_prompt 에 `[검토 항목]` 같은 줄이 얼마든지 들어가므로, 그것을 섹션
+    헤더로 세면 안 됩니다 (`_find_toml_section` 과 같은 이유).
+    """
+    headers: List[str] = []
+    state: Optional[str] = None
+    for line in lines:
+        stripped = line.strip()
+        if state is None and stripped.startswith("[") and stripped.endswith("]"):
+            headers.append(stripped)
+        state = _advance_multiline_state(line, state)
+    return headers
+
+
+def _set_key_in_section(
+    lines: List[str], start: int, end: int, key: str, rendered: str
+) -> None:
+    """섹션 안의 `key = ...` 한 줄을 갈아 끼우거나, 없으면 머리에 넣습니다.
+
+    여러 줄 문자열 안은 건너뜁니다. system_prompt 본문에 우연히 `enabled = ...`
+    으로 시작하는 줄이 있어도 그것을 설정값으로 착각하지 않습니다.
+    """
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    state: Optional[str] = None
+    for i in range(start + 1, end):
+        if state is None and pattern.match(lines[i]):
+            lines[i] = f"{key} = {rendered}\n"
+            return
+        state = _advance_multiline_state(lines[i], state)
+    lines.insert(start + 1, f"{key} = {rendered}\n")
+
+
+def add_agent_to_conf_file(
+    agent_key: str,
+    name: str,
+    role: str,
+    system_prompt: str = "",
+    allowed_mcp_servers: Optional[List[str]] = None,
+    overrides: Optional[Dict[str, Any]] = None,
+    sequential_thinking: Optional[Dict[str, Any]] = None,
+    enabled: bool = True,
+    config_path: str | Path = "conf.toml",
+) -> None:
+    """새 [agents.<key>] 섹션을 추가합니다.
+
+    `overrides` 에는 `prune_agent_overrides()` 를 지난 값만 넘기세요. 여기 없는
+    항목은 파일에 적히지 않고 [llm] 에서 상속됩니다.
+
+    마지막 [agents.*] 섹션 바로 뒤에 넣습니다. 파일 끝에 붙여도 TOML 로는 같지만,
+    설정 파일은 사람이 읽는 문서이기도 하므로 같은 무리에 둡니다.
+    """
+    path = Path(config_path)
+    header = _agent_section_header(agent_key)
+
+    name = (name or "").strip()
+    role = (role or "").strip()
+    if not name:
+        raise ValueError("에이전트 이름은 비워 둘 수 없습니다.")
+    if not role:
+        raise ValueError("에이전트 역할은 비워 둘 수 없습니다.")
+
+    servers = [s.strip() for s in (allowed_mcp_servers or []) if s and s.strip()]
+    for server in servers:
+        if not BARE_KEY_PATTERN.fullmatch(server):
+            raise ValueError(f"MCP 서버 이름 '{server}' 을 쓸 수 없습니다.")
+
+    overrides = dict(overrides or {})
+    unknown = [k for k in overrides if k not in AGENT_OVERRIDE_FIELDS]
+    if unknown:
+        raise ValueError(f"모르는 설정 항목입니다: {', '.join(sorted(unknown))}")
+
+    thinking = dict(sequential_thinking or {})
+    unknown_st = [k for k in thinking if k not in SEQUENTIAL_THINKING_FIELDS]
+    if unknown_st:
+        raise ValueError(f"모르는 단계적 사고 항목입니다: {', '.join(sorted(unknown_st))}")
+
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    if _find_toml_section(lines, header)[0] != -1:
+        raise ValueError(f"'{agent_key}' 에이전트가 이미 conf.toml 에 있습니다.")
+
+    block = [
+        f"{header}\n",
+        f"name = {_toml_string(name)}\n",
+        f"role = {_toml_string(role)}\n",
+    ]
+    if not enabled:
+        block.append("enabled = false\n")
+    for field in AGENT_OVERRIDE_FIELDS:
+        if field in overrides:
+            block.append(f"{field} = {_toml_value(overrides[field])}\n")
+    block.append(f"allowed_mcp_servers = {_toml_array(servers)}\n")
+    if (system_prompt or "").strip():
+        block.append(f"system_prompt = {_toml_multiline_string(system_prompt)}\n")
+    if thinking:
+        block.append(f"\n[agents.{agent_key}.sequential_thinking]\n")
+        for field in SEQUENTIAL_THINKING_FIELDS:
+            if field in thinking:
+                block.append(f"{field} = {_toml_value(thinking[field])}\n")
+
+    insert_at = None
+    for existing in _top_level_headers(lines):
+        if not existing.startswith("[agents."):
+            continue
+        _, section_end = _find_toml_section(lines, existing)
+        insert_at = section_end if insert_at is None else max(insert_at, section_end)
+
+    if insert_at is None:
+        # [agents.*] 가 하나도 없는 설정. (오케스트레이터가 없으면 어차피 검증에서
+        # 걸리지만, 파일 편집기로서는 동작해야 합니다.) 파일 끝에 붙입니다.
+        tail = "" if not lines or lines[-1].endswith("\n") else "\n"
+        lines = lines + [tail + "\n"] + block
+    else:
+        lines = lines[:insert_at] + ["\n"] + block + lines[insert_at:]
+
+    path.write_text("".join(lines), encoding="utf-8")
+    reload_config_if_active(path)
+
+
+def set_agent_enabled_in_conf_file(
+    agent_key: str,
+    enabled: bool,
+    config_path: str | Path = "conf.toml",
+) -> None:
+    """[agents.<key>] 의 enabled 값을 바꿉니다.
+
+    끈 에이전트는 풀에 등록되지 않아 어떤 대화에도 참여하지 않습니다. 삭제와 다른
+    점은 설정과 프롬프트가 파일에 그대로 남아 언제든 되살릴 수 있다는 것입니다.
+    """
+    if agent_key == "orchestrator" and not enabled:
+        raise ValueError(
+            "오케스트레이터는 끌 수 없습니다. 토론 진행과 최종 합성을 맡습니다."
+        )
+    path = Path(config_path)
+    header = _agent_section_header(agent_key)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+    start, end = _find_toml_section(lines, header)
+    if start == -1:
+        raise KeyError(f"conf.toml 에 {header} 섹션이 없습니다.")
+
+    _set_key_in_section(lines, start, end, "enabled", "true" if enabled else "false")
+
+    path.write_text("".join(lines), encoding="utf-8")
+    reload_config_if_active(path)
+
+
+def remove_agent_from_conf_file(
+    agent_key: str,
+    config_path: str | Path = "conf.toml",
+) -> None:
+    """[agents.<key>] 와 그 하위 블록([agents.<key>.sequential_thinking] 등)을 지웁니다.
+
+    섹션 위에 붙은 설명 주석은 남깁니다. 사람이 쓴 글을 지우는 것은 되돌릴 수 없기
+    때문입니다 (MCP 서버 삭제와 같은 규칙).
+    """
+    if agent_key == "orchestrator":
+        raise ValueError(
+            "오케스트레이터는 삭제할 수 없습니다. 토론 진행과 최종 합성을 맡습니다."
+        )
+    path = Path(config_path)
+    header = _agent_section_header(agent_key)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+    prefix = f"[agents.{agent_key}."
+    targets = [h for h in _top_level_headers(lines) if h == header or h.startswith(prefix)]
+    if header not in targets:
+        raise KeyError(f"conf.toml 에 {header} 섹션이 없습니다.")
+
+    # 지울 때마다 줄 번호가 밀리므로 대상마다 다시 찾습니다.
+    for target in targets:
+        start, end = _find_toml_section(lines, target)
+        if start == -1:
+            continue
+        lines = lines[:start] + lines[end:]
+
+        # 섹션 앞뒤의 빈 줄이 이어 붙어 두 줄이 되거나, 파일 끝에 빈 줄만 남는
+        # 경우를 정리합니다.
+        while start > 0 and not lines[start - 1].strip() and (
+            start >= len(lines) or not lines[start].strip()
+        ):
+            del lines[start - 1]
+            start -= 1
+
+    path.write_text("".join(lines), encoding="utf-8")
+    reload_config_if_active(path)

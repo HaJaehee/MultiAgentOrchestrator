@@ -1,3 +1,4 @@
+import zlib
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from app.config import AgentConfig, SequentialThinkingConfig
@@ -12,6 +13,29 @@ AGENT_STYLE_MAP: Dict[str, Dict[str, str]] = {
 }
 
 DEFAULT_STYLE = {"avatar": "smart_toy", "color": "primary", "badge_color": "#1976d2"}
+
+# 화면에서 추가한 에이전트는 이 표에 없습니다. 전부 같은 회색 로봇으로 나오면
+# 토론 피드에서 누가 말하는지 색으로 구분할 수 없으므로, 키에서 색을 하나
+# 골라 줍니다. 키가 같으면 언제 어느 프로세스에서 보든 같은 색이어야 해서
+# (파이썬의 문자열 hash 는 실행마다 달라집니다) crc32 를 씁니다.
+CUSTOM_STYLE_PALETTE: List[Dict[str, str]] = [
+    {"avatar": "psychology", "color": "cyan-8", "badge_color": "#0097a7"},
+    {"avatar": "insights", "color": "pink-8", "badge_color": "#c2185b"},
+    {"avatar": "science", "color": "light-green-8", "badge_color": "#689f38"},
+    {"avatar": "travel_explore", "color": "orange-9", "badge_color": "#ef6c00"},
+    {"avatar": "gavel", "color": "brown-7", "badge_color": "#6d4c41"},
+    {"avatar": "diversity_3", "color": "deep-orange-8", "badge_color": "#e64a19"},
+]
+
+
+def style_for_agent(key: str) -> Dict[str, str]:
+    """에이전트 키에 붙는 아바타/색. 표에 없는 키는 팔레트에서 고릅니다."""
+    known = AGENT_STYLE_MAP.get(key)
+    if known is not None:
+        return known
+    if not key:
+        return DEFAULT_STYLE
+    return CUSTOM_STYLE_PALETTE[zlib.crc32(key.encode("utf-8")) % len(CUSTOM_STYLE_PALETTE)]
 
 
 class Agent(BaseModel):
@@ -62,5 +86,5 @@ class Agent(BaseModel):
 
     @classmethod
     def from_config(cls, key: str, cfg: AgentConfig) -> "Agent":
-        style = AGENT_STYLE_MAP.get(key, DEFAULT_STYLE)
+        style = style_for_agent(key)
         return cls(key=key, **cfg.model_dump(), **style)

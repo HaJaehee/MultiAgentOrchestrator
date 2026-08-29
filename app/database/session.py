@@ -16,6 +16,12 @@ _ADDED_COLUMNS = {
         # 지금 있는 에이전트를 모두 새것으로 보고 켜 둡니다.
         "known_agents": "TEXT NOT NULL DEFAULT '[]'",
     },
+    "session_agents": {
+        # NULL 이면 "이 컬럼이 생기기 전에 잠긴 대화" 입니다. 그런 대화는 예전처럼
+        # 살아 있는 conf.toml 을 그대로 씁니다. 빈 JSON 을 기본값으로 넣으면 그
+        # 구분이 사라지므로 nullable 로 둡니다.
+        "config_snapshot": "TEXT",
+    },
 }
 
 _engine: AsyncEngine | None = None

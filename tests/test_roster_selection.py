@@ -18,8 +18,8 @@ from app.ui.components.roster import AgentRosterControl
 FOUR = ["orchestrator", "architect", "coder", "critic"]
 
 
-def selected(key, active, known):
-    return AgentRosterControl._is_selected(key, active, known)
+def selected(key, active, known, locked=False):
+    return AgentRosterControl._is_selected(key, active, known, locked)
 
 
 def test_agent_kept_on_stays_on():
@@ -57,3 +57,26 @@ def test_sessions_older_than_the_record_light_everything_up(key):
 def test_a_session_with_no_roster_at_all_enables_everything():
     assert selected("architect", [], []) is True
     assert selected("architect", [], FOUR) is True
+
+
+# ------------------------------------------------------------- 이미 시작한 대화
+
+def test_a_started_conversation_does_not_pick_up_new_agents():
+    """첫 발언과 함께 참여 에이전트가 고정됩니다.
+
+    그 뒤 conf.toml 에 추가된 에이전트가 저절로 끼어들면, 앞선 발언과 뒤의 발언이
+    서로 다른 구성에서 나오게 되어 기록을 해석할 수 없습니다. 꺼 둔 채로 보여주고
+    정말 합류시킬지는 사용자가 정합니다.
+    """
+    assert selected("researcher", FOUR, FOUR, locked=True) is False
+
+
+def test_a_started_conversation_keeps_the_agents_it_already_had():
+    active = ["orchestrator", "coder", "critic"]      # architect 를 껐다
+    assert selected("coder", active, FOUR, locked=True) is True
+    assert selected("architect", active, FOUR, locked=True) is False
+
+
+def test_the_lock_does_not_change_sessions_older_than_the_record():
+    """`known_agents` 가 없으면 그때 무엇이 있었는지 알 수 없습니다. 규칙은 그대로."""
+    assert selected("researcher", ["orchestrator", "coder"], [], locked=True) is True
