@@ -5,6 +5,7 @@ from nicegui import ui
 from sqlalchemy import desc, select, delete
 from app.database.models import ArtifactModel, MessageModel, SessionModel, ToolCallRecordModel
 from app.database.session import get_session_factory
+from app.export import build_session_markdown, safe_filename
 from app.orchestration.runner import get_debate_runner
 
 logger = logging.getLogger(__name__)
@@ -100,15 +101,11 @@ class SessionSidebar:
                                     # 다른 화면에 있어도 토론은 계속됩니다. 어느 세션이
                                     # 돌고 있는지 목록에서 바로 보이게 합니다.
                                     ui.spinner("dots", size="xs", color="indigo-4")
-                                # 이름 변경은 오른쪽 연필 버튼과 제목 더블클릭 둘 다로 됩니다.
-                                # 버튼은 카드 폭이 좁을 때 눈에 잘 띄지 않습니다.
-                                title_label = ui.label(s.title or "Untitled Debate").classes(
-                                    "text-xs font-semibold truncate"
-                                )
-                                title_label.on(
-                                    "dblclick", lambda _, s_obj=s: self._show_rename_dialog(s_obj)
-                                )
-                                title_label.tooltip("더블클릭하면 이름을 바꿉니다")
+                                # 이름 변경은 오른쪽 연필 버튼으로만 합니다. 제목
+                                # 더블클릭도 달아 봤지만, 첫 클릭이 세션 선택으로
+                                # 이어져 목록이 다시 그려지면서 라벨이 사라지는 탓에
+                                # 두 번째 클릭이 갈 곳이 없었습니다.
+                                ui.label(s.title or "Untitled Debate").classes("text-xs font-semibold truncate")
                             
                             with ui.row().classes("w-full items-center justify-between mt-1 text-xs text-slate-400"):
                                 date_str = s.created_at.strftime("%m-%d %H:%M") if s.created_at else ""
@@ -122,8 +119,15 @@ class SessionSidebar:
                             ui.button(
                                 icon="edit",
                                 on_click=lambda _, s_obj=s: self._show_rename_dialog(s_obj),
-                            ).props("flat round dense size=xs color=grey-4").tooltip("이름 변경 (제목 더블클릭도 같습니다)")
+                            ).props("flat round dense size=xs color=grey-4").tooltip("이름 변경")
                             
+                            ui.button(
+                                icon="save",
+                                on_click=lambda _, sid=s.id: self._save_session_markdown(sid),
+                            ).props("flat round dense size=xs color=teal-4").tooltip(
+                                "이 대화 전체를 마크다운 파일로 저장"
+                            )
+
                             ui.button(
                                 icon="delete",
                                 on_click=lambda _, sid=s.id: self._show_delete_dialog(sid),
@@ -133,6 +137,105 @@ class SessionSidebar:
         self.current_session_id = session_id
         await self.on_session_selected(session_id)
         await self.refresh_list()
+
+    async def _save_session_markdown(self, session_id: str) -> None:
+        """이 대화의 발언·도구 실행·산출물을 마크다운 한 장으로 내려받습니다.
+
+        진행 중인 토론도 그대로 저장할 수 있습니다. 발언은 하나 끝날 때마다 DB 에
+        기록되므로, 그 시점까지의 기록이 담깁니다.
+        """
+        try:
+            async with self.session_factory() as db:
+                res = await db.execute(select(SessionModel).where(SessionModel.id == session_id))
+                session_obj = res.scalar_one_or_none()
+                if session_obj is None:
+                    ui.notify("세션을 찾을 수 없습니다.", type="warning", position="bottom-right")
+                    return
+
+                session_data = {
+                    "title": session_obj.title,
+                    "strategy": session_obj.strategy,
+                    "max_rounds": session_obj.max_rounds,
+                    "active_agents": session_obj.active_agents or [],
+                    "custom_instructions": session_obj.custom_instructions or "",
+                    "workspace_dir": session_obj.workspace_dir or "",
+                    "created_at": session_obj.created_at,
+                    "updated_at": session_obj.updated_at,
+                }
+
+                res_m = await db.execute(
+                    select(MessageModel)
+                    .where(MessageModel.session_id == session_id)
+                    .order_by(MessageModel.created_at)
+                )
+                messages = [
+                    {
+                        "id": m.id,
+                        "sender_key": m.sender_key,
+                        "sender_name": m.sender_name,
+                        "sender_role": m.sender_role,
+                        "content": m.content,
+                        "round_number": m.round_number,
+                        "msg_type": m.msg_type,
+                        "created_at": m.created_at,
+                        "tool_calls": [
+                            {
+                                "tool_name": tc.tool_name,
+                                "arguments": tc.arguments,
+                                "output": tc.output,
+                                "status": tc.status,
+                                "created_at": tc.created_at,
+                            }
+                            for tc in (m.tool_calls or [])
+                        ],
+                    }
+                    for m in res_m.scalars().all()
+                ]
+
+                res_t = await db.execute(
+                    select(ToolCallRecordModel)
+                    .where(ToolCallRecordModel.session_id == session_id)
+                    .order_by(ToolCallRecordModel.created_at)
+                )
+                tool_calls = [
+                    {
+                        "message_id": tc.message_id,
+                        "agent_key": tc.agent_key,
+                        "tool_name": tc.tool_name,
+                        "arguments": tc.arguments,
+                        "output": tc.output,
+                        "status": tc.status,
+                        "created_at": tc.created_at,
+                    }
+                    for tc in res_t.scalars().all()
+                ]
+
+                res_a = await db.execute(
+                    select(ArtifactModel)
+                    .where(ArtifactModel.session_id == session_id)
+                    .order_by(ArtifactModel.created_at)
+                )
+                artifacts = [
+                    {
+                        "artifact_type": a.artifact_type,
+                        "title": a.title,
+                        "content": a.content,
+                        "language": a.language,
+                    }
+                    for a in res_a.scalars().all()
+                ]
+        except Exception as e:  # noqa: BLE001 - 저장 실패가 화면을 죽이면 안 됩니다
+            logger.error(f"Could not export session {session_id}: {e}", exc_info=True)
+            ui.notify(f"대화를 불러오지 못했습니다: {e}", type="negative", position="bottom-right")
+            return
+
+        markdown = build_session_markdown(session_data, messages, artifacts, tool_calls)
+        filename = safe_filename(session_data["title"], session_data.get("created_at"))
+        ui.download(markdown.encode("utf-8"), filename)
+        ui.notify(
+            f"'{filename}' 저장을 시작했습니다 (발언 {len(messages)}건).",
+            type="positive", position="bottom-right",
+        )
 
     def _show_rename_dialog(self, session_obj: SessionModel) -> None:
         with ui.dialog() as dialog, ui.card().classes("p-4 w-96 bg-slate-900 text-white border border-slate-700"):

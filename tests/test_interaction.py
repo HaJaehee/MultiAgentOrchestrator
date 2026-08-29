@@ -202,6 +202,71 @@ async def test_runner_queues_interjections_and_tells_the_screens():
     )
 
 
+@pytest.mark.asyncio
+async def test_interjection_arriving_during_synthesis_is_kept_not_dropped():
+    """합성이 시작된 뒤에 도착한 개입은 이번 턴에 실을 자리가 없습니다.
+
+    그대로 버리면 화면은 "다음 발언 차례에 반영됩니다" 라고 알린 채 턴이 끝납니다.
+    기록에 남겨 두면 다음 턴이 맥락으로 읽어 갑니다.
+    """
+    sid = await _make_session(max_rounds=1)
+    control = TurnControl()
+
+    class SynthesisHook(FakeLLMCaller):
+        async def call_agent(self, agent, messages, *args, **kwargs):
+            last = messages[-1]["content"] if messages else ""
+            if "최종 합의 보고서" in last:
+                control.add_note("합성 중에 도착한 개입")
+            return await super().call_agent(agent, messages, *args, **kwargs)
+
+    events: List[Dict[str, Any]] = []
+
+    async def on_event(event):
+        events.append(event)
+
+    state = await _engine(llm_caller=SynthesisHook()).run_turn(
+        session_id=sid, user_prompt="설계해줘", on_event=on_event, control=control
+    )
+
+    assert state.interjection_count == 1
+    assert control.pending_notes == [], "대기열에 남겨 두면 영영 반영되지 않습니다"
+    # 합성 발언 뒤에 유저 발언으로 붙습니다.
+    assert state.messages[-1].sender_key == "user"
+    assert "합성 중에 도착한 개입" in state.messages[-1].content
+    # 화면에 사실대로 알립니다.
+    deferred = [e for e in events if e["type"] == "interjections_deferred"]
+    assert deferred and deferred[0]["count"] == 1
+
+    # 다음 턴이 읽을 수 있도록 DB 에도 남습니다.
+    async with get_session_factory()() as db:
+        res = await db.execute(
+            select(MessageModel).where(
+                MessageModel.session_id == sid, MessageModel.sender_key == "user"
+            )
+        )
+        assert any("합성 중에 도착한 개입" in m.content for m in res.scalars().all())
+
+
+@pytest.mark.asyncio
+async def test_interjection_during_synthesis_is_announced_as_deferred():
+    """대기 알림도 사실대로 나가야 합니다 (이번 턴이 아니라 다음 요청부터)."""
+    sid = await _make_session(max_rounds=1)
+    runner = DebateRunner(_engine(llm_caller=FakeLLMCaller()))
+    run = runner.start(sid, "설계해줘")
+    queue = run.subscribe()
+
+    run.apply({"type": "status_changed", "status": "synthesizing", "speaker": "Orchestrator"})
+    assert run.interject("합성 중 개입") is True
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    queued = [e for e in events if e["type"] == "interjection_queued"]
+    assert queued and queued[-1]["deferred"] is True
+
+    await run.task
+
+
 # --------------------------------------------------------------- 잠금 창
 
 

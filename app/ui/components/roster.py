@@ -20,6 +20,11 @@ from app.orchestration.strategies import STRATEGY_MAP
 
 logger = logging.getLogger(__name__)
 
+# 진행 토스트가 스스로 사라지는 시간(초). 서버 재기동은 보통 2~6초면 끝나므로
+# 그 뒤에는 결과 토스트가 대신 말해 줍니다. 사라지는 것을 보장하는 것은 이 값이고,
+# 작업이 끝났을 때 부르는 dismiss() 는 더 일찍 치우기 위한 것입니다.
+PROGRESS_TOAST_TIMEOUT = 8
+
 
 class AgentRosterControl:
     """Agent selection cards and debate control panel (rounds, strategy, instructions)."""
@@ -488,8 +493,10 @@ class AgentRosterControl:
             if self.mcp_add_btn and not self.mcp_add_btn.is_deleted and not self.mcp_locked:
                 self.mcp_add_btn.enable()
 
-        if restart_servers:
-            ui.notify("MCP 서버를 다시 띄우는 중입니다...", type="ongoing", position="bottom-right")
+        # `type="ongoing"` 은 타임아웃이 없어, 뒷일이 끝나기 전에 화면이 사라지면
+        # 토스트가 영영 남습니다. 손잡이를 들고 있다가 직접 치우고, 그마저 못 하는
+        # 경우를 대비해 제한 시간도 둡니다.
+        progress = self._progress_toast("MCP 서버를 다시 띄우는 중입니다...") if restart_servers else None
         try:
             if restart_servers:
                 await get_mcp_manager().reload_from_config()
@@ -503,6 +510,7 @@ class AgentRosterControl:
                 type="negative", position="bottom-right",
             )
         finally:
+            self._dismiss_toast(progress)
             self.refresh_mcp_status()
             self.refresh_agent_cards()
             self._refresh_workspace_hint()
@@ -716,12 +724,53 @@ class AgentRosterControl:
 
         dialog.open()
 
+    def _progress_toast(self, message: str):
+        """스스로 사라질 줄 아는 진행 토스트.
+
+        예전에는 `type="ongoing"` 이라 제한 시간이 아예 없었습니다. 뒷일이 끝나기
+        전에 화면이 갱신되거나 이벤트가 오지 않으면 토스트만 영영 남았습니다.
+
+        이제는 제한 시간이 사라짐을 보장하고, 작업이 끝나면 `_dismiss_toast()` 가
+        그보다 일찍 치웁니다. 사용자가 직접 닫을 수도 있습니다.
+
+        토스트 엘리먼트는 **다시 그려지지 않는 슬롯**(로스터 루트)에 답니다. MCP 칩
+        줄 안에서 만들면, 작업이 끝나고 그 줄을 다시 그릴 때 엘리먼트가 지워집니다.
+        그러면 `dismiss()` 가 닿을 곳이 없어지고, 화면의 Quasar 토스트는 자기 포털에
+        그대로 남습니다.
+        """
+        try:
+            # `type="ongoing"` 은 쓰지 않습니다. Quasar 의 그 프리셋이 timeout 을 0 으로
+            # 잡아 두어, 여기서 제한 시간을 줘도 무엇이 이기는지가 버전에 달립니다.
+            # 스피너만 직접 켜면 모양은 같고 사라지는 것은 확실합니다.
+            def _make():
+                return ui.notification(
+                    message, spinner=True, timeout=PROGRESS_TOAST_TIMEOUT,
+                    close_button=True, position="bottom-right",
+                )
+
+            if self.expansion is not None and not self.expansion.is_deleted:
+                with self.expansion:
+                    return _make()
+            return _make()
+        except Exception as e:  # noqa: BLE001 - 알림을 못 띄운다고 작업을 막지 않습니다
+            logger.debug(f"Could not show a progress toast: {e}")
+            return None
+
+    @staticmethod
+    def _dismiss_toast(toast) -> None:
+        if toast is None:
+            return
+        try:
+            toast.dismiss()
+        except Exception as e:  # noqa: BLE001 - 이미 사라진 토스트일 수 있습니다
+            logger.debug(f"Could not dismiss a progress toast: {e}")
+
     async def _on_mcp_reconnect(self) -> None:
         """연결되지 않은 MCP 서버를 다시 띄웁니다."""
         if self.mcp_reconnect_btn:
             self.mcp_reconnect_btn.disable()
+        progress = self._progress_toast("MCP 서버 재연결을 시도합니다...")
         try:
-            ui.notify("MCP 서버 재연결을 시도합니다...", type="ongoing", position="bottom-right")
             changed = await get_mcp_manager().reconnect()
             self.refresh_mcp_status()
             if changed:
@@ -733,6 +782,7 @@ class AgentRosterControl:
             logger.error(f"MCP reconnect failed: {e}")
             ui.notify(f"재연결 중 오류: {e}", type="negative", position="bottom-right")
         finally:
+            self._dismiss_toast(progress)
             if self.mcp_reconnect_btn:
                 self.mcp_reconnect_btn.enable()
 

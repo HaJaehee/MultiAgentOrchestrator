@@ -563,6 +563,16 @@ class OrchestratorEngine:
 
             await db.commit()
 
+            # 합성이 시작된 뒤에 도착한 개입은 이번 턴에 실을 자리가 없습니다.
+            # 그대로 버리면 화면은 "다음 발언 차례에 반영됩니다" 라고 알린 채 턴이
+            # 끝나 버립니다. 기록에 남겨 두면 다음 턴이 맥락으로 읽어 갑니다.
+            deferred = await self._apply_interjections(
+                db=db, state=state, control=control,
+                round_number=state.current_round + 1, on_event=on_event,
+            )
+            if deferred and on_event:
+                await on_event({"type": "interjections_deferred", "count": deferred})
+
             state.status = "completed"
             # 사용자가 도중에 끊었다면 합의에 이른 것이 아닙니다.
             state.is_consensus_reached = not state.failed_agent_keys and not state.stopped_early

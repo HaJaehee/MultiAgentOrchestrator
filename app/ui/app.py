@@ -86,9 +86,27 @@ def create_ui() -> None:
                 )
             elif etype == "interjection_queued":
                 pending = event.get("pending", 0)
+                if event.get("deferred"):
+                    # 합성이 시작된 뒤에는 이번 턴에 실을 자리가 없습니다.
+                    # "다음 발언 차례에 반영" 이라고 알려 놓고 조용히 버리면 안 됩니다.
+                    ui.notify(
+                        "최종 합성이 이미 시작되어 이번 턴에는 반영되지 않습니다. "
+                        "기록에는 남고 다음 요청부터 반영됩니다.",
+                        type="warning",
+                        position="bottom-right",
+                    )
+                else:
+                    ui.notify(
+                        f"개입 메시지를 전달했습니다 (대기 {pending}건). 다음 발언 차례에 반영됩니다.",
+                        type="info",
+                        position="bottom-right",
+                    )
+            elif etype == "interjections_deferred":
+                count = event.get("count", 0)
                 ui.notify(
-                    f"개입 메시지를 전달했습니다 (대기 {pending}건). 다음 발언 차례에 반영됩니다.",
-                    type="info",
+                    f"개입 {count}건은 합성 이후에 도착해 이번 턴에 반영되지 못했습니다. "
+                    f"기록에 남겨 두었으니 다음 요청에서 이어집니다.",
+                    type="warning",
                     position="bottom-right",
                 )
             elif etype == "turn_completed":

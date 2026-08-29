@@ -156,7 +156,8 @@ class ArtifactViewer:
                 error_box.set_visibility(True)
 
             try:
-                diagram = ui.mermaid(content).classes("w-full")
+                # 밝은 판 위에 올립니다 (theme.py 의 .mado-mermaid).
+                diagram = ui.mermaid(content).classes("w-full mado-mermaid")
                 diagram.on("error", on_error)
             except Exception as exc:  # noqa: BLE001 - 문법 오류로 뷰어가 죽으면 안 됩니다
                 logger.warning(f"Mermaid rendering failed: {exc}")

@@ -68,6 +68,9 @@ class TurnRun:
 
         # 사람이 이 턴에 끼어드는 통로. 엔진이 발언 사이마다 꺼내 봅니다.
         self.control = TurnControl()
+        # 지금 어느 단계인지. 최종 합성에 들어간 뒤로는 개입을 실을 자리가 없어,
+        # 화면에 "이번 턴에는 반영되지 않는다" 고 정확히 알려야 합니다.
+        self.phase: str = "planning"
 
     # -------------------------------------------------- 구독
 
@@ -122,6 +125,9 @@ class TurnRun:
             "type": "interjection_queued",
             "text": text.strip(),
             "pending": len(self.control.pending_notes),
+            # 합성 중에 들어온 것은 이번 턴의 발언에 실리지 못하고, 기록에만 남아
+            # 다음 요청의 맥락이 됩니다.
+            "deferred": self.phase == "synthesizing",
         })
         return True
 
@@ -144,6 +150,8 @@ class TurnRun:
             speaker = event.get("speaker", "")
             status = event.get("status", "")
             round_num = event.get("round", "")
+            if status:
+                self.phase = status
             self.busy = True
             label = f"[{speaker}] 발언 및 분석 중..." if speaker else f"상태: {status}"
             self.status_text = self._pending_prefix(label)
@@ -183,8 +191,19 @@ class TurnRun:
 
         elif etype == "interjection_queued":
             pending = event.get("pending", 0)
-            self.status_text = self._pending_prefix(
-                f"사용자 개입 {pending}건 대기 — 다음 발언 차례에 반영됩니다."
+            if event.get("deferred"):
+                self.status_text = self._pending_prefix(
+                    f"사용자 개입 {pending}건 — 최종 합성 중이라 다음 요청부터 반영됩니다."
+                )
+            else:
+                self.status_text = self._pending_prefix(
+                    f"사용자 개입 {pending}건 대기 — 다음 발언 차례에 반영됩니다."
+                )
+
+        elif etype == "interjections_deferred":
+            count = event.get("count", 0)
+            self.status_text = (
+                f"개입 {count}건은 합성 이후에 도착해 기록에만 남았습니다 (다음 요청에 반영)."
             )
 
         elif etype == "artifacts_synthesized":

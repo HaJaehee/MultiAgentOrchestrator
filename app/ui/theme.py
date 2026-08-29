@@ -49,6 +49,63 @@ body {
     overflow-y: auto;
 }
 
+/* --- 마크다운 제목 크기 ------------------------------------------------
+   NiceGUI 에는 Tailwind typography(prose) 가 실려 있지 않아, 마크다운 제목이
+   브라우저 기본값으로 나옵니다 (본문 14px 인 카드 안에서 h1 32px, h3 30px).
+   제목 한 줄이 카드를 다 차지하므로 본문에 비례하는 크기로 다시 잡습니다.
+   em 단위라 채팅 카드(14px)와 산출물 뷰어(12px) 양쪽에서 함께 줄어듭니다. */
+.nicegui-markdown h1,
+.nicegui-markdown h2,
+.nicegui-markdown h3,
+.nicegui-markdown h4,
+.nicegui-markdown h5,
+.nicegui-markdown h6 {
+    font-weight: 700;
+    line-height: 1.35;
+    margin: 0.9em 0 0.4em;
+    color: #e2e8f0;
+}
+.nicegui-markdown h1 { font-size: 1.35em; }
+.nicegui-markdown h2 { font-size: 1.2em; }
+.nicegui-markdown h3 { font-size: 1.08em; }
+.nicegui-markdown h4 { font-size: 1em; }
+.nicegui-markdown h5,
+.nicegui-markdown h6 { font-size: 0.95em; color: #cbd5e1; }
+
+/* 첫 줄이 제목이면 위 여백이 카드 안에서 떠 보입니다. */
+.nicegui-markdown > :first-child { margin-top: 0; }
+
+/* 크기를 줄인 만큼 구분은 밑줄이 대신합니다. */
+.nicegui-markdown h1,
+.nicegui-markdown h2 {
+    border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+    padding-bottom: 0.22em;
+}
+
+.nicegui-markdown p { margin: 0.5em 0; }
+.nicegui-markdown ul,
+.nicegui-markdown ol { margin: 0.5em 0; padding-left: 1.35em; }
+.nicegui-markdown li { margin: 0.2em 0; }
+
+/* --- Mermaid 다이어그램 --------------------------------------------------
+   Mermaid 는 밝은 배경을 전제로 그립니다. 화살표와 글자가 검은색이라 어두운
+   카드 위에 그대로 올리면 선이 배경에 묻혀 보이지 않습니다. 주변은 어두운
+   테마 그대로 두고 다이어그램만 밝은 판 위에 올립니다. */
+.mado-mermaid,
+.nicegui-mermaid {
+    background: #f8fafc;
+    color: #0f172a;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 14px;
+    overflow-x: auto;
+}
+.mado-mermaid svg,
+.nicegui-mermaid svg {
+    max-width: 100%;
+    height: auto;
+}
+
 /* Custom Scrollbars */
 ::-webkit-scrollbar {
     width: 6px;
