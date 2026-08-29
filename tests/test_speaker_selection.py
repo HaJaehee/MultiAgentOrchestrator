@@ -221,7 +221,7 @@ async def test_the_other_strategies_never_ask():
     sid = f"noselect-{uuid.uuid4().hex[:8]}"
     async with factory() as db:
         db.add(SessionModel(
-            id=sid, title="자유 토론", strategy="free_debate",
+            id=sid, title="순차 토론", strategy="sequential_debate",
             max_rounds=1, active_agents=list(ROSTER),
         ))
         await db.commit()

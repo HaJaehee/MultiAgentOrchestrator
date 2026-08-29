@@ -52,7 +52,7 @@ flowchart TD
 
 ### Phase 2: Multi-Round Specialist Debate Loop
 For each round $r \in [1, \text{max\_rounds}]$:
-1. The active strategy (e.g. `sequential_review`) determines the speaker order.
+1. The active strategy (e.g. `sequential_debate`) determines the speaker order. Under `orchestrator_led` the orchestrator is asked, each round, which agents should speak.
 2. For each agent in the speaker list:
    - [`_build_context_for_agent()`](file:///d:/MultiAgentOrchestrator/app/orchestration/engine.py#L330-L352) constructs a structured discussion transcript labeled by speaker name and role, including past user questions (`[User]: ...`) and prior agent remarks to guarantee full conversation continuity.
    - The engine emits `message_stream_start` and streams response tokens via `message_stream_chunk` events in real time.

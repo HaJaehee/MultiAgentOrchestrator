@@ -25,7 +25,7 @@ class DebateMessage(BaseModel):
 class DebateState(BaseModel):
     session_id: str
     user_prompt: str
-    strategy: str = "free_debate"
+    strategy: str = "sequential_debate"
     max_rounds: int = 3
     current_round: int = 0
     custom_instructions: str = ""

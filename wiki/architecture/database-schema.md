@@ -17,7 +17,7 @@ erDiagram
     sessions {
         string id PK "UUID4"
         string title "Session Name"
-        string strategy "free_debate | sequential_review | adversarial_debate"
+        string strategy "sequential_debate | adversarial_debate | orchestrator_led"
         integer max_rounds "Max debate rounds"
         json active_agents "List of participating agent keys"
         text custom_instructions "Session-specific prompt additions"
@@ -83,7 +83,7 @@ Represents a single multi-agent collaboration workspace or discussion thread.
 | :--- | :--- | :--- | :--- | :--- |
 | `id` | `VARCHAR(36)` | No | `uuid4()` | Primary key. |
 | `title` | `VARCHAR(255)` | No | `'New Debate Session'` | Session title displayed in the sidebar. Defaults to first prompt snippet. |
-| `strategy` | `VARCHAR(50)` | No | `'free_debate'` | Selected debate strategy (`free_debate`, `sequential_review`, `adversarial_debate`). |
+| `strategy` | `VARCHAR(50)` | No | `'sequential_debate'` | Selected debate strategy (`sequential_debate`, `adversarial_debate`, `orchestrator_led`). Rows saved under the retired `free_debate` / `sequential_review` names are mapped to `sequential_debate` on read by `resolve_strategy_name()`. |
 | `max_rounds` | `INTEGER` | No | `3` | Maximum specialist debate rounds per user turn. |
 | `active_agents` | `JSON` | No | `[]` | Array of agent keys participating in this session. |
 | `custom_instructions` | `TEXT` | No | `''` | User-defined custom instructions injected into every agent prompt. |

@@ -12,6 +12,7 @@ from app.agents.personas import (
 from app.database.models import ArtifactModel, MessageModel, SessionModel
 from app.database.session import get_session_factory
 from app.orchestration.runner import TurnRun, WorkspaceConflictError, get_debate_runner
+from app.orchestration.strategies import resolve_strategy_name
 from app.ui.components.artifact_viewer import ArtifactViewer
 from app.ui.components.chat_feed import ChatFeed, clip_tool_output
 from app.ui.components.roster import AgentRosterControl
@@ -417,7 +418,7 @@ def create_ui() -> None:
                     roster_control.load_from_session(
                         active_keys=s_obj.active_agents or [],
                         known_keys=s_obj.known_agents or [],
-                        strategy=s_obj.strategy or "free_debate",
+                        strategy=resolve_strategy_name(s_obj.strategy),
                         max_rounds=s_obj.max_rounds or 3,
                         instructions=s_obj.custom_instructions or "",
                         session_id=sid,

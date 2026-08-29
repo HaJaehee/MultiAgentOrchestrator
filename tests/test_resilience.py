@@ -53,7 +53,7 @@ async def _make_session(**kwargs) -> str:
         db.add(SessionModel(
             id=sid,
             title="Resilience",
-            strategy=kwargs.get("strategy", "sequential_review"),
+            strategy=kwargs.get("strategy", "sequential_debate"),
             max_rounds=kwargs.get("max_rounds", 1),
             active_agents=["orchestrator", "architect", "coder", "critic"],
         ))

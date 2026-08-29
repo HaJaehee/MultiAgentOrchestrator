@@ -9,8 +9,8 @@ from tests.fake_llm import FakeLLMCaller
 from app.orchestration.strategies import (
     STRATEGY_MAP,
     AdversarialDebateStrategy,
-    FreeDebateStrategy,
-    SequentialReviewStrategy,
+    SequentialDebateStrategy,
+    resolve_strategy_name,
 )
 
 
@@ -49,9 +49,8 @@ def test_speaking_order_follows_debate_priority_not_the_agent_key():
     agents[1].debate_priority = 40   # architect
     agents[3].debate_priority = 20   # critic
 
-    for strategy in (FreeDebateStrategy(), SequentialReviewStrategy()):
-        speakers = strategy.get_speakers_for_round(agents, 1, state)
-        assert [s.key for s in speakers] == ["critic", "coder", "architect"], strategy.name
+    speakers = SequentialDebateStrategy().get_speakers_for_round(agents, 1, state)
+    assert [s.key for s in speakers] == ["critic", "coder", "architect"]
 
 
 def test_a_newly_added_agent_can_speak_first():
@@ -60,7 +59,7 @@ def test_a_newly_added_agent_can_speak_first():
     agents = _roster()
     agents.append(Agent(key="data_analyst", name="Analyst", role="Data", debate_priority=5))
 
-    speakers = SequentialReviewStrategy().get_speakers_for_round(agents, 1, state)
+    speakers = SequentialDebateStrategy().get_speakers_for_round(agents, 1, state)
     assert speakers[0].key == "data_analyst"
 
 
@@ -73,7 +72,7 @@ def test_agents_without_an_explicit_priority_keep_the_conf_toml_order():
         Agent(key="alpha", name="Alpha", role="A"),
     ]
 
-    speakers = FreeDebateStrategy().get_speakers_for_round(agents, 1, state)
+    speakers = SequentialDebateStrategy().get_speakers_for_round(agents, 1, state)
     assert [s.key for s in speakers] == ["zeta", "alpha"], "알파벳순이 아니라 파일 순서"
 
 
@@ -105,29 +104,40 @@ def test_the_debate_strategy_falls_back_when_one_side_is_empty():
     assert [s.key for s in speakers] == ["architect", "coder", "critic"]
 
 
-def test_sequential_review_is_not_just_free_debate_with_a_different_order():
-    """두 전략의 순서는 같습니다. 다른 것은 발언 차례에 붙는 지침입니다.
-
-    이 지침이 없으면 두 전략은 완전히 같은 것이 됩니다.
-    """
+def test_sequential_debate_hands_the_baton_over_by_name():
+    """순서만으로는 라운드가 독백 셋이 됩니다. 인수인계는 지침이 만듭니다."""
     state = DebateState(session_id="test-1", user_prompt="Build App")
-    agents = _roster()
-    speakers = SequentialReviewStrategy().get_speakers_for_round(agents, 1, state)
+    strategy = SequentialDebateStrategy()
+    speakers = strategy.get_speakers_for_round(_roster(), 1, state)
 
-    assert FreeDebateStrategy().turn_instruction(speakers[1], speakers, 1, state) == ""
-
-    first = SequentialReviewStrategy().turn_instruction(speakers[0], speakers, 0, state)
-    middle = SequentialReviewStrategy().turn_instruction(speakers[1], speakers, 1, state)
-    last = SequentialReviewStrategy().turn_instruction(speakers[2], speakers, 2, state)
+    first = strategy.turn_instruction(speakers[0], speakers, 0, state)
+    middle = strategy.turn_instruction(speakers[1], speakers, 1, state)
+    last = strategy.turn_instruction(speakers[2], speakers, 2, state)
 
     assert "첫 순서" in first
     assert speakers[0].name in middle, "직전 발언자를 이름으로 가리킵니다"
+    assert speakers[1].name in last
     assert "마지막 순서" in last
+
+
+def test_conversations_saved_under_the_old_strategy_names_still_run():
+    """자유 토론과 순차 검증은 같은 순서로 같은 사람을 부르게 되어 하나로 합쳤습니다.
+
+    `sessions.strategy` 는 문자열이라, 이미 저장된 대화가 예전 이름을 들고 있습니다.
+    받아 주지 않으면 그 대화들이 전략을 잃습니다.
+    """
+    assert resolve_strategy_name("free_debate") == "sequential_debate"
+    assert resolve_strategy_name("sequential_review") == "sequential_debate"
+    # 지금 쓰는 이름은 그대로, 모르는 이름은 기본값으로.
+    assert resolve_strategy_name("adversarial_debate") == "adversarial_debate"
+    assert resolve_strategy_name("orchestrator_led") == "orchestrator_led"
+    assert resolve_strategy_name(None) == "sequential_debate"
+    assert resolve_strategy_name("무엇이든") == "sequential_debate"
 
 
 def test_only_the_orchestrator_led_strategy_asks_the_llm():
     assert STRATEGY_MAP["orchestrator_led"].orchestrator_selects_speakers is True
-    for name in ("free_debate", "sequential_review", "adversarial_debate"):
+    for name in ("sequential_debate", "adversarial_debate"):
         assert STRATEGY_MAP[name].orchestrator_selects_speakers is False, name
 
 
@@ -144,7 +154,7 @@ async def test_orchestrator_engine_turn_e2e():
         session = SessionModel(
             id=sid,
             title="E2E Microservice Architecture",
-            strategy="sequential_review",
+            strategy="sequential_debate",
             max_rounds=1,
             active_agents=["orchestrator", "architect", "coder", "critic"],
         )

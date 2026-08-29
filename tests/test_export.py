@@ -15,6 +15,7 @@ from app.export import build_session_markdown, safe_filename
 
 SESSION = {
     "title": "분산 캐시 설계",
+    # 일부러 옛 이름입니다. 이미 저장된 대화가 이 값을 들고 있습니다.
     "strategy": "sequential_review",
     "max_rounds": 2,
     "active_agents": ["orchestrator", "architect"],
@@ -45,7 +46,10 @@ def test_document_carries_the_whole_conversation():
     md = build_session_markdown(SESSION, MESSAGES, artifacts=[], tool_calls=[])
 
     assert md.startswith("# 분산 캐시 설계")
-    assert "sequential_review" in md
+    # 저장된 키가 아니라 지금 이 대화가 실제로 도는 전략의 이름이 적힙니다.
+    # (자유 토론·순차 검증은 순차 토론 하나로 합쳐졌습니다.)
+    assert "순차 토론" in md
+    assert "sequential_review" not in md
     assert "비동기 파이썬 기준으로 작성" in md
     # 라운드별로 묶입니다.
     assert "### 준비 및 계획" in md

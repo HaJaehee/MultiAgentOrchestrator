@@ -72,7 +72,7 @@ flowchart LR
   {
     "session_id": "9efca23a-f10d-45db-90cf-195b6cfa4521",
     "goal": "Design a real-time event streaming pipeline...",
-    "strategy": "sequential_review",
+    "strategy": "sequential_debate",
     "total_rounds": 3,
     "participating_agents": ["orchestrator", "architect", "coder", "critic"],
     "total_messages": 11,

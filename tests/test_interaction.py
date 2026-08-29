@@ -56,7 +56,7 @@ def _contains(prompt: List[Dict[str, Any]], needle: str) -> bool:
 @pytest.mark.asyncio
 async def test_stop_request_skips_remaining_rounds_but_still_synthesizes():
     """정지 요청은 토론을 죽이는 대신 합성으로 건너뜁니다."""
-    sid = await _make_session(max_rounds=3, strategy="sequential_review")
+    sid = await _make_session(max_rounds=3, strategy="sequential_debate")
 
     holder: Dict[str, Any] = {}
     caller = HookedCaller(after="architect", hook=lambda: holder["run"].request_stop())
@@ -87,7 +87,7 @@ async def test_stopped_synthesis_prompt_admits_the_debate_was_cut_short():
 
     이 문구가 없으면 오케스트레이터가 열리지도 않은 라운드의 결론을 지어냅니다.
     """
-    sid = await _make_session(max_rounds=3, strategy="sequential_review")
+    sid = await _make_session(max_rounds=3, strategy="sequential_debate")
 
     control = TurnControl()
     caller = HookedCaller(after="architect", hook=control.request_stop)
@@ -142,7 +142,7 @@ async def test_stop_is_inert_once_the_turn_is_over():
 @pytest.mark.asyncio
 async def test_interjection_reaches_the_next_speaker_but_not_the_previous_one():
     """개입은 다음 발언자의 맥락에 실립니다. 이미 끝난 발언은 건드리지 않습니다."""
-    sid = await _make_session(max_rounds=1, strategy="sequential_review")
+    sid = await _make_session(max_rounds=1, strategy="sequential_debate")
 
     control = TurnControl()
     caller = HookedCaller(
@@ -292,7 +292,7 @@ async def test_running_sessions_marks_the_window_where_mcp_config_is_locked():
 @pytest.mark.asyncio
 async def test_stopped_debate_also_releases_the_lock():
     """사용자가 정지시킨 토론도 합성까지 마친 뒤 잠금을 풉니다."""
-    sid = await _make_session(max_rounds=3, strategy="sequential_review")
+    sid = await _make_session(max_rounds=3, strategy="sequential_debate")
 
     holder: Dict[str, Any] = {}
     caller = HookedCaller(after="architect", hook=lambda: holder["run"].request_stop())

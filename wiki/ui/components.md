@@ -48,7 +48,8 @@ The web application workspace is organized into four primary UI components in [a
 - **Agent Toggle Cards**: Allows users to include or exclude specific specialists (e.g. toggling the Critic off for faster brainstorming). The Master Orchestrator is fixed and always enabled.
 - **Dynamic Live Refresh**: Rendered inside a reactive container (`cards_row`). When personas are updated via the persona editor or config reloads, `update_agents()` and `refresh_agent_cards()` dynamically update card labels and roles without a page reload.
 - **Configuration Tooltips**: Hovering over an agent card reveals its configured model, endpoint URL, and sequential thinking mode.
-- **Strategy Dropdown**: Selects between `free_debate`, `sequential_review`, and `adversarial_debate`.
+- **Strategy Dropdown**: Selects between `sequential_debate`, `adversarial_debate`, and `orchestrator_led`.
+- **Agent Cards**: Drag to reorder (writes `debate_priority` to `conf.toml`); the ⋮ menu sets `debate_stance` and can disable or delete the agent.
 - **Max Rounds Slider**: Sets the maximum debate depth ($1$ to $10$ rounds).
 - **Custom Instructions Box**: Allows injecting ad-hoc guidelines into all agent prompts for the current session.
 - **Persona Settings Button**: Links directly to `/personas/{session_id}`. Displays a lock icon if debate has commenced.

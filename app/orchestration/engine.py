@@ -14,7 +14,11 @@ from app.database.models import ArtifactModel, MessageModel, SessionModel, ToolC
 from app.database.session import get_session_factory
 from app.orchestration.control import TurnControl
 from app.orchestration.state import ArtifactItem, DebateMessage, DebateState
-from app.orchestration.strategies import BaseDebateStrategy, get_strategy
+from app.orchestration.strategies import (
+    BaseDebateStrategy,
+    get_strategy,
+    resolve_strategy_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -364,7 +368,8 @@ class OrchestratorEngine:
             # 달라졌으면 서버를 다시 띄우는 것 외에 방법이 없습니다.
             await self._apply_session_workspace(session_model.workspace_dir)
 
-            strategy_name = session_model.strategy
+            # 옛 이름으로 저장된 대화도 지금 쓰는 전략으로 옮겨 돌립니다.
+            strategy_name = resolve_strategy_name(session_model.strategy)
             max_rounds = session_model.max_rounds
             active_keys = session_model.active_agents or ["orchestrator", "architect", "coder", "critic"]
             custom_instructions = session_model.custom_instructions or ""

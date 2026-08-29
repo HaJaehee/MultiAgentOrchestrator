@@ -49,7 +49,7 @@ async def _tool_rows(session_id: str) -> List[ToolCallRecordModel]:
 
 @pytest.mark.asyncio
 async def test_tool_record_points_at_the_speech_that_ran_it():
-    sid = await _make_session(max_rounds=1, strategy="sequential_review")
+    sid = await _make_session(max_rounds=1, strategy="sequential_debate")
     caller = FakeLLMCaller(tool_calls={"coder": [GIT_STATUS]})
 
     state = await _engine(llm_caller=caller).run_turn(session_id=sid, user_prompt="설계해줘")
@@ -65,7 +65,7 @@ async def test_tool_record_points_at_the_speech_that_ran_it():
 @pytest.mark.asyncio
 async def test_no_tool_record_dangles_without_its_speech():
     """가리키는 발언이 DB 에 실제로 있어야 합니다."""
-    sid = await _make_session(max_rounds=1, strategy="sequential_review")
+    sid = await _make_session(max_rounds=1, strategy="sequential_debate")
     caller = FakeLLMCaller(tool_calls={"architect": [GIT_STATUS], "critic": [GIT_STATUS]})
 
     await _engine(llm_caller=caller).run_turn(session_id=sid, user_prompt="설계해줘")
@@ -99,7 +99,7 @@ async def test_orchestrator_tool_calls_are_recorded_too():
 @pytest.mark.asyncio
 async def test_tools_that_ran_before_a_failure_are_kept():
     """도구를 쓰고 나서 연결이 끊긴 경우. 실행된 사실은 남아야 합니다."""
-    sid = await _make_session(max_rounds=1, strategy="sequential_review")
+    sid = await _make_session(max_rounds=1, strategy="sequential_debate")
 
     class ToolThenDie(FakeLLMCaller):
         async def call_agent(self, agent, messages, custom_instructions="",
@@ -126,7 +126,7 @@ async def test_tools_that_ran_before_a_failure_are_kept():
 @pytest.mark.asyncio
 async def test_saved_document_folds_tool_logs_into_the_speech():
     """연결이 생겼으므로 저장 파일에서도 발언 안에 접혀 들어갑니다."""
-    sid = await _make_session(max_rounds=1, strategy="sequential_review")
+    sid = await _make_session(max_rounds=1, strategy="sequential_debate")
     caller = FakeLLMCaller(tool_calls={"coder": [GIT_STATUS]})
     await _engine(llm_caller=caller).run_turn(session_id=sid, user_prompt="설계해줘")
 

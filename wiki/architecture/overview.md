@@ -125,7 +125,7 @@ flowchart TD
 - Governed by [engine.py](file:///d:/MultiAgentOrchestrator/app/orchestration/engine.py), [state.py](file:///d:/MultiAgentOrchestrator/app/orchestration/state.py), and [strategies.py](file:///d:/MultiAgentOrchestrator/app/orchestration/strategies.py).
 - Coordinates state transitions across three phases:
   1. **Planning Phase**: Master Orchestrator analyzes the user goal and sets expectations.
-  2. **Specialist Debate Phase**: Active agents take turns according to the selected strategy (`free_debate`, `sequential_review`, or `adversarial_debate`), invoking MCP tools as needed.
+  2. **Specialist Debate Phase**: Active agents take turns according to the selected strategy (`sequential_debate`, `adversarial_debate`, or `orchestrator_led`), invoking MCP tools as needed. Order comes from each agent's `debate_priority`; the adversarial strategy pairs them by `debate_stance`.
   3. **Consensus & Synthesis Phase**: Master Orchestrator synthesizes the full transcript into comprehensive final artifacts.
 
 ### 4.7. User Interface Subsystem ([app/ui/](file:///d:/MultiAgentOrchestrator/app/ui/))

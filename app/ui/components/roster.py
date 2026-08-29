@@ -25,7 +25,13 @@ from app.config import (
 )
 from app.mcp.manager import get_mcp_manager
 from app.orchestration.runner import get_debate_runner
-from app.orchestration.strategies import ORCHESTRATOR_KEY, STRATEGY_MAP, order_by_priority
+from app.orchestration.strategies import (
+    DEFAULT_STRATEGY,
+    ORCHESTRATOR_KEY,
+    STRATEGY_MAP,
+    order_by_priority,
+    resolve_strategy_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +64,7 @@ class AgentRosterControl:
         self.on_resync_agents = on_resync_agents
         self.agent_pool: AgentPool = get_agent_pool()
         self.selected_agents: Dict[str, bool] = {}
-        self.strategy_name: str = "free_debate"
+        self.strategy_name: str = DEFAULT_STRATEGY
         self.max_rounds: int = 3
         self.custom_instructions: str = ""
         # 이 대화의 작업 공간. 빈 문자열이면 conf.toml 기본값을 씁니다.
@@ -1729,7 +1735,7 @@ class AgentRosterControl:
             agent.key: self._is_selected(agent.key, active_keys, known_keys, personas_locked)
             for agent in self._roster_agents()
         }
-        self.strategy_name = strategy
+        self.strategy_name = resolve_strategy_name(strategy)
         self.max_rounds = max_rounds
         self.custom_instructions = instructions
         self.workspace_dir = workspace_dir or ""
@@ -1741,7 +1747,7 @@ class AgentRosterControl:
         self._update_summary_badge()
         self._refresh_persona_controls()
         if self.strategy_select:
-            self.strategy_select.value = strategy
+            self.strategy_select.value = self.strategy_name
         if self.rounds_slider:
             self.rounds_slider.value = max_rounds
         if hasattr(self, "rounds_label") and self.rounds_label:

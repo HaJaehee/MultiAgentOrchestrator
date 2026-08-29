@@ -23,7 +23,7 @@ async def test_session_and_message_crud(async_db: AsyncSession):
     # 1. Create Session
     session = SessionModel(
         title="Test Debate Session",
-        strategy="free_debate",
+        strategy="sequential_debate",
         max_rounds=2,
         active_agents=["orchestrator", "architect"],
     )

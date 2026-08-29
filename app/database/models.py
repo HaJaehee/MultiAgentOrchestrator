@@ -18,7 +18,7 @@ class SessionModel(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     title: Mapped[str] = mapped_column(String(255), default="New Debate Session")
-    strategy: Mapped[str] = mapped_column(String(50), default="free_debate")
+    strategy: Mapped[str] = mapped_column(String(50), default="sequential_debate")
     max_rounds: Mapped[int] = mapped_column(Integer, default=3)
     active_agents: Mapped[List[str]] = mapped_column(JSON, default=list)
     # 이 대화의 로스터를 마지막으로 저장할 때 **존재하던** 에이전트 전부.

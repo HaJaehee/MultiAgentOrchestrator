@@ -10,9 +10,14 @@
 나타나는 곳은 오케스트레이터를 라운드에서 빼는 한 줄뿐입니다 — 그것은 역할이
 아니라 이 시스템의 구조입니다 (계획과 합성을 맡고 라운드 밖에 섭니다).
 
-전략은 순서만 정하지 않습니다. 순서만 다르면 '자유 토론' 과 '순차 검증' 이
-구별되지 않습니다. `turn_instruction()` 이 발언 차례마다 붙는 지침을 돌려주고,
-그게 두 전략의 실제 차이입니다.
+전략은 순서만 정하지 않습니다. `turn_instruction()` 이 발언 차례마다 붙는 지침을
+돌려주고, 그것이 전략들의 실제 차이입니다.
+
+한때 '자유 토론' 과 '순차 검증' 이 따로 있었습니다. 순서가 키 하드코딩으로 정해지던
+시절에는 둘의 발언 순서가 달랐지만, 순서가 `debate_priority` 하나로 정리되면서 두
+전략은 같은 순서로 같은 사람들을 부르게 되었습니다. 이름과 달리 '자유 토론' 도 결국
+정해진 순서대로 도는 것이었습니다. 그래서 하나로 합치고, 하는 일 그대로 '순차 토론'
+이라 부릅니다. 예전 이름으로 저장된 대화는 `LEGACY_STRATEGY_ALIASES` 가 받습니다.
 """
 
 from abc import ABC, abstractmethod
@@ -75,33 +80,17 @@ class BaseDebateStrategy(ABC):
         return ""
 
 
-class FreeDebateStrategy(BaseDebateStrategy):
-    """자유 토론: 활성 전문가 전원이 `debate_priority` 순으로 발언합니다.
+class SequentialDebateStrategy(BaseDebateStrategy):
+    """순차 토론: `debate_priority` 순으로 앞사람의 결론을 이어받아 진행합니다.
 
-    서로의 발언에 자유롭게 반응합니다. 정해진 인수인계 없이 각자 자기 관점에서
-    말합니다.
+    한 라운드에 활성 전문가 전원이 한 번씩, 정해진 순서로 발언합니다. 각자는 직전
+    발언을 **입력으로** 받아 그 위에 쌓거나 그것을 검증합니다. 이 인수인계 지침이
+    없으면 라운드가 그냥 독백 세 개가 됩니다 — 같은 맥락을 보고 각자 따로 말하고,
+    아무도 앞사람의 결론을 책임지지 않습니다.
     """
 
-    name = "free_debate"
-    display_name = "자유 토론 (Free Debate)"
-
-    def get_speakers_for_round(
-        self, active_agents: List[Agent], round_num: int, state: DebateState
-    ) -> List[Agent]:
-        specialists = order_by_priority(specialists_of(active_agents))
-        return specialists if specialists else active_agents
-
-
-class SequentialReviewStrategy(BaseDebateStrategy):
-    """순차 검증: 앞사람의 산출물을 뒷사람이 이어받아 검증합니다.
-
-    순서 자체는 자유 토론과 같은 `debate_priority` 순입니다. 다른 것은 지침입니다 —
-    각자가 직전 발언을 **입력으로** 받아 그 위에 쌓거나 그것을 검증하도록 요구합니다.
-    이 지침이 없으면 이 전략은 자유 토론과 완전히 같아집니다.
-    """
-
-    name = "sequential_review"
-    display_name = "순차 검증 (Sequential Review)"
+    name = "sequential_debate"
+    display_name = "순차 토론 (Sequential Debate)"
 
     def get_speakers_for_round(
         self, active_agents: List[Agent], round_num: int, state: DebateState
@@ -114,14 +103,14 @@ class SequentialReviewStrategy(BaseDebateStrategy):
     ) -> str:
         if index == 0:
             return (
-                "[순차 검증] 당신이 이번 라운드의 첫 순서입니다. 뒤 순서가 이어받아 검증할 수 있도록, "
-                "결론과 그 근거·가정을 명확히 구분해 제시하세요."
+                "[순차 토론] 당신이 이번 라운드의 첫 순서입니다. 뒤 순서가 이어받아 검증할 수 "
+                "있도록, 결론과 그 근거·가정을 명확히 구분해 제시하세요."
             )
         previous = speakers[index - 1]
         instruction = (
-            f"[순차 검증] 바로 앞 순서인 {previous.name}({previous.role})의 발언을 **입력으로** 받아 "
-            f"이어가세요. 새 주제를 여는 대신, 그 결론이 옳은지 당신의 전문 영역에서 검증하고 "
-            f"필요한 부분을 보강하거나 반증하세요."
+            f"[순차 토론] 바로 앞 순서인 {previous.name}({previous.role})의 발언을 **입력으로** "
+            f"받아 이어가세요. 새 주제를 여는 대신, 그 결론이 옳은지 당신의 전문 영역에서 "
+            f"검증하고 필요한 부분을 보강하거나 반증하세요."
         )
         if index == len(speakers) - 1:
             instruction += " 당신이 이번 라운드의 마지막 순서이므로, 라운드의 결론을 정리해 남기세요."
@@ -214,12 +203,29 @@ class OrchestratorLedStrategy(BaseDebateStrategy):
 
 
 STRATEGY_MAP = {
-    "free_debate": FreeDebateStrategy(),
-    "sequential_review": SequentialReviewStrategy(),
+    "sequential_debate": SequentialDebateStrategy(),
     "adversarial_debate": AdversarialDebateStrategy(),
     "orchestrator_led": OrchestratorLedStrategy(),
 }
 
+DEFAULT_STRATEGY = "sequential_debate"
 
-def get_strategy(strategy_name: str) -> BaseDebateStrategy:
-    return STRATEGY_MAP.get(strategy_name, STRATEGY_MAP["free_debate"])
+# 이미 저장된 대화가 들고 있는 예전 이름. `sessions.strategy` 는 문자열이라, 이
+# 표가 없으면 옛 대화가 전략을 잃고 기본값으로 떨어집니다 (그리고 화면의 선택
+# 상자는 아는 값이 아니어서 빈칸이 됩니다).
+LEGACY_STRATEGY_ALIASES = {
+    "free_debate": "sequential_debate",
+    "sequential_review": "sequential_debate",
+}
+
+
+def resolve_strategy_name(strategy_name: Optional[str]) -> str:
+    """저장된 전략 이름을 지금 쓰는 이름으로 옮깁니다. 모르는 이름은 기본값."""
+    name = (strategy_name or "").strip()
+    if name in STRATEGY_MAP:
+        return name
+    return LEGACY_STRATEGY_ALIASES.get(name, DEFAULT_STRATEGY)
+
+
+def get_strategy(strategy_name: Optional[str]) -> BaseDebateStrategy:
+    return STRATEGY_MAP[resolve_strategy_name(strategy_name)]

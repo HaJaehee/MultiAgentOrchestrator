@@ -13,6 +13,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from app.orchestration.strategies import get_strategy
+
 # 발언 종류별 머리표. 누가 무슨 자격으로 말했는지가 한눈에 보여야 합니다.
 TYPE_LABEL = {
     "user": "🙋 사용자",
@@ -118,7 +120,10 @@ def build_session_markdown(
     meta = [
         ("생성", _fmt_time(session.get("created_at"))),
         ("최종 수정", _fmt_time(session.get("updated_at"))),
-        ("토론 전략", str(session.get("strategy") or "")),
+        # 저장된 키가 아니라 **지금 이 대화가 실제로 도는 전략**의 이름을 적습니다.
+        # 예전 이름으로 저장된 대화는 이어서 진행하면 지금 전략으로 돌아가므로,
+        # 문서에 없어진 키를 남겨 두면 그 문서가 거짓말을 하게 됩니다.
+        ("토론 전략", get_strategy(session.get("strategy")).display_name),
         ("최대 라운드", str(session.get("max_rounds") or "")),
         ("참여 에이전트", ", ".join(agents) if agents else "-"),
         ("작업 공간", str(session.get("workspace_dir") or "(기본값)")),
