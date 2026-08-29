@@ -43,10 +43,19 @@ async def main() -> None:
 class FakeLLMCaller:
     """`LLMCaller` 와 같은 시그니처로 결정적인 응답을 돌려줍니다."""
 
-    def __init__(self, *, fail_keys: Optional[List[str]] = None, replies: Optional[Dict[str, str]] = None):
+    def __init__(
+        self,
+        *,
+        fail_keys: Optional[List[str]] = None,
+        replies: Optional[Dict[str, str]] = None,
+        tool_calls: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    ):
         # 이 키를 가진 에이전트는 엔드포인트가 죽은 것처럼 굴게 합니다.
         self.fail_keys = set(fail_keys or ())
         self.replies = replies or {}
+        # 에이전트 키 -> 그 에이전트가 발언할 때마다 실행한 것으로 칠 도구 목록.
+        # 실제 루프와 같은 방식으로, 같은 dict 를 콜백과 반환값에 함께 씁니다.
+        self.tool_calls = tool_calls or {}
         self.calls: List[str] = []
         # 각 발언이 어떤 대화 스코프로 도구를 부를지 (MCP _meta 로 나가는 값)
         self.scopes: List[Optional[str]] = []
@@ -75,6 +84,16 @@ class FakeLLMCaller:
         if agent.key in self.fail_keys:
             raise LLMUnavailableError(agent, "APIConnectionError: 500 Internal Server Error")
 
+        tool_logs: List[Dict[str, Any]] = []
+        for spec in self.tool_calls.get(agent.key, []):
+            call_log = dict(spec)
+            tool_logs.append(call_log)
+            if on_tool_call:
+                if asyncio.iscoroutinefunction(on_tool_call):
+                    await on_tool_call(call_log)
+                else:
+                    on_tool_call(call_log)
+
         content = self._reply_for(agent, messages)
         if on_chunk:
             for piece in _in_pieces(content):
@@ -82,7 +101,7 @@ class FakeLLMCaller:
                     await on_chunk(piece)
                 else:
                     on_chunk(piece)
-        return content, []
+        return content, tool_logs
 
 
 def _in_pieces(text: str, size: int = 40) -> List[str]:

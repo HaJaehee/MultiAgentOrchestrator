@@ -7,6 +7,27 @@ from app.agents.base import AGENT_STYLE_MAP, DEFAULT_STYLE
 logger = logging.getLogger(__name__)
 
 
+# DB 에서 다시 그릴 때 도구 출력의 상한(글자).
+#
+# 파일 읽기나 샌드박스 실행 결과는 수십 KB 가 되기도 합니다. 지난 대화를 다시
+# 열면 그 세션의 모든 도구 출력이 한꺼번에 들어오는데, 아코디언이 접혀 있어도
+# 내용은 DOM 에 그대로 만들어집니다. 화면에서는 앞부분만 보여주고, 전문은 세션
+# 저장 파일에 남깁니다 (저장은 DB 에서 직접 읽습니다).
+MAX_RELOADED_TOOL_OUTPUT = 4000
+
+
+def clip_tool_output(text: str, limit: int = MAX_RELOADED_TOOL_OUTPUT) -> str:
+    """긴 도구 출력을 화면용으로 자릅니다. 자른 사실과 전문의 위치를 함께 알립니다."""
+    body = text or ""
+    if len(body) <= limit:
+        return body
+    hidden = len(body) - limit
+    return (
+        f"{body[:limit]}\n\n"
+        f"… {hidden:,}자 생략 — 전문은 세션 저장(💾) 파일에 있습니다."
+    )
+
+
 # 입력창 문구. 토론이 도는 중에는 같은 칸이 "새 요청" 이 아니라 "개입" 으로
 # 동작하므로, 무엇이 될지 문구로 먼저 알려 줍니다. props 로 넘어가는 값이라
 # 큰따옴표는 쓰지 않습니다.

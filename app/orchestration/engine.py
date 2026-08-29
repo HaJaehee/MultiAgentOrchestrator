@@ -146,12 +146,16 @@ class OrchestratorEngine:
         round_number: int,
         msg_type: str,
         on_event: Optional[EventCallback],
-        on_tool_call: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> DebateMessage:
         """한 에이전트의 발언을 스트리밍하고, DB 에 기록하고, 상태에 반영합니다.
 
         LLM 이 응답하지 못하면 실패 사실을 그대로 적은 `msg_type="error"` 발언을
         남기고 토론을 계속합니다 (다른 에이전트는 아직 살아 있을 수 있습니다).
+
+        이 발언 중에 실행된 MCP 도구도 여기서 함께 기록합니다. 어느 발언이 부른
+        도구인지는 이 자리에서만 알 수 있습니다 — 밖에서 기록하던 예전 방식은
+        `message_id` 를 비워 둘 수밖에 없었고, 그래서 새로고침한 화면과 저장
+        파일에서 도구 기록이 발언과 따로 놀았습니다.
         """
         msg_id = str(uuid.uuid4())
         if on_event:
@@ -168,6 +172,22 @@ class OrchestratorEngine:
                 },
             })
 
+        # 이 발언이 실행한 도구. 모아 두었다가 발언 행과 **같은 커밋**에 넣습니다.
+        # 도구가 끝나는 즉시 넣으면, 발언 행이 아직 없는 동안 존재하지 않는 발언을
+        # 가리키는 행이 남습니다. SQLite 가 외래키를 검사하지 않아 지금은 통과할
+        # 뿐이고, 누군가 PRAGMA foreign_keys 를 켜는 날 삽입이 실패합니다.
+        executed_tools: List[Dict[str, Any]] = []
+
+        async def _on_tool_call(call_log: Dict[str, Any]) -> None:
+            executed_tools.append(call_log)
+            if on_event:
+                await on_event({
+                    "type": "tool_executed",
+                    "agent_key": agent.key,
+                    "agent_name": agent.name,
+                    "tool_call": call_log,
+                })
+
         streamed: List[str] = []
 
         async def _on_chunk(delta: str) -> None:
@@ -182,7 +202,7 @@ class OrchestratorEngine:
         try:
             content, tool_logs = await self.llm_caller.call_agent(
                 agent, prompt_messages, custom_instructions,
-                on_tool_call=on_tool_call, on_chunk=_on_chunk,
+                on_tool_call=_on_tool_call, on_chunk=_on_chunk,
                 session_id=state.session_id,
             )
             final_type = msg_type
@@ -204,6 +224,17 @@ class OrchestratorEngine:
             round_number=round_number,
             msg_type=final_type,
         ))
+        for call_log in executed_tools:
+            db.add(ToolCallRecordModel(
+                id=str(uuid.uuid4()),
+                session_id=state.session_id,
+                message_id=msg_id,
+                agent_key=agent.key,
+                tool_name=call_log.get("tool_name", ""),
+                arguments=call_log.get("arguments", {}),
+                output=call_log.get("output", ""),
+                status=call_log.get("status", "success"),
+            ))
         await db.commit()
 
         message = DebateMessage(
@@ -214,7 +245,9 @@ class OrchestratorEngine:
             content=content,
             round_number=round_number,
             msg_type=final_type,
-            tool_calls=tool_logs,
+            # 발언이 실패로 끝나면 `call_agent` 는 도구 기록을 돌려주지 못합니다.
+            # 그전에 실제로 실행된 것은 남아 있어야 합니다.
+            tool_calls=tool_logs or executed_tools,
         )
         state.messages.append(message)
 
@@ -473,27 +506,6 @@ class OrchestratorEngine:
                             "round": round_num,
                         })
 
-                    async def handle_tool_call(tool_data: Dict[str, Any], speaker: Agent = agent) -> None:
-                        # Record tool call in DB
-                        tc_db = ToolCallRecordModel(
-                            id=str(uuid.uuid4()),
-                            session_id=session_id,
-                            agent_key=speaker.key,
-                            tool_name=tool_data.get("tool_name", ""),
-                            arguments=tool_data.get("arguments", {}),
-                            output=tool_data.get("output", ""),
-                            status=tool_data.get("status", "success"),
-                        )
-                        db.add(tc_db)
-                        await db.commit()
-                        if on_event:
-                            await on_event({
-                                "type": "tool_executed",
-                                "agent_key": speaker.key,
-                                "agent_name": speaker.name,
-                                "tool_call": tool_data,
-                            })
-
                     await self._speak(
                         db=db,
                         state=state,
@@ -503,7 +515,6 @@ class OrchestratorEngine:
                         round_number=round_num,
                         msg_type="agent",
                         on_event=on_event,
-                        on_tool_call=handle_tool_call,
                     )
 
                 if stopped_early:

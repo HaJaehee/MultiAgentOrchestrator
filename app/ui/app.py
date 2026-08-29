@@ -8,7 +8,7 @@ from app.database.models import ArtifactModel, MessageModel, SessionModel
 from app.database.session import get_session_factory
 from app.orchestration.runner import TurnRun, WorkspaceConflictError, get_debate_runner
 from app.ui.components.artifact_viewer import ArtifactViewer
-from app.ui.components.chat_feed import ChatFeed
+from app.ui.components.chat_feed import ChatFeed, clip_tool_output
 from app.ui.components.roster import AgentRosterControl
 from app.ui.components.sidebar import SessionSidebar
 from app.ui.theme import CUSTOM_CSS, FAVICON_SVG
@@ -402,7 +402,7 @@ def create_ui() -> None:
                             {
                                 "tool_name": tc.tool_name,
                                 "arguments": tc.arguments,
-                                "output": tc.output,
+                                "output": clip_tool_output(tc.output),
                                 "status": tc.status,
                             }
                             for tc in m.tool_calls
