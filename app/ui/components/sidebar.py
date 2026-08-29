@@ -1,14 +1,47 @@
 import asyncio
 import logging
-from typing import Callable, Coroutine, List, Optional
+from datetime import datetime, timezone
+from typing import Callable, Coroutine, Dict, List, Optional
 from nicegui import ui
-from sqlalchemy import desc, select, delete
+from sqlalchemy import desc, func, select, delete
 from app.database.models import ArtifactModel, MessageModel, SessionModel, ToolCallRecordModel
 from app.database.session import get_session_factory
 from app.export import build_session_markdown, safe_filename
 from app.orchestration.runner import get_debate_runner
 
 logger = logging.getLogger(__name__)
+
+
+async def first_user_message_times(db) -> Dict[str, datetime]:
+    """대화별로 **사용자가 처음 말한 시각**.
+
+    카드에 찍히던 것은 세션 행이 만들어진 시각이었습니다. 새 세션을 열어 두고
+    나중에 말을 걸면 그 둘이 크게 벌어지고, 목록에서 "이 대화 언제 했더라" 를
+    찾을 때 쓸모가 없습니다. 사람이 기억하는 것은 말을 건 시각입니다.
+
+    발언 하나씩 훑지 않고 한 번의 집계로 가져옵니다. 목록은 자주 다시 그려지고,
+    세션 수만큼 질의가 늘어나면 사이드바가 먼저 느려집니다.
+    """
+    stmt = (
+        select(MessageModel.session_id, func.min(MessageModel.created_at))
+        .where(MessageModel.sender_key == "user")
+        .group_by(MessageModel.session_id)
+    )
+    result = await db.execute(stmt)
+    return {session_id: started for session_id, started in result.all() if started}
+
+
+def to_local(value: datetime) -> datetime:
+    """DB 의 시각을 이 기계의 시간대로 옮깁니다.
+
+    기록은 UTC 로 적지만 SQLite 는 오프셋을 버리므로, 읽어 오면 시간대가 없는
+    UTC 벽시계입니다. 그대로 찍으면 한국에서는 9시간 전으로 보입니다.
+    """
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone()
 
 
 class SessionSidebar:
@@ -70,6 +103,7 @@ class SessionSidebar:
             stmt = select(SessionModel).order_by(desc(SessionModel.updated_at))
             res = await db.execute(stmt)
             sessions = res.scalars().all()
+            started_times = await first_user_message_times(db)
 
         if not sessions:
             with self.container:
@@ -105,7 +139,11 @@ class SessionSidebar:
                                 ui.label(s.title or "Untitled Debate").classes("text-xs font-semibold truncate")
                             
                             with ui.row().classes("w-full items-center justify-between mt-1 text-xs text-slate-400"):
-                                date_str = s.created_at.strftime("%m-%d %H:%M") if s.created_at else ""
+                                started = started_times.get(s.id)
+                                date_str = (
+                                    to_local(started).strftime("%m-%d %H:%M") if started
+                                    else "시작 전"
+                                )
                                 ui.label(date_str).classes("text-[10px]")
                                 
                                 agents_count = len(s.active_agents) if s.active_agents else 0
