@@ -1,7 +1,8 @@
-import json
 import logging
 from typing import Any, Dict, List, Optional
 from nicegui import ui
+
+from app.ui.clipboard import copy_to_clipboard
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +165,9 @@ class ArtifactViewer:
                 ui.code(content, language="mermaid").classes("w-full text-xs")
 
     def _copy_to_clipboard(self, text: str) -> None:
-        ui.run_javascript(f"navigator.clipboard.writeText({json.dumps(text)});")
+        # `navigator.clipboard` 는 보안 컨텍스트에서만 있습니다. 이 앱은 LAN 의 다른
+        # PC 에서 http 로 열리기도 하므로, 폴백이 있는 공용 헬퍼를 씁니다.
+        copy_to_clipboard(text)
         ui.notify("클립보드에 복사되었습니다!", type="positive", position="top")
 
     def _download_artifact(self, title: str, content: str, art_type: str) -> None:

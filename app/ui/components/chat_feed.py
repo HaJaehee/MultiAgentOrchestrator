@@ -3,6 +3,7 @@ import logging
 from typing import Any, Callable, Coroutine, Dict, Iterable, List, Optional, Set
 from nicegui import ui
 from app.agents.base import style_for_agent
+from app.ui.clipboard import copy_to_clipboard
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,24 @@ def clip_tool_output(text: str, limit: int = MAX_RELOADED_TOOL_OUTPUT) -> str:
 # 큰따옴표는 쓰지 않습니다.
 IDLE_PLACEHOLDER = "멀티 에이전트에게 토론 및 설계를 요청할 목표/질문을 입력하세요..."
 INTERJECT_PLACEHOLDER = "토론 진행 중 — 지금 보내면 다음 발언 차례에 개입으로 전달됩니다"
+
+
+# 접힌 카드가 보여주는 줄 수. 값 자체는 theme.py 의 `.chat-body-clamped` 가
+# 정하고, 여기서는 문구에만 씁니다.
+CLAMP_LINES = 3
+
+# 펼치기 버튼을 달지 정하는 어림. 카드 폭에서 text-sm 한 줄이 대략 60~70자이므로
+# 세 줄이면 200자쯤 됩니다. 실제 줄 수는 그려 봐야 알 수 있지만, 그걸 재려고 매
+# 카드마다 브라우저에 물어보는 것보다 이 어림이 낫습니다. 짧은 글에 버튼이 하나
+# 더 붙는 것이 최악이고, 그건 눈에 거슬리는 정도입니다.
+CLAMP_MIN_CHARS = 200
+CLAMP_MIN_NEWLINES = 3
+
+
+def is_clampable(content: str) -> bool:
+    """세 줄을 넘길 만한 글인지 (펼치기 버튼을 달지 결정)."""
+    body = content or ""
+    return len(body) > CLAMP_MIN_CHARS or body.count("\n") >= CLAMP_MIN_NEWLINES
 
 
 def _card_classes(msg_type: str, sender_key: str) -> str:
@@ -260,9 +279,10 @@ class ChatFeed:
 
         with self.message_container:
             for m in messages:
-                handles = self._render_card(m)
                 msg_id = m.get("id", "")
-                if msg_id and msg_id in streaming:
+                is_streaming = bool(msg_id) and msg_id in streaming
+                handles = self._render_card(m, streaming=is_streaming)
+                if is_streaming:
                     self._active_streams[msg_id] = handles
 
         self._scroll_to_bottom()
@@ -277,7 +297,7 @@ class ChatFeed:
 
         self._drop_placeholder()
         with self.message_container:
-            self._active_streams[msg_id] = self._render_card(msg)
+            self._active_streams[msg_id] = self._render_card(msg, streaming=True)
         self._scroll_to_bottom()
 
     def append_stream_chunk(self, msg_id: str, delta: str) -> None:
@@ -339,6 +359,9 @@ class ChatFeed:
                 for tc in tool_calls:
                     self._render_tool_accordion(tc)
 
+        # 발언이 끝났으므로 접습니다. 여기가 이 기능이 실제로 걸리는 자리입니다 —
+        # 그리는 동안에는 펼쳐 두고, 다 쓰고 나면 세 줄로 줄입니다.
+        self._apply_clamp(info, collapsed=True)
         self._scroll_to_bottom()
 
     def _drop_placeholder(self) -> None:
@@ -354,8 +377,12 @@ class ChatFeed:
         if self.scroll_area is not None and not self.scroll_area.is_deleted:
             self.scroll_area.scroll_to(percent=1.0)
 
-    def _render_card(self, msg: Dict[str, Any]) -> Dict[str, Any]:
-        """발언 카드 하나. 스트리밍 중이든 확정된 것이든 같은 모양입니다."""
+    def _render_card(self, msg: Dict[str, Any], streaming: bool = False) -> Dict[str, Any]:
+        """발언 카드 하나. 스트리밍 중이든 확정된 것이든 같은 모양입니다.
+
+        `streaming=True` 면 펼친 채로 둡니다. 생성되는 글을 지켜보는 것이 이 화면의
+        핵심인데, 쓰이는 도중에 접어 버리면 세 줄만 계속 갈아 끼우는 꼴이 됩니다.
+        """
         sender_key = msg.get("sender_key", "agent")
         sender_name = msg.get("sender_name", "Agent")
         sender_role = msg.get("sender_role", "")
@@ -367,6 +394,10 @@ class ChatFeed:
         # conf.toml 에 새로 추가한 에이전트는 이 표에 없습니다. 예전에는 그때
         # 사용자 스타일로 떨어져, 에이전트 발언이 사용자 말풍선처럼 보였습니다.
         style = style_for_agent(sender_key)
+
+        # 버튼 핸들러가 이 딕셔너리를 통해 카드 상태를 봅니다. 카드를 다 그린 뒤에
+        # 채우지만, 핸들러는 클릭될 때 읽으므로 지금 비어 있어도 됩니다.
+        info: Dict[str, Any] = {}
 
         with ui.card().classes(
             f"w-full p-3.5 rounded-xl border {_card_classes(msg_type, sender_key)} shadow-md"
@@ -382,10 +413,27 @@ class ChatFeed:
                             failed_badge = ui.badge("응답 없음", color="red-9").props("dense text-[10px]")
                             failed_badge.set_visibility(msg_type == "error")
 
-                if round_num > 0:
-                    ui.badge(f"Round {round_num}", color="slate-700").props("dense text-[10px]")
+                with ui.row().classes("items-center gap-1 no-wrap flex-shrink-0"):
+                    if round_num > 0:
+                        ui.badge(f"Round {round_num}", color="slate-700").props("dense text-[10px]")
+                    ui.button(
+                        icon="content_copy", on_click=lambda: self._copy_card(info)
+                    ).props("flat dense round size=sm color=slate-4").tooltip(
+                        "이 발언을 클립보드에 복사"
+                    )
+                    expand_btn = ui.button(
+                        icon="unfold_more", on_click=lambda: self._toggle_card(info)
+                    ).props("flat dense round size=sm color=slate-4")
+                    # 툴팁은 여기서 한 번만 만들고 이후에는 문구만 갈아 끼웁니다.
+                    # 접힘 상태가 바뀔 때마다 `tooltip()` 을 부르면 그때의 슬롯에
+                    # 새 q-tooltip 이 쌓입니다.
+                    with expand_btn:
+                        expand_tip = ui.tooltip("")
 
-            with ui.column().classes("w-full prose prose-invert max-w-none text-sm text-slate-200"):
+            body = ui.column().classes(
+                "w-full prose prose-invert max-w-none text-sm text-slate-200"
+            )
+            with body:
                 md = ui.markdown(content)
 
             tool_container = ui.column().classes("w-full mt-2 gap-1")
@@ -394,14 +442,71 @@ class ChatFeed:
                     for tc in tool_calls:
                         self._render_tool_accordion(tc)
 
-        return {
+        info.update({
             "card": card,
             "markdown": md,
             "content": content,
+            "body": body,
+            "expand_btn": expand_btn,
+            "expand_tip": expand_tip,
             "tool_container": tool_container,
             "failed_badge": failed_badge,
             "msg_type": msg_type,
-        }
+            "collapsed": False,
+        })
+        self._apply_clamp(info, collapsed=not streaming)
+        return info
+
+    # ------------------------------------------------------------ 접기 / 복사
+
+    def _apply_clamp(self, info: Dict[str, Any], collapsed: bool) -> None:
+        """카드를 접거나 폅니다.
+
+        접을 것이 없는 짧은 발언에는 펼치기 버튼 자체를 달지 않습니다. 한 줄짜리
+        발언마다 아무 일도 하지 않는 버튼이 붙으면 그게 더 거슬립니다.
+
+        도구 호출 기록도 함께 감춥니다. 본문만 세 줄로 줄이고 아코디언 다섯 개가
+        그대로 남으면 접은 보람이 없습니다.
+        """
+        clampable = is_clampable(info.get("content", ""))
+        collapsed = collapsed and clampable
+
+        expand_btn = info.get("expand_btn")
+        if expand_btn is not None and not expand_btn.is_deleted:
+            expand_btn.set_visibility(clampable)
+            expand_btn.props(f"icon={'unfold_more' if collapsed else 'unfold_less'}")
+        tip = info.get("expand_tip")
+        if tip is not None and not tip.is_deleted:
+            tip.set_text("펼치기" if collapsed else f"{CLAMP_LINES}줄만 보기")
+
+        body = info.get("body")
+        if body is not None and not body.is_deleted:
+            if collapsed:
+                body.classes(add="chat-body-clamped")
+            else:
+                body.classes(remove="chat-body-clamped")
+
+        tool_container = info.get("tool_container")
+        if tool_container is not None and not tool_container.is_deleted:
+            tool_container.set_visibility(not collapsed)
+
+        info["collapsed"] = collapsed
+
+    def _toggle_card(self, info: Dict[str, Any]) -> None:
+        self._apply_clamp(info, collapsed=not info.get("collapsed", False))
+
+    def _copy_card(self, info: Dict[str, Any]) -> None:
+        """이 발언을 클립보드에 넣습니다.
+
+        화면에 그려진 결과가 아니라 마크다운 원문입니다. 이 글을 다시 쓸 곳은
+        대부분 마크다운을 읽는 곳이고, 접혀 있어도 전문이 그대로 갑니다.
+        """
+        text = info.get("content", "")
+        if not text.strip():
+            ui.notify("복사할 내용이 없습니다.", type="warning", position="bottom-right")
+            return
+        copy_to_clipboard(text)
+        ui.notify("클립보드에 복사했습니다.", type="positive", position="bottom-right")
 
     def _render_tool_accordion(self, tc: Dict[str, Any]) -> None:
         tool_name = tc.get("tool_name", "unknown_tool")

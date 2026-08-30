@@ -116,6 +116,23 @@ body {
     max-width: 100%;
 }
 
+/* --- 발언 카드 접기 -------------------------------------------------------
+   발언이 끝나면 본문을 세 줄만 남기고 접습니다. 라운드가 몇 번 돌면 카드 하나가
+   화면을 다 차지해서, 토론의 흐름을 보려면 계속 스크롤해야 했습니다.
+
+   `max-height` 로 자릅니다. `-webkit-line-clamp` 는 컨테이너를 `-webkit-box` 로
+   바꿔야 하는데, 그러면 문단·목록·코드블록이 섞인 마크다운의 블록 배치가 깨집니다.
+
+   잘린 자리는 `mask-image` 로 흐립니다. 배경 그라디언트를 덮는 방식은 카드마다
+   배경색이 달라(발언자별 색) 색을 맞춰야 하지만, 마스크는 내용 자체를 투명하게
+   만들어 어떤 배경 위에서도 맞습니다. */
+.chat-body-clamped {
+    max-height: 4.8em;                      /* 본문 줄높이 약 1.6em x 3줄 */
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
+}
+
 /* Custom Scrollbars */
 ::-webkit-scrollbar {
     width: 6px;
