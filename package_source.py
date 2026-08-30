@@ -40,6 +40,17 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
+# 콘솔/파이프의 인코딩이 UTF-8 이 아니면(윈도우 기본 cp949) 아래 로그에 쓰인
+# em-dash 나 이모지가 UnicodeEncodeError 로 스크립트를 끝냅니다. 산출물을 다
+# 만들어 놓고 마지막 안내 문구에서 죽으므로, 성공한 실행이 실패로 보입니다.
+# 출력 스트림을 UTF-8 로 돌리고, 그래도 못 찍는 문자는 대체 문자로 흘립니다.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass  # 리다이렉트된 스트림이 reconfigure 를 지원하지 않는 경우
+
+
 ROOT_DIR = Path(__file__).resolve().parent
 PACKAGE_NAME = "MultiAgentOrchestrator_source"
 
