@@ -113,7 +113,7 @@
     "                     memory·sandbox MCP 가 모두 이 폴더 하나를 봅니다.",
     "                     대화마다 다른 폴더를 쓰려면 UI 의 \"작업 공간\" 칸을 쓰세요.",
     "                     그 값은 세션에 저장되며 이 파일을 바꾸지 않습니다.",
-    "run_offline.bat / run_offline.ps1 이 위 값을 자동으로 채웁니다.",
+    "run_mado.bat / run_mado.ps1 이 위 값을 자동으로 채웁니다.",
     "",
     "개발 PC에서 Node 서버를 준비하려면 (인터넷 필요, 최초 1회):",
     "  npm install --omit=dev --prefix ./mcp_node \\",

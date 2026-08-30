@@ -48,12 +48,12 @@ MultiAgentOrchestrator_bundle/
 ├── mcp_sandbox/            AirgappedPySandbox
 ├── docs/                   사용 설명서 (마크다운 + 렌더링된 HTML)
 ├── workspace/              작업 공간 (git 초기화됨)
-└── run_offline.bat|ps1     실행 스크립트
+└── run_mado.bat|ps1     실행 스크립트
 ```
 
 ### 실행 스크립트가 하는 일
 
-`run_offline.bat` / `.ps1` 은 생성되는 산출물입니다.
+`run_mado.bat` / `.ps1` 은 생성되는 산출물입니다.
 
 1. MCP 경로 환경변수를 자동 주입 (`NODE_BIN`, `PYTHON_BIN`, `MCP_NODE_HOME`,
    `MCP_SANDBOX_HOME`, `WORKSPACE_DIR`)
@@ -72,7 +72,7 @@ for /f "usebackq delims=" %%i in (`"%PYTHON_BIN%" -c "from app.config import get
 ### 압축에서 빠지는 것
 
 스테이징 폴더(`dist/MultiAgentOrchestrator_bundle/`)는 빌드 사이에 남아 있습니다.
-거기서 `run_offline.bat` 로 앱을 한 번 띄우면 대화 DB 와 에이전트가 만든 파일이
+거기서 `run_mado.bat` 로 앱을 한 번 띄우면 대화 DB 와 에이전트가 만든 파일이
 그 안에 생기고, 압축이 폴더를 통째로 담던 시절에는 그것이 그대로 반입 대상이
 되었습니다.
 

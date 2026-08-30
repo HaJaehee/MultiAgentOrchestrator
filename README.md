@@ -760,7 +760,7 @@ Get-Content MANIFEST.txt | Where-Object { $_ -notmatch '^#' } | ForEach-Object {
 | `WORKSPACE_DIR` | `<프로젝트 루트>/workspace` | 에이전트 공용 작업 공간. 기동 시 절대 경로로 정규화되며 filesystem·git·memory·sandbox 가 모두 이 폴더를 공유합니다 |
 | `SANDBOX_KERNEL_PYTHON` | `PYTHON_BIN` | 샌드박스 커널 인터프리터 |
 
-폐쇄망 번들에서는 `run_offline.bat` / `run_offline.ps1` 이 위 값을 자동으로 채웁니다.
+폐쇄망 번들에서는 `run_mado.bat` / `run_mado.ps1` 이 위 값을 자동으로 채웁니다.
 두 스크립트는 서버가 응답하기 시작하면 **기본 브라우저로 UI 를 자동으로 엽니다.**
 띄우지 않으려면 `MAO_NO_BROWSER=1` 을 설정하고 실행하세요 (기다리는 시간은
 `MAO_BROWSER_TIMEOUT`, 기본 90초).

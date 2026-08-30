@@ -14,7 +14,7 @@
     ├── mcp_sandbox/         AirgappedPySandbox (Python 코드 실행 MCP 서버)
     ├── docs/                사용 설명서 (마크다운 원본 + 렌더링된 HTML)
     ├── workspace/           에이전트 공용 작업 공간
-    └── run_offline.bat|ps1  실행 스크립트 (MCP 경로 환경변수 자동 주입)
+    └── run_mado.bat|ps1  실행 스크립트 (MCP 경로 환경변수 자동 주입)
 
 사용법:
     python package_offline.py [--skip-node] [--node-version 22.22.2]
@@ -107,7 +107,7 @@ STEPS = 10
 # 번들에 담지 않을 것.
 #
 # 스테이징 폴더(dist/MultiAgentOrchestrator_bundle)는 실행 사이에 남아 있고,
-# 거기서 run_offline.bat 로 앱을 한 번 띄우면 대화 DB 와 에이전트가 만든 파일이
+# 거기서 run_mado.bat 로 앱을 한 번 띄우면 대화 DB 와 에이전트가 만든 파일이
 # 그 안에 생깁니다. 예전에는 압축이 폴더를 통째로 담아서 그것들이 그대로
 # 반입 대상이 되었습니다 — 실제로 workspace/handoff.py 같은 테스트 산출물이
 # 배포 ZIP 에 들어가 있었습니다.
@@ -562,7 +562,7 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         with open(out_dir / name, "w", encoding="utf-8-sig", newline="") as f:
             f.write(content)
 
-    # --- run_offline.bat ---
+    # --- run_mado.bat ---
     bat = (
         "@echo off\r\n"
         "chcp 65001 > nul\r\n"
@@ -597,9 +597,9 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "\"%PYTHON_BIN%\" -m app.main %*\r\n\r\n"
         "pause\r\n"
     )
-    write("run_offline.bat", bat)
+    write("run_mado.bat", bat)
 
-    # --- run_offline.ps1 ---
+    # --- run_mado.ps1 ---
     ps1 = (
         "# MADO: Multi-Agent Debate & Orchestration Platform - Offline Launch Script\r\n"
         "$ErrorActionPreference = \"Stop\"\r\n\r\n"
@@ -644,7 +644,7 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "Write-Host \"[*] 내장 파이썬 런타임으로 서버를 시작합니다 ($AppUrl)...\" -ForegroundColor Green\r\n"
         "& $env:PYTHON_BIN -m app.main $args\r\n"
     )
-    write("run_offline.ps1", ps1)
+    write("run_mado.ps1", ps1)
 
     # --- install_wheels_offline.bat ---
     install_bat = (
@@ -702,10 +702,10 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "## 🚀 빠른 실행 방법\r\n\r\n"
         "### 방법 1. 내장 포터블 런타임으로 즉시 실행 (가장 추천)\r\n"
         "추가 설치나 환경 설정 없이 압축을 해제한 폴더에서 바로 실행할 수 있습니다.\r\n"
-        "- Windows 탐색기에서 **`run_offline.bat`** 더블 클릭  \r\n"
+        "- Windows 탐색기에서 **`run_mado.bat`** 더블 클릭  \r\n"
         "  또는 PowerShell에서:\r\n"
         "  ```powershell\r\n"
-        "  .\\run_offline.ps1\r\n"
+        "  .\\run_mado.ps1\r\n"
         "  ```\r\n"
         "- 서버가 뜨면 **기본 브라우저가 자동으로 열립니다.** 열리지 않으면 콘솔에 표시되는 "
         "주소로 접속하세요. 주소는 `conf.json` 의 `app.host` / `app.port` "

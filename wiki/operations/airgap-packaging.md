@@ -20,7 +20,7 @@ MultiAgentOrchestrator_bundle/
 ├── workspace/                 # Initialized workspace directory & git repository
 ├── install_wheels_offline.bat # Re-installation verification utility
 ├── open_browser.py            # Waits for the port to answer, then opens the default browser
-└── run_offline.bat | ps1      # One-click launcher with auto-injected environment variables
+└── run_mado.bat | ps1      # One-click launcher with auto-injected environment variables
 ```
 
 ---
@@ -64,9 +64,9 @@ The packager automatically initializes `workspace/` as an empty Git repository (
 
 ---
 
-## 3. Launcher Automation (`run_offline.bat` / `.ps1`)
+## 3. Launcher Automation (`run_mado.bat` / `.ps1`)
 
-When deployed to an air-gapped target machine, users run `run_offline.bat` or `run_offline.ps1`. The launcher automatically computes absolute paths and injects the following environment variables before starting the server:
+When deployed to an air-gapped target machine, users run `run_mado.bat` or `run_mado.ps1`. The launcher automatically computes absolute paths and injects the following environment variables before starting the server:
 
 ```bat
 @echo off
@@ -116,8 +116,8 @@ python package_offline.py --launchers-only "C:\path\to\MultiAgentOrchestrator_bu
 Run it on the target after copying new sources when the launcher itself changed.
 
 ### Parameter Forwarding & Encoding
-- **CLI Parameter Forwarding**: Both `run_offline.ps1` (`$args`) and `run_offline.bat` (`%*`) pass all command-line arguments directly to `app.main`. Users can run `.\run_offline.ps1 --port 9000` to override the bound port dynamically.
-- **UTF-8 BOM Protection**: `run_offline.ps1` is saved with UTF-8 BOM (`utf-8-sig`) and configures `[Console]::OutputEncoding = UTF8`, preventing PowerShell parser errors on Korean Windows systems.
+- **CLI Parameter Forwarding**: Both `run_mado.ps1` (`$args`) and `run_mado.bat` (`%*`) pass all command-line arguments directly to `app.main`. Users can run `.\run_mado.ps1 --port 9000` to override the bound port dynamically.
+- **UTF-8 BOM Protection**: `run_mado.ps1` is saved with UTF-8 BOM (`utf-8-sig`) and configures `[Console]::OutputEncoding = UTF8`, preventing PowerShell parser errors on Korean Windows systems.
 - **Zero Configuration Drift**: Because paths and settings are injected via environment variables, [conf.json](file:///d:/MultiAgentOrchestrator/conf.json) requires **zero manual adjustments** when moving between environments.
 
 
