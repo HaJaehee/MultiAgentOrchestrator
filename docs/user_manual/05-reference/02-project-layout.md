@@ -29,6 +29,7 @@ MultiAgentOrchestrator/
 ├── package_source.py         소스 갱신 패키지
 │
 ├── README.md                 저장소 안내
+├── LICENSE.md                라이선스 (LGPL-3.0 전문 + 제3자 고지)
 └── CLAUDE.md                 프로젝트 명세서
 ```
 

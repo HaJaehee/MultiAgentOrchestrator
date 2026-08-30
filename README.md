@@ -82,6 +82,7 @@ MultiAgentOrchestrator/
 ├── .env.example              # 환경 변수 템플릿
 ├── requirements.txt          # 파이썬 의존성 패키지
 ├── README.md                 # 프로젝트 문서
+├── LICENSE.md                # 라이선스 (LGPL-3.0 전문 + 제3자 고지)
 ├── docs/                     # 사용 설명서 (한국어)
 │   ├── user_manual/          # 마크다운 원본 (기술 스택 · 핵심 기술 · 워크플로우)
 │   ├── user_manual_html/     # HTML 렌더링 산출물 (.gitignore 대상)
@@ -677,6 +678,7 @@ python package_source.py   # dist/MultiAgentOrchestrator_source_YYYYMMDD.zip (�
 | `mcp_node/memory-scoped.mjs` (포크한 서버의 실행 사본) | `workspace/`, `multiagent.db`, `conf.json` |
 | `conf.example.json`, `.env.example`, `requirements.txt` | `tests/`, `wiki/`, `CLAUDE.md` |
 | `docs/` (사용 설명서 마크다운 + 렌더러) | `docs/user_manual_html/` (렌더링 산출물) |
+| `LICENSE.md` | |
 | `setup_mcp.py`, `open_browser.py`, `README.md` | 패키징 스크립트 (`package_*.py|ps1`) |
 
 포함 목록은 제외 목록이 아니라 **허용 목록**입니다. 제외 목록으로 짜면 나중에 생긴 디렉터리가

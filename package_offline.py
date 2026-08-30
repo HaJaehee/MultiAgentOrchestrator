@@ -5,6 +5,7 @@
     MultiAgentOrchestrator_bundle/
     ├── app/                 애플리케이션 소스
     ├── conf.json            설정 (없으면 conf.example.json 에서 복사)
+    ├── LICENSE.md           라이선스 (LGPL-3.0 전문 + 제3자 고지)
     ├── wheels/              오프라인 pip wheel (앱 + MCP 서버 + 샌드박스 서버)
     ├── python_runtime/      포터블 CPython
     ├── node_runtime/        node.exe (MCP 공식 Node 서버 구동용, npm 미포함)
@@ -126,7 +127,9 @@ def stage_sources() -> None:
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 
     # open_browser.py 는 실행 스크립트가 백그라운드로 띄웁니다 (서버가 응답하면 브라우저 열기).
-    for fname in [".env.example", "requirements.txt", "README.md", "open_browser.py"]:
+    # LICENSE.md 는 배포물과 반드시 함께 다녀야 합니다 (LGPL-3.0 제4조 고지 의무).
+    for fname in [".env.example", "requirements.txt", "README.md", "LICENSE.md",
+                  "open_browser.py"]:
         src = ROOT_DIR / fname
         if src.exists():
             shutil.copy2(src, STAGING_DIR / fname)

@@ -39,6 +39,7 @@ Windows 에서 실행하는 것을 전제로 합니다 — 포터블 런타임�
 MultiAgentOrchestrator_bundle/
 ├── app/                    애플리케이션 소스
 ├── conf.json               설정 (없으면 conf.example.json 에서 복사)
+├── LICENSE.md              라이선스 (LGPL-3.0 전문 + 제3자 고지)
 ├── wheels/                 오프라인 pip wheel
 ├── python_runtime/         포터블 CPython
 ├── node_runtime/           node.exe (npm 미포함)
@@ -112,6 +113,7 @@ MultiAgentOrchestrator_source/
 ├── setup_mcp.py
 ├── open_browser.py
 ├── README.md
+├── LICENSE.md                    라이선스 (LGPL-3.0 전문 + 제3자 고지)
 └── MANIFEST.txt                  파일별 SHA-256
 ```
 
@@ -220,6 +222,20 @@ Get-Content MANIFEST.txt | Where-Object { $_ -notmatch '^#' } | ForEach-Object {
 ```bash
 python package_offline.py --launchers-only <설치본 경로>
 ```
+
+---
+
+## 라이선스 고지
+
+`LICENSE.md` 는 **두 패키지 모두**에 담깁니다. 이 프로젝트는 의존성을 통째로
+재배포하므로(포터블 CPython, `node.exe`, 오프라인 wheel, 벤더링한 MCP 서버),
+각 의존성의 라이선스 의무를 직접 이행해야 합니다.
+
+- 이 프로젝트는 **LGPL-3.0** 입니다. 전문이 `LICENSE.md` 에 실려 있습니다
+- 배포물에서 가장 엄격한 라이선스는 `pyzmq` wheel 에 동봉된 `libzmq`(LGPL-3.0)
+  입니다. `jupyter_client` / `ipykernel` 이 커널 통신에 끌어옵니다
+- 제3자 의존성의 라이선스 원문은 각 wheel 의 `.dist-info/` 안에 함께 실려
+  번들로 따라옵니다 — 별도 수집 단계가 필요 없습니다
 
 ---
 

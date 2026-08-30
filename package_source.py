@@ -19,6 +19,7 @@ MCP 서버 설치본까지 들고 있어 수백 MB 입니다. 그 런타임은 �
         ├── setup_mcp.py
         ├── open_browser.py
         ├── README.md
+        ├── LICENSE.md               라이선스 (LGPL-3.0 전문 + 제3자 고지)
         └── MANIFEST.txt              파일별 SHA-256 (반입 심사·무결성 확인용)
 
 사용법:
@@ -79,6 +80,8 @@ PACKAGE_FILES: list[tuple[str, str]] = [
     # 실행 스크립트가 백그라운드로 띄우는 브라우저 대기 스크립트.
     ("open_browser.py", "open_browser.py"),
     ("README.md", "README.md"),
+    # 라이선스는 반드시 배포물과 함께 다녀야 합니다 (LGPL-3.0 제4조 고지 의무).
+    ("LICENSE.md", "LICENSE.md"),
     # 포크한 memory 서버의 실행 사본. 원본(mcp_servers/)만 넣어도 앱이 기동할 때
     # 다시 복사하지만, 설치본의 파일을 바로 갈아끼울 수 있도록 함께 담습니다.
     ("mcp_node/memory-scoped.mjs", "mcp_node/memory-scoped.mjs"),
