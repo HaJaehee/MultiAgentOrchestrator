@@ -69,6 +69,40 @@ for /f "usebackq delims=" %%i in (`"%PYTHON_BIN%" -c "from app.config import get
 `conf.json` 의 `app` 을 그대로 읽습니다. 두 곳에 같은 값을 적어 두면 반드시
 어긋납니다.
 
+### 압축에서 빠지는 것
+
+스테이징 폴더(`dist/MultiAgentOrchestrator_bundle/`)는 빌드 사이에 남아 있습니다.
+거기서 `run_offline.bat` 로 앱을 한 번 띄우면 대화 DB 와 에이전트가 만든 파일이
+그 안에 생기고, 압축이 폴더를 통째로 담던 시절에는 그것이 그대로 반입 대상이
+되었습니다.
+
+| 빠지는 것 | 왜 |
+| :--- | :--- |
+| 최상위의 `*.db` / `*.db-wal` / `*.db-shm` / `*.sqlite*` | 대화 기록. 받는 쪽에서 첫 기동 때 새로 만들어집니다 |
+| 최상위의 `.env` | 이 기계의 실제 자격증명 |
+| 최상위의 `*.log`, `MANIFEST.txt` | 실행·패키징 잔재 |
+| `workspace/` 의 내용물 (`.gitkeep`, `.git/` 제외) | 여기서 돌려 본 흔적이지 배포물이 아닙니다 |
+
+**최상위에서만** 봅니다. 벤더링한 트리(`python_runtime/`, `wheels/`,
+`mcp_sandbox/`, `node_runtime/`)는 받은 그대로 나갑니다 — 그 안의 `__pycache__`
+나 `MANIFEST.txt` 는 그 배포판의 일부이지 이 앱이 만든 잔재가 아닙니다.
+
+`workspace/.git/` 은 남깁니다. git MCP 서버는 유효한 저장소가 아니면 기동에
+실패합니다.
+
+무엇이 빠졌는지는 조용히 넘기지 않고 빌드 로그에 찍습니다.
+
+```text
+      운영 잔재 5개를 제외했습니다:
+        - MANIFEST.txt
+        - multiagent.db
+        - workspace/.memory-graphs
+        - workspace/handoff.py
+        - workspace/workspace
+```
+
+---
+
 ### 런타임 검증
 
 패키징 단계에서 필수 모듈 import 를 확인하고, 하나라도 없으면 **실패로

@@ -29,6 +29,7 @@ pip wheel 이 실행 플랫폼 기준으로 수집되기 때문입니다. 패키
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import os
 import shutil
@@ -102,6 +103,29 @@ SANDBOX_EXCLUDE = shutil.ignore_patterns(
 )
 
 STEPS = 10
+
+# 번들에 담지 않을 것.
+#
+# 스테이징 폴더(dist/MultiAgentOrchestrator_bundle)는 실행 사이에 남아 있고,
+# 거기서 run_offline.bat 로 앱을 한 번 띄우면 대화 DB 와 에이전트가 만든 파일이
+# 그 안에 생깁니다. 예전에는 압축이 폴더를 통째로 담아서 그것들이 그대로
+# 반입 대상이 되었습니다 — 실제로 workspace/handoff.py 같은 테스트 산출물이
+# 배포 ZIP 에 들어가 있었습니다.
+#
+# **최상위에서만** 봅니다. 벤더링한 트리(python_runtime, wheels, mcp_sandbox,
+# node_runtime)는 받은 그대로 나가야 합니다 — 그 안의 __pycache__ 나 MANIFEST.txt
+# 는 그 배포판의 일부이지 이 앱이 만든 잔재가 아닙니다.
+BUNDLE_EXCLUDE_ROOT_PATTERNS = [
+    "*.db", "*.db-wal", "*.db-shm", "*.sqlite", "*.sqlite3",   # 대화 기록
+    "*.log",
+    ".env",                                                     # 실제 자격증명
+    "MANIFEST.txt",                                             # 소스 패키지 산출물
+]
+
+# 작업 공간은 **빈 상태로** 나가야 합니다. 여기 남아 있는 파일은 전부 이 기계에서
+# 돌려 본 흔적이지 배포물이 아닙니다. git 저장소 자체는 남깁니다 — git MCP 서버가
+# 유효한 저장소가 아니면 기동하지 않습니다.
+WORKSPACE_KEEP = {".gitkeep"}
 
 
 def log(step: int, message: str) -> None:
@@ -738,6 +762,52 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
 
 
 # ---------------------------------------------------------------------------
+def _is_excluded(rel: Path) -> bool:
+    """번들에서 빼야 할 경로인지.
+
+    걸러내는 것은 **이 기계에서 앱을 돌려 본 흔적**뿐입니다. 벤더링한 런타임과
+    wheel 은 받은 그대로 내보냅니다.
+    """
+    parts = rel.parts
+    if not parts:
+        return False
+
+    # 1) 최상위에 떨어진 운영 파일 (multiagent.db, .env, *.log ...)
+    if len(parts) == 1 and any(
+        fnmatch.fnmatch(parts[0], pat) for pat in BUNDLE_EXCLUDE_ROOT_PATTERNS
+    ):
+        return True
+
+    # 2) 작업 공간 안은 .git 과 .gitkeep 만 남깁니다.
+    if parts[0] == "workspace" and len(parts) > 1:
+        if parts[1] == ".git":
+            return False
+        return not (len(parts) == 2 and parts[1] in WORKSPACE_KEEP)
+
+    return False
+
+
+def write_bundle_zip(staging: Path, archive: Path) -> list[str]:
+    """스테이징 폴더를 ZIP 으로 묶되 운영 잔재는 뺍니다.
+
+    제외한 경로 목록을 돌려줍니다 — 조용히 빼면 무엇이 빠졌는지 아무도 모릅니다.
+    """
+    skipped: list[str] = []
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(staging.rglob("*")):
+            rel = path.relative_to(staging)
+            if _is_excluded(rel):
+                if path.is_file() or not any(path.iterdir()):
+                    skipped.append(rel.as_posix())
+                continue
+            if path.is_file():
+                zf.write(path, rel.as_posix())
+            elif path.is_dir() and not any(path.iterdir()):
+                # 빈 폴더도 구조로서 의미가 있으면 남깁니다 (workspace 등).
+                zf.writestr(rel.as_posix() + "/", "")
+    return skipped
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="폐쇄망 배포용 번들 패키징")
     parser.add_argument("--skip-node", action="store_true", help="Node 런타임 및 Node MCP 서버 제외")
@@ -813,7 +883,13 @@ def main() -> None:
     log(10, f"최종 ZIP 아카이브 생성 중 ({ZIP_FILE})...")
     if ZIP_FILE.exists():
         ZIP_FILE.unlink()
-    shutil.make_archive(str(DIST_DIR / "MultiAgentOrchestrator_offline"), "zip", STAGING_DIR)
+    skipped = write_bundle_zip(STAGING_DIR, ZIP_FILE)
+    if skipped:
+        print(f"      운영 잔재 {len(skipped)}개를 제외했습니다:")
+        for rel in skipped[:12]:
+            print(f"        - {rel}")
+        if len(skipped) > 12:
+            print(f"        ... 외 {len(skipped) - 12}개")
 
     zip_size_mb = round(ZIP_FILE.stat().st_size / (1024 * 1024), 2)
 
