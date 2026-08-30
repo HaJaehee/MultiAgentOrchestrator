@@ -6,6 +6,13 @@ from fastapi.responses import JSONResponse
 from nicegui import app as nicegui_app, ui
 import uvicorn
 from app.agents.pool import get_agent_pool
+from app.about import (
+    APP_NAME,
+    APP_VERSION,
+    APP_VERSION_LABEL,
+    AUTHOR,
+    AUTHOR_EMAIL,
+)
 from app.config import DEFAULT_CONFIG_PATH, get_config
 from app.database.session import init_db
 from app.mcp.manager import get_mcp_manager
@@ -59,9 +66,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 # 1. Create FastAPI Application
 server = FastAPI(
-    title="MADO: Multi-Agent Debate & Orchestration Platform",
+    title=APP_NAME,
     description="MCP-enabled Autonomous Multi-Agent Collaborative Debate & Synthesis Backend",
-    version="0.1.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -72,6 +79,8 @@ async def health_check():
     pool = get_agent_pool()
     return {
         "status": "healthy",
+        "version": APP_VERSION_LABEL,
+        "author": {"name": AUTHOR, "email": AUTHOR_EMAIL},
         "app": {"host": cfg.app.host, "port": cfg.app.port, "debug": cfg.app.debug},
         "registered_agents": [a.key for a in pool.list_all()],
     }
@@ -150,7 +159,7 @@ create_ui()
 create_personas_page()
 ui.run_with(
     server,
-    title="MADO: Multi-Agent Debate & Orchestration Platform",
+    title=APP_NAME,
     favicon=FAVICON_SVG,
     dark=True,
 )

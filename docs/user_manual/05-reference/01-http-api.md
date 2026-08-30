@@ -16,10 +16,16 @@ FastAPI 엔드포인트는 **조회 전용**입니다. 토론 진행과 설정 �
 ```json
 {
   "status": "healthy",
+  "version": "v0.1",
+  "author": { "name": "Ha, Jaehee", "email": "lovesm135@naver.com" },
   "app": { "host": "127.0.0.1", "port": 8000, "debug": true },
   "registered_agents": ["orchestrator", "architect", "coder", "critic"]
 }
 ```
+
+`version` 과 `author` 는 [`app/about.py`](../../../app/about.py) 한 곳에서 옵니다.
+FastAPI 메타데이터, 화면 헤더 뱃지, 정보 모달(우측 상단 **ⓘ**)이 같은 값을
+읽으므로 버전을 올릴 때 한 곳만 고치면 됩니다.
 
 ---
 

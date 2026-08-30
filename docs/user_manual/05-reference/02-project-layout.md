@@ -42,6 +42,7 @@ MultiAgentOrchestrator/
 
 ```text
 app/
+├── about.py                    ~25   앱 이름·버전·저작자 (단일 출처)
 ├── main.py                   195   FastAPI 앱, lifespan, /api/*, CLI 진입점
 ├── config.py               1,035   conf.json 로더·기록기, 환경변수 치환, Pydantic
 ├── export.py                 201   대화 → 마크다운 문서
@@ -97,6 +98,7 @@ app/
 | 산출물 렌더링 | `ui/components/artifact_viewer.py` |
 | 내보내기 형식 | `export.py` |
 | API 엔드포인트 | `main.py` |
+| 버전·저작자 표기 | `about.py` (여기만 고치면 전부 따라옵니다) |
 | DB 스키마 | `database/models.py` |
 
 ---

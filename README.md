@@ -1,7 +1,15 @@
 # 🤖 MADO — Multi-Agent Debate & Orchestration Platform
 
+`v0.1` · `LGPL-3.0-or-later` · `Python 3.11+`
+
 > **MCP 도구를 활용하는 반응형 멀티 에이전트 협업 & 토론 웹 애플리케이션**  
 > Dynamic Agent Profiling via `conf.json`, MCP Tool Integration, Multi-Model LLM Abstraction (LiteLLM), StateGraph Orchestration, and NiceGUI + FastAPI Reactive Web Interface.
+
+```
+Author: Ha, Jaehee, Email: lovesm135@naver.com, Version: v0.1
+```
+
+같은 내용을 웹 UI 우측 상단의 **ⓘ** 버튼으로도 볼 수 있습니다.
 
 ---
 
@@ -92,6 +100,7 @@ MultiAgentOrchestrator/
 ├── workspace/                # 에이전트 공용 작업 공간 (.gitignore 대상)
 ├── app/
 │   ├── main.py               # FastAPI + NiceGUI 실행 엔트리포인트
+│   ├── about.py              # 앱 이름·버전·저작자 (단일 출처)
 │   ├── config.py             # JSON 로더/기록기, 환경변수 치환 및 Pydantic 검증
 │   ├── database/             # SQLite & SQLAlchemy 비동기 ORM
 │   │   ├── models.py         # Session, Message, ToolCallRecord, Artifact, SessionAgent 모델
@@ -191,6 +200,33 @@ python -m app.main
 
 ```bash
 pytest -v tests/
+```
+
+---
+
+## ℹ️ 정보 (About)
+
+| 항목 | 값 |
+|------|-----|
+| Author | Ha, Jaehee |
+| Email | lovesm135@naver.com |
+| Version | **v0.1** |
+| License | LGPL-3.0-or-later ([LICENSE.md](LICENSE.md)) |
+
+버전 문자열의 정본은 [`app/about.py`](app/about.py) 한 곳입니다. FastAPI 메타데이터,
+`GET /api/health`, 웹 UI 헤더 뱃지, 정보 모달이 모두 이 값을 읽습니다 — 올릴 때
+한 곳만 고치면 됩니다.
+
+```bash
+curl -s localhost:8000/api/health | python -m json.tool
+```
+
+```json
+{
+  "status": "healthy",
+  "version": "v0.1",
+  "author": { "name": "Ha, Jaehee", "email": "lovesm135@naver.com" }
+}
 ```
 
 ---

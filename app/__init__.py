@@ -1,2 +1,2 @@
 """MADO: Multi-Agent Debate & Orchestration Platform."""
-__version__ = "0.1.0"
+from app.about import APP_VERSION as __version__  # noqa: F401
