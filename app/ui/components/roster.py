@@ -96,7 +96,8 @@ class AgentRosterControl:
         self.mcp_locked: bool = False
         self.mcp_lock_reason: str = ""
         self.cards_row: Optional[ui.row] = None
-        # 에이전트 추가·삭제는 "이 대화가 아직 시작되지 않았고, 아무 대화도 토론
+        # 에이전트 구성 변경(추가·삭제·진영·발언 순서·도구)은 "이 대화가 아직
+        # 시작되지 않았고, 아무 대화도 토론
         # 중이 아닐 때" 만 열립니다 (`_agent_admin_lock_reason`).
         self.add_agent_btn: Optional[ui.button] = None
         self.add_agent_tooltip: Optional[ui.tooltip] = None
@@ -420,8 +421,9 @@ class AgentRosterControl:
                         ).props("dense dark color=indigo-4").tooltip(
                             "이 대화의 토론에 참여시킬지 (conf.toml 은 그대로)"
                         )
-                        # 끄기·삭제는 conf.toml 을 고치는 조작이라, 위의 참여
-                        # 체크박스와 나란히 두면 반드시 헷갈립니다. 한 겹 안에 둡니다.
+                        # 진영·끄기·삭제는 conf.toml 을 고치는 조작이라, 이 대화에만
+                        # 걸리는 위의 참여 체크박스와 나란히 두면 반드시 헷갈립니다.
+                        # 한 겹 안에 둡니다.
                         admin_btn = ui.button(icon="more_vert").props(
                             "flat dense round size=xs color=slate-5"
                         )
@@ -430,7 +432,9 @@ class AgentRosterControl:
                             admin_btn.disable()
                             admin_btn.tooltip(admin_reason)
                         else:
-                            admin_btn.tooltip("conf.toml 에서 이 에이전트 끄기/삭제")
+                            admin_btn.tooltip(
+                                "디베이트 진영 배정 · 비활성화 · 삭제 (conf.toml 에 저장)"
+                            )
                             with admin_btn, ui.menu().props("dark").classes("bg-slate-800"):
                                 ui.label("디베이트 진영").classes(
                                     "px-4 pt-2 pb-1 text-[10px] font-bold text-slate-500"
@@ -660,7 +664,7 @@ class AgentRosterControl:
             return True
         return False
 
-    # ------------------------------------------------------- 에이전트 추가/끄기/삭제
+    # --------------------------------------------- 에이전트 구성 (추가/진영/순서/삭제)
     #
     # 에이전트 구성은 conf.toml 이 정본이라 모든 대화가 공유합니다. 그런데 대화는
     # 첫 발언과 함께 참여 에이전트와 페르소나가 고정되므로, 여기서 바꾼 것은
@@ -669,7 +673,12 @@ class AgentRosterControl:
     # 열립니다.
 
     def _agent_admin_lock_reason(self) -> str:
-        """지금 에이전트를 추가·삭제하면 안 되는 이유. 해도 되면 빈 문자열.
+        """지금 에이전트 구성을 바꾸면 안 되는 이유. 바꿔도 되면 빈 문자열.
+
+        이 하나가 conf.toml 을 고치는 조작 전부를 막습니다 — 추가·삭제·비활성화,
+        디베이트 진영 배정, 발언 순서(드래그), 도구 할당. 그래서 문구도 그 전부를
+        말해야 합니다. '추가·삭제' 만 말하면 순서를 바꾸려다 막힌 사용자가 엉뚱한
+        안내를 읽습니다.
 
         두 가지를 봅니다.
 
@@ -684,8 +693,9 @@ class AgentRosterControl:
             return self.mcp_lock_reason
         if self.personas_locked:
             return (
-                "이 대화는 이미 토론이 시작되어 참여 에이전트가 고정되었습니다. "
-                "에이전트를 추가·삭제하려면 새 대화를 시작하세요."
+                "이 대화는 이미 토론이 시작되어 에이전트 구성이 고정되었습니다. "
+                "에이전트 추가·삭제, 진영, 발언 순서, 도구를 바꾸려면 새 대화를 "
+                "시작하세요."
             )
         return ""
 
@@ -729,8 +739,9 @@ class AgentRosterControl:
                 )
             else:
                 self.agent_admin_hint.set_text(
-                    "⚠️ 에이전트 추가·삭제는 conf.toml 에 저장되어 앞으로 만드는 모든 대화에 "
-                    "적용됩니다. 이미 토론이 시작된 대화는 그때 고정된 구성을 그대로 씁니다."
+                    "⚠️ 에이전트 추가·삭제와 진영·발언 순서·도구 변경은 conf.toml 에 저장되어 "
+                    "앞으로 만드는 모든 대화에 적용됩니다. 이미 토론이 시작된 대화는 그때 "
+                    "고정된 구성을 그대로 씁니다."
                 )
                 self.agent_admin_hint.classes(
                     replace="text-[10px] text-slate-500 w-full leading-snug -mt-1"
@@ -1452,8 +1463,9 @@ class AgentRosterControl:
 
         도구 할당은 conf.toml 에 저장되어 **아직 시작하지 않은 대화**에 걸립니다.
         이미 시작한 대화는 첫 발언 때 도구 권한까지 스냅샷으로 굳었으므로 여기서
-        바꿔도 그 대화에는 닿지 않습니다. 그래서 에이전트 추가·삭제와 같은 잠금을
-        씁니다 — 닿지 않는 조작을 열어 두면 바꿨다고 착각하게 됩니다.
+        바꿔도 그 대화에는 닿지 않습니다. 그래서 다른 구성 변경과 같은 잠금을
+        씁니다 (`_agent_admin_lock_reason`) — 닿지 않는 조작을 열어 두면 바꿨다고
+        착각하게 됩니다.
         """
         if self._blocked_for_agent_admin():
             return
