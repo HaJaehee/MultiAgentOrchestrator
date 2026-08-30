@@ -46,7 +46,16 @@ The web application workspace is organized into four primary UI components in [a
 > `The parent element this slot belongs to has been deleted.`
 
 - **Agent Toggle Cards**: Allows users to include or exclude specific specialists (e.g. toggling the Critic off for faster brainstorming). The Master Orchestrator is fixed and always enabled.
-- **Dynamic Live Refresh**: Rendered inside a reactive container (`cards_row`). When personas are updated via the persona editor or config reloads, `update_agents()` and `refresh_agent_cards()` dynamically update card labels and roles without a page reload.
+- **Card anatomy**: drag handle · avatar · name with `수정됨` / stance / `이 대화 전용` badges · role ·
+  participation checkbox · ⋮ menu (stance, disable, delete) · model line · tool button. The checkbox
+  scopes to *this conversation*; everything in the ⋮ menu writes to `conf.toml`. They are deliberately
+  one layer apart — side by side they are indistinguishable and the mistake is expensive.
+- **Reordering**: cards are dragged to set `debate_priority`; the lifted card fades and the drop edge
+  is marked. See [roster-editing.md](../agents/roster-editing.md#5-speaking-order-by-drag).
+- **Card width**: `min-w-[270px] max-w-[340px]`. The name row also carries `min-w-0 overflow-hidden`
+  so the *name* truncates when space runs out. Without it the row could not shrink below its content,
+  `truncate` never engaged, and the stance badge overflowed onto the checkbox and ⋮ button.
+- **Dynamic Live Refresh**: Rendered inside a reactive container (`cards_row`). When personas are updated via the persona editor or config reloads, `refresh_agent_cards()` rebuilds the cards in place, so labels, roles, order, and badges update without a page reload.
 - **Configuration Tooltips**: Hovering over an agent card reveals its configured model, endpoint URL, and sequential thinking mode.
 - **Strategy Dropdown**: Selects between `sequential_debate`, `adversarial_debate`, and `orchestrator_led`.
 - **Agent Cards**: Drag to reorder (writes `debate_priority` to `conf.toml`); the ⋮ menu sets `debate_stance` and can disable or delete the agent.
@@ -61,12 +70,30 @@ The web application workspace is organized into four primary UI components in [a
 
 ### 1.3. Chat & Debate Feed ([app/ui/components/chat_feed.py](file:///d:/MultiAgentOrchestrator/app/ui/components/chat_feed.py))
 - **Color-Coded Message Timeline**: Displays user prompts, orchestrator guidance, and specialist contributions with distinct avatars, roles, and colors.
-- **Real-Time Token Streaming**: Supports incremental token streaming (`start_streaming_message`, `append_stream_chunk`, and `finalize_streaming_message`). Agent messages stream directly into reactive markdown cards as LLM completion chunks arrive.
+- **Real-Time Token Streaming**: Supports incremental token streaming (`start_streaming_message()`, `append_stream_chunk()`, and `_finalize_streaming_message()`). Agent messages stream directly into reactive markdown cards as LLM completion chunks arrive.
 - **Folding Tool Accordions**: Each MCP tool call (input arguments and execution outputs) renders inside an expandable Quasar accordion, preserving timeline readability.
 - **Status & Progress Banner**: Shows real-time speaker indicators (e.g. `[Senior Python Engineer] 발언 및 분석 중...`) and round counters during execution.
 - **Input Bar**: Auto-expanding message textarea with submit shortcuts (`Enter` / `Ctrl+Enter`).
 - **Failure Cards**: A message with `msg_type="error"` — an agent whose endpoint never answered — renders on a rose background with an `응답 없음` badge. `finalize_streaming_message()` restyles the card in place when a turn that had started streaming ends in failure.
-- **Reattachment**: `render_all(messages, streaming_ids=…)` rebuilds the whole feed from a snapshot and re-registers any still-streaming card, so a page opened mid-debate keeps receiving chunks.
+- **Reattachment**: `render_all(messages, streaming_ids=…)` rebuilds the whole feed from a
+  snapshot and re-registers any still-streaming card, so a page opened mid-debate keeps receiving
+  chunks.
+- **Collapse on completion**: a finished speech is clamped to its first three lines, and its tool
+  accordions are hidden with it — clamping the prose while leaving five accordions open saves
+  nothing. A card being written stays expanded; watching generation is the point of the screen, and
+  a clamped card would just cycle three lines. Reloading re-renders finished speeches collapsed.
+  The expand control sits top-right and only appears on speeches long enough to clamp
+  (`is_clampable()`); a chevron next to a one-line "no objection" is pure noise.
+  Clamping uses `max-height`, not `-webkit-line-clamp`, which requires `display: -webkit-box` and
+  would break the block layout of mixed markdown. The cut edge is faded with `mask-image` rather than
+  an overlaid gradient, so it needs no per-speaker background colour.
+- **Copy button**: a `content_copy` button on every card writes the **markdown source** — not the
+  rendered text — to the clipboard, whether or not the card is collapsed.
+  `navigator.clipboard` exists only in secure contexts (HTTPS or localhost). With the default
+  `host = "0.0.0.0"`, a colleague opening `http://<ip>:8000` has no such API, and the button would
+  silently do nothing while reporting success. [app/ui/clipboard.py](file:///d:/MultiAgentOrchestrator/app/ui/clipboard.py)
+  falls back to a hidden textarea and `execCommand('copy')`; the artifact viewer's copy button uses
+  the same helper.
 
 ### 1.4. Artifact Viewer ([app/ui/components/artifact_viewer.py](file:///d:/MultiAgentOrchestrator/app/ui/components/artifact_viewer.py))
 - **Tabbed Interface**:

@@ -18,7 +18,27 @@ AGENT_STYLE_MAP = {
 }
 ```
 
-Any new agent added dynamically to `conf.toml` receives the fallback default style (`smart_toy`, `primary`, `#1976d2`).
+Agents created from the UI are not in this table.
+[`style_for_agent()`](file:///d:/MultiAgentOrchestrator/app/agents/base.py) picks a colour for them
+from `CUSTOM_STYLE_PALETTE` using `crc32(key)` — Python's string `hash()` is randomised per process
+and would give the same agent a different colour on every restart. Falling back to one grey robot for
+everyone made speakers indistinguishable in the debate feed.
+
+---
+
+## 1.1. Debate Placement Fields
+
+Two fields decide where an agent stands in a round. They live on the agent rather than in strategy
+code, because strategies used to match on agent keys and every UI-created agent fell through those
+tests.
+
+| Field | Default | Meaning |
+| :--- | :--- | :--- |
+| `debate_priority` | `100` | Speaking order within a round; lower speaks first. Equal values keep `conf.toml` order, so an unconfigured file speaks in file order. |
+| `debate_stance` | `"neutral"` | `proponent` / `critic` / `neutral`; read only by the adversarial strategy. |
+
+Both are edited from the roster (drag to reorder, ⋮ menu for stance — see
+[roster-editing.md](roster-editing.md)) and both are captured in the session snapshot.
 
 ---
 

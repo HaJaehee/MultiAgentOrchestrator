@@ -94,6 +94,10 @@ Declares external MCP server processes launched and monitored by the backend.
 ### 2.5. `[agents.<key>]` Section
 Configures specialist agents in the agent pool.
 
+> These sections can be added, edited, and removed from the roster panel without restarting the app;
+> the writers edit line ranges so comments and `${VAR}` placeholders survive. See
+> [roster-editing.md](../agents/roster-editing.md).
+
 | Key | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `name` | `str` | Required | Display name of the agent. |
@@ -105,6 +109,8 @@ Configures specialist agents in the agent pool.
 | `temperature` | `float` | Inherited | Custom sampling temperature override. |
 | `max_tokens` | `int` | Inherited | Token budget override. |
 | `allowed_mcp_servers` | `list[str]` | `[]` | List of MCP server keys this agent is authorized to call. |
+| `debate_priority` | `int` | `100` | Speaking order within a round; lower speaks first. Ties keep `conf.toml` order, so leaving every agent at the default speaks in file order. Rewritten as `10, 20, 30…` when cards are dragged in the roster. |
+| `debate_stance` | `str` | `"neutral"` | `"proponent"` / `"critic"` / `"neutral"`. Read only by the adversarial strategy, which alternates the two sides. If no agent declares a side, that strategy degrades to a single priority-ordered pass. |
 | `system_prompt` | `str` | `""` | Base persona instruction and behavioral guidelines. |
 | `sequential_thinking` | `dict` | Inherited | Per-agent sequential thinking overrides (keys merge with `[llm]`). |
 
