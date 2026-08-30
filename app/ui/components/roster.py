@@ -44,6 +44,56 @@ PROGRESS_TOAST_TIMEOUT = 8
 # 돌려주므로, 그대로 쓰면 conf.toml 에 `max_tokens = 4096.0` 이 적힙니다.
 INT_AGENT_FIELDS = ("max_tokens", "max_context_window", "num_retries", "max_tool_iterations")
 
+# 카드 드래그는 **브라우저 안에서** 처리합니다.
+#
+# 예전에는 `dragover` 에 파이썬 핸들러를 달았습니다. NiceGUI 는 파이썬 핸들러가
+# 있으면 그 이벤트를 서버로 보내는데, `dragover` 는 커서가 움직이는 내내 초당 수십
+# 번 발생합니다. 카드 위를 지나가기만 해도 웹소켓 메시지가 쏟아져 드래그가 끊겼습니다.
+# `js_handler` 만 주면 서버로 아무것도 보내지 않습니다.
+#
+# 놓을 자리도 여기서 정합니다. 커서가 카드의 왼쪽 절반이면 그 앞, 오른쪽 절반이면
+# 그 뒤입니다. 이걸 커서로 정하지 않으면 "오른쪽으로 한 칸" 과 "맨 뒤로" 를 표현할
+# 방법이 없습니다.
+_DRAG_CLASSES = "'agent-dragging', 'agent-drop-before', 'agent-drop-after'"
+
+JS_DRAG_START = (
+    "(e) => { e.dataTransfer.effectAllowed = 'move';"
+    " e.currentTarget.classList.add('agent-dragging'); emit(); }"
+)
+JS_DRAG_OVER = (
+    "(e) => { e.preventDefault();"
+    " const el = e.currentTarget;"
+    " if (el.classList.contains('agent-dragging')) return;"
+    " const r = el.getBoundingClientRect();"
+    " const after = e.clientX > r.left + r.width / 2;"
+    " el.classList.toggle('agent-drop-before', !after);"
+    " el.classList.toggle('agent-drop-after', after); }"
+)
+JS_DRAG_LEAVE = (
+    "(e) => { e.currentTarget.classList.remove('agent-drop-before', 'agent-drop-after'); }"
+)
+JS_DROP = (
+    "(e) => { e.preventDefault();"
+    " const el = e.currentTarget;"
+    " el.classList.remove('agent-drop-before', 'agent-drop-after');"
+    " const r = el.getBoundingClientRect();"
+    " emit({after: e.clientX > r.left + r.width / 2}); }"
+)
+JS_DRAG_END = (
+    "(e) => { document.querySelectorAll("
+    "'.agent-dragging, .agent-drop-before, .agent-drop-after')"
+    f".forEach(n => n.classList.remove({_DRAG_CLASSES})); emit(); }}"
+)
+
+
+def dropped_after(event: Any) -> bool:
+    """드롭 지점이 대상 카드의 오른쪽 절반이었는지 (`JS_DROP` 이 실어 보낸 값)."""
+    args = getattr(event, "args", None)
+    if isinstance(args, (list, tuple)):
+        args = args[0] if args else None
+    return bool(args.get("after")) if isinstance(args, dict) else False
+
+
 # 디베이트 전략의 진영. conf.toml 에는 영문 키가 들어가고 화면에는 이 이름이 뜹니다.
 STANCE_LABELS = {"proponent": "제안자", "critic": "비판자", "neutral": "중립"}
 STANCE_COLORS = {"proponent": "teal-8", "critic": "amber-9", "neutral": "slate-7"}
@@ -364,11 +414,18 @@ class AgentRosterControl:
         card = ui.card().classes(card_cls)
         if reorderable:
             card.props('draggable="true"')
-            card.on("dragstart", lambda _, k=agent.key: self._on_drag_start(k))
-            card.on("dragend", lambda _: self._on_drag_end())
-            # `.prevent` 가 없으면 브라우저가 드롭을 아예 허용하지 않습니다.
-            card.on("dragover.prevent", lambda _: None)
-            card.on("drop", lambda _, k=agent.key: self._on_drop_on(k))
+            # 서버로 가는 것은 드래그 한 번에 세 번뿐입니다 (시작·놓기·끝).
+            # 커서를 따라다니는 dragover/dragleave 는 브라우저 안에서만 돕니다.
+            card.on("dragstart", lambda _, k=agent.key: self._on_drag_start(k),
+                    js_handler=JS_DRAG_START)
+            card.on("dragend", lambda _: self._on_drag_end(), js_handler=JS_DRAG_END)
+            card.on("dragover", js_handler=JS_DRAG_OVER)
+            card.on("dragleave", js_handler=JS_DRAG_LEAVE)
+            card.on(
+                "drop",
+                lambda e, k=agent.key: self._on_drop_on(k, dropped_after(e)),
+                js_handler=JS_DROP,
+            )
 
         with card:
             with ui.row().classes("w-full items-center justify-between no-wrap"):
@@ -827,8 +884,18 @@ class AgentRosterControl:
     def _on_drag_end(self) -> None:
         self.dragging_key = None
 
-    async def _on_drop_on(self, target_key: str) -> None:
-        """집어 든 카드를 이 카드 자리에 놓습니다.
+    async def _on_drop_on(self, target_key: str, after: bool = False) -> None:
+        """집어 든 카드를 이 카드의 앞(`after=False`) 또는 뒤에 놓습니다.
+
+        `after` 는 커서가 대상 카드의 어느 쪽 절반에 있었는지입니다. 이것이 없으면
+        항상 대상 '앞' 에 넣게 되는데, 그러면 두 가지가 불가능해집니다.
+
+        * **오른쪽 이웃으로 한 칸 이동.** 빼고 나면 그 이웃이 원래 자리로 당겨져,
+          그 앞에 다시 넣으면 제자리입니다. 아무 일도 일어나지 않습니다.
+        * **맨 뒤로 보내기.** 마지막 카드 앞이 가장 뒤이므로 마지막 자리에 닿을
+          방법이 없습니다.
+
+        둘 다 "드래그가 안 먹는다" 로 보였습니다.
 
         conf.toml 의 `debate_priority` 를 다시 매깁니다. 화면에 보이는 순서가 곧
         발언 순서이므로, 눈에 보이는 것과 실제로 도는 것이 같아야 합니다.
@@ -844,7 +911,7 @@ class AgentRosterControl:
         if source_key not in keys or target_key not in keys:
             return
         keys.remove(source_key)
-        keys.insert(keys.index(target_key), source_key)
+        keys.insert(keys.index(target_key) + (1 if after else 0), source_key)
 
         await self._apply_agent_change(
             lambda: set_agent_debate_order_in_conf_file(keys, self._conf_path()),

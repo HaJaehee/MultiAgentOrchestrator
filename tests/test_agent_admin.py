@@ -470,3 +470,63 @@ def test_a_neutral_agent_does_not_clutter_the_file(conf: Path):
 
     assert "debate_stance" not in conf.read_text(encoding="utf-8")
     assert _load(conf)["agents"]["plain"].get("debate_stance") is None
+
+
+# --------------------------------------------------------------- 드래그 삽입 위치
+
+
+def _reorder(keys, source, target, after):
+    """`AgentRosterControl._on_drop_on` 의 자리 계산과 같은 규칙."""
+    out = list(keys)
+    out.remove(source)
+    out.insert(out.index(target) + (1 if after else 0), source)
+    return out
+
+
+ROSTER = ["orchestrator", "architect", "coder", "critic"]
+
+
+def test_dropping_on_the_right_half_lands_behind_the_target():
+    """오른쪽 이웃으로 한 칸 옮기기.
+
+    커서 위치를 보지 않고 늘 대상 '앞' 에 넣던 시절에는 이것이 제자리였습니다.
+    빼고 나면 그 이웃이 원래 자리로 당겨지기 때문입니다 — 드래그해도 아무 일도
+    일어나지 않는 것처럼 보였습니다.
+    """
+    assert _reorder(ROSTER, "architect", "coder", after=True) == [
+        "orchestrator", "coder", "architect", "critic",
+    ]
+    # 예전 규칙(after=False)은 제자리였습니다.
+    assert _reorder(ROSTER, "architect", "coder", after=False) == ROSTER
+
+
+def test_the_last_position_is_reachable():
+    """마지막 카드 '뒤' 에 놓을 수 없으면 맨 끝으로 보낼 방법이 없습니다."""
+    assert _reorder(ROSTER, "architect", "critic", after=True) == [
+        "orchestrator", "coder", "critic", "architect",
+    ]
+
+
+def test_dropping_on_the_left_half_lands_in_front_of_the_target():
+    assert _reorder(ROSTER, "critic", "architect", after=False) == [
+        "orchestrator", "critic", "architect", "coder",
+    ]
+
+
+@pytest.mark.parametrize("source", ["architect", "coder", "critic"])
+def test_one_drag_can_put_a_card_in_any_position(source):
+    """카드 하나를 한 번 끌어서 첫째·둘째·셋째 어느 자리로든 보낼 수 있어야 합니다.
+
+    (배치 전체를 한 번에 뒤집을 수 있다는 뜻은 아닙니다. 세 개를 완전히 역순으로
+    만들려면 두 번 끌어야 하고, 그건 드래그의 한계가 아니라 이동 한 번의 한계입니다.)
+    """
+    specialists = ["architect", "coder", "critic"]
+    landed = set()
+    for target in specialists:
+        if target == source:
+            continue
+        for after in (False, True):
+            order = [k for k in _reorder(ROSTER, source, target, after) if k != "orchestrator"]
+            landed.add(order.index(source))
+
+    assert landed == {0, 1, 2}, f"'{source}' 가 닿지 못하는 자리: {{0, 1, 2}} - {landed}"
