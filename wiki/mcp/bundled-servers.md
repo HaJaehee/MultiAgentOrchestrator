@@ -200,7 +200,7 @@ without scope; tools keep working, isolation does not.
 
 The source of truth is `mcp_servers/memory_scoped/index.mjs`. The running copy must sit next
 to `mcp_node/node_modules` to resolve `@modelcontextprotocol/sdk` and `zod`, so
-`sync_vendored_servers()` copies it to wherever `conf.toml` points (`${MCP_NODE_HOME}/memory-scoped.mjs`)
+`sync_vendored_servers()` copies it to wherever `conf.json` points (`${MCP_NODE_HOME}/memory-scoped.mjs`)
 on every startup, absolutising a relative path first. `setup_mcp.py` does the same after `npm install`.
 Nothing needs to be re-run after pulling an updated fork.
 

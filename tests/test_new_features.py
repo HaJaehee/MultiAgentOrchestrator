@@ -1,7 +1,6 @@
 import asyncio
 import os
 import sys
-import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,57 +17,54 @@ from app.orchestration.state import DebateState
 from tests.fake_llm import FakeLLMCaller
 
 
-def test_persona_persistence_in_conf_file():
-    sample_conf = """
-[app]
-host = "127.0.0.1"
-port = 8000
+def test_persona_persistence_in_conf_file(tmp_path):
+    from app.config import read_conf_file, write_conf_file
 
-[agents.orchestrator]
-name = "Lead Orchestrator"
-role = "Orchestrator"
-system_prompt = "Coordinate team."
+    conf_path = tmp_path / "conf.json"
+    write_conf_file(conf_path, {
+        "app": {"host": "127.0.0.1", "port": 8000},
+        "agents": {
+            "orchestrator": {
+                "name": "Lead Orchestrator",
+                "role": "Orchestrator",
+                "system_prompt": "Coordinate team.",
+            },
+            "coder": {
+                "name": "Original Coder",
+                "role": "Developer",
+                "description": "Old description",
+                "system_prompt": "Write code.",
+            },
+        },
+    })
 
-[agents.coder]
-name = "Original Coder"
-role = "Developer"
-description = "Old description"
-system_prompt = "Write code."
-"""
-    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".toml") as tmp:
-        tmp.write(sample_conf)
-        tmp_path = tmp.name
+    update_agent_persona_in_conf_file(
+        agent_key="coder",
+        name="New Lead Developer",
+        role="Tech Lead",
+        system_prompt="Architect and code.",
+        config_path=conf_path,
+    )
 
-    try:
-        update_agent_persona_in_conf_file(
-            agent_key="coder",
-            name="New Lead Developer",
-            role="Tech Lead",
-            system_prompt="Architect and code.",
-            config_path=tmp_path,
-        )
-
-        with open(tmp_path, "r", encoding="utf-8") as f:
-            updated = f.read()
-
-        assert "New Lead Developer" in updated
-        assert "Tech Lead" in updated
-        assert "Architect and code." in updated
-    finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+    coder = read_conf_file(conf_path)["agents"]["coder"]
+    assert coder["name"] == "New Lead Developer"
+    assert coder["role"] == "Tech Lead"
+    assert coder["system_prompt"] == "Architect and code."
+    # 페르소나 밖의 값과 이웃은 건드리지 않습니다.
+    assert coder["description"] == "Old description"
+    assert read_conf_file(conf_path)["agents"]["orchestrator"]["name"] == "Lead Orchestrator"
 
 
 def test_host_and_port_precedence_hierarchy():
-    # 1. Test .env resolution into conf.toml structure
+    # 1. Test .env resolution into conf.json structure
     with patch.dict(os.environ, {"APP_HOST": "192.168.1.100", "APP_PORT": "9090"}):
-        cfg = load_config("conf.toml")
+        cfg = load_config("conf.json")
         assert cfg.app.host == "192.168.1.100"
         assert cfg.app.port == 9090
 
     # 2. Test fallback to defaults when .env not set
     with patch.dict(os.environ, {}, clear=True):
-        cfg_default = load_config("conf.example.toml")
+        cfg_default = load_config("conf.example.json")
         assert cfg_default.app.host == "127.0.0.1"
         assert cfg_default.app.port == 8000
 

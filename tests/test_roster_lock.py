@@ -5,7 +5,7 @@ MCP 서버는 프로세스 전체가 공유합니다. 진행 중인 토론은 �
 더 나쁘게는 — 새로 뜬 다른 구성의 서버가 응답합니다. 이 대화든 다른 대화든
 마찬가지라, 하나라도 돌고 있으면 잠급니다.
 
-여기서는 화면 컨트롤이 실제로 잠기는지와, 잠긴 상태에서 누른 조작이 conf.toml 에
+여기서는 화면 컨트롤이 실제로 잠기는지와, 잠긴 상태에서 누른 조작이 conf.json 에
 닿지 않는지를 봅니다.
 """
 
@@ -112,7 +112,7 @@ def test_a_running_debate_locks_the_controls(roster):
 
 
 @pytest.mark.asyncio
-async def test_locked_toggle_never_reaches_conf_toml(roster, monkeypatch):
+async def test_locked_toggle_never_reaches_the_conf_file(roster, monkeypatch):
     control, runner, manager = roster
     writes: List[tuple] = []
     monkeypatch.setattr(
@@ -186,7 +186,7 @@ async def test_server_change_still_restarts_the_servers(roster):
     assert manager.reloads == 1
 
 
-# --------------------------------------------------------------- conf.toml 다시 읽기
+# --------------------------------------------------------------- conf.json 다시 읽기
 
 
 def test_sync_keeps_choices_prunes_removed_and_turns_new_ones_on(roster):
@@ -237,7 +237,7 @@ async def test_broken_conf_leaves_the_running_setup_untouched(roster, monkeypatc
 
     def get_config(*args, **kwargs):
         if kwargs.get("reload"):
-            raise ValueError("TOML 문법 오류")
+            raise ValueError("JSON 문법 오류")
         return _StubConfig()
 
     reloaded: List[int] = []

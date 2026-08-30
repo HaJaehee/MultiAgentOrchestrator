@@ -18,7 +18,7 @@ _ADDED_COLUMNS = {
     },
     "session_agents": {
         # NULL 이면 "이 컬럼이 생기기 전에 잠긴 대화" 입니다. 그런 대화는 예전처럼
-        # 살아 있는 conf.toml 을 그대로 씁니다. 빈 JSON 을 기본값으로 넣으면 그
+        # 살아 있는 conf.json 을 그대로 씁니다. 빈 JSON 을 기본값으로 넣으면 그
         # 구분이 사라지므로 nullable 로 둡니다.
         "config_snapshot": "TEXT",
     },

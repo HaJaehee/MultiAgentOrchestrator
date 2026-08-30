@@ -46,9 +46,9 @@ def find_git_executable() -> Optional[str]:
 # `${MCP_NODE_HOME}` 안에 둡니다 — @modelcontextprotocol/sdk 와 zod 를
 # `node_modules` 에서 찾으려면 그 옆에 있어야 하기 때문입니다.
 VENDORED_MEMORY_SERVER = PROJECT_ROOT / "mcp_servers" / "memory_scoped" / "index.mjs"
-# conf.toml 이 이 이름으로 가리키는 인자를 포크 사본의 자리로 인식합니다.
+# conf.json 이 이 이름으로 가리키는 인자를 포크 사본의 자리로 인식합니다.
 VENDORED_MEMORY_FILENAME = "memory-scoped.mjs"
-# 갱신되지 않은 conf.toml 이 아직 가리키고 있을 수 있는 공식 서버 진입점.
+# 갱신되지 않은 conf.json 이 아직 가리키고 있을 수 있는 공식 서버 진입점.
 OFFICIAL_MEMORY_PACKAGE = "@modelcontextprotocol/server-memory"
 
 
@@ -70,11 +70,11 @@ def sync_vendored_servers(server_configs: Dict[str, MCPServerConfig]) -> None:
     for name, cfg in server_configs.items():
         if any(OFFICIAL_MEMORY_PACKAGE in arg for arg in cfg.args):
             # 소스만 갱신한 설치본에서 일어납니다. apply_update.ps1 은 그 망의
-            # 엔드포인트가 들어 있는 conf.toml 을 일부러 덮지 않기 때문입니다.
+            # 엔드포인트가 들어 있는 conf.json 을 일부러 덮지 않기 때문입니다.
             # 조용히 두면 공식 서버가 그대로 떠서 대화 간 격리 없이 동작합니다.
             logger.warning(
                 f"MCP server '{name}' still points at the official memory server; conversations "
-                f"will share one knowledge graph. Update conf.toml to "
+                f"will share one knowledge graph. Update conf.json to "
                 f"args = [\"${{MCP_NODE_HOME:-./mcp_node}}/{VENDORED_MEMORY_FILENAME}\"] with "
                 f"env = {{ MEMORY_GRAPH_DIR = \"${{WORKSPACE_DIR:-./workspace}}/.memory-graphs\" }}."
             )
@@ -219,7 +219,7 @@ class MCPManager:
         를 env 로 **기동 시점에** 받습니다. 둘 다 프로세스가 살아 있는 동안에는
         바꿀 수 없으므로, 경로가 달라지면 다시 띄우는 것 외에 방법이 없습니다.
 
-        conf.toml 은 건드리지 않습니다. 이것은 대화(세션)의 설정이지 배포 설정이
+        conf.json 은 건드리지 않습니다. 이것은 대화(세션)의 설정이지 배포 설정이
         아닙니다.
         """
         target = resolve_workspace_dir(str(path))
@@ -237,7 +237,7 @@ class MCPManager:
         return target
 
     async def reload_from_config(self) -> Dict[str, Any]:
-        """conf.toml 을 다시 읽어 서버 목록을 지금 작업 공간으로 다시 띄웁니다.
+        """conf.json 을 다시 읽어 서버 목록을 지금 작업 공간으로 다시 띄웁니다.
 
         화면에서 서버를 추가·삭제하거나 켜고 끈 뒤에 부릅니다. 살아 있는 서버만
         골라 손대지 않고 전부 다시 띄웁니다. 서버 프로세스는 명령·인자·환경을

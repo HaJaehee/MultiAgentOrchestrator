@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 from app.config import AgentConfig, RootConfig, load_config, resolve_env_vars
 
-# conf.toml is gitignored; fall back to the committed template on a fresh clone.
-CONFIG_PATH = "conf.toml" if Path("conf.toml").exists() else "conf.example.toml"
+# conf.json is gitignored; fall back to the committed template on a fresh clone.
+CONFIG_PATH = "conf.json" if Path("conf.json").exists() else "conf.example.json"
 
 
 def test_resolve_env_vars(monkeypatch):
@@ -20,7 +20,7 @@ def test_resolve_env_vars(monkeypatch):
     assert resolved["nested"]["list"] == ["secret_value_123"]
 
 
-def test_load_conf_toml():
+def test_load_conf_json():
     cfg = load_config(CONFIG_PATH)
     assert cfg.app.host == "127.0.0.1"
     assert cfg.app.port == 8000

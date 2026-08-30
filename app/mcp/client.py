@@ -554,7 +554,7 @@ class MCPClientConnection:
             return f"[Simulated File Write: '{path}'] (Successfully wrote {content_len} bytes)"
         elif tool_name == "list_directory":
             path = arguments.get("path", ".")
-            return f"[Simulated Dir List: '{path}'] ['app/', 'tests/', 'conf.toml', 'README.md', 'requirements.txt']"
+            return f"[Simulated Dir List: '{path}'] ['app/', 'tests/', 'conf.json', 'README.md', 'requirements.txt']"
         elif tool_name == "search":
             query = arguments.get("query", "")
             return f"[Simulated Web Search: '{query}'] Found 3 references: FastAPI docs, NiceGUI documentation, Python stdlib guidelines."

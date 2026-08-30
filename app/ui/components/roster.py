@@ -8,6 +8,7 @@ from app.agents.pool import AgentPool, get_agent_pool, reload_agent_pool
 from app.config import (
     BARE_KEY_PATTERN,
     DEBATE_STANCES,
+    DEFAULT_CONFIG_PATH,
     active_config_path,
     add_agent_to_conf_file,
     add_mcp_server_to_conf_file,
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 PROGRESS_TOAST_TIMEOUT = 8
 
 # 새 에이전트 폼에서 정수로 적어야 하는 항목. `ui.number` 는 무엇을 넣든 float 를
-# 돌려주므로, 그대로 쓰면 conf.toml 에 `max_tokens = 4096.0` 이 적힙니다.
+# 돌려주므로, 그대로 쓰면 conf.json 에 `max_tokens = 4096.0` 이 적힙니다.
 INT_AGENT_FIELDS = ("max_tokens", "max_context_window", "num_retries", "max_tool_iterations")
 
 # 카드 드래그는 **브라우저 안에서** 처리합니다.
@@ -94,7 +95,7 @@ def dropped_after(event: Any) -> bool:
     return bool(args.get("after")) if isinstance(args, dict) else False
 
 
-# 디베이트 전략의 진영. conf.toml 에는 영문 키가 들어가고 화면에는 이 이름이 뜹니다.
+# 디베이트 전략의 진영. conf.json 에는 영문 키가 들어가고 화면에는 이 이름이 뜹니다.
 STANCE_LABELS = {"proponent": "제안자", "critic": "비판자", "neutral": "중립"}
 STANCE_COLORS = {"proponent": "teal-8", "critic": "amber-9", "neutral": "slate-7"}
 FLOAT_AGENT_FIELDS = ("temperature", "top_p", "timeout")
@@ -109,7 +110,7 @@ class AgentRosterControl:
         on_resync_agents: Optional[Callable[[], Coroutine[None, None, None]]] = None,
     ):
         self.on_config_changed = on_config_changed
-        # 잠긴 대화의 구성 스냅샷을 지금 conf.toml 로 다시 굳히는 콜백. DB 를 만지므로
+        # 잠긴 대화의 구성 스냅샷을 지금 conf.json 로 다시 굳히는 콜백. DB 를 만지므로
         # 화면을 소유한 쪽(app.py)이 구현합니다.
         self.on_resync_agents = on_resync_agents
         self.agent_pool: AgentPool = get_agent_pool()
@@ -117,7 +118,7 @@ class AgentRosterControl:
         self.strategy_name: str = DEFAULT_STRATEGY
         self.max_rounds: int = 3
         self.custom_instructions: str = ""
-        # 이 대화의 작업 공간. 빈 문자열이면 conf.toml 기본값을 씁니다.
+        # 이 대화의 작업 공간. 빈 문자열이면 conf.json 기본값을 씁니다.
         self.workspace_dir: str = ""
 
         # Init selection defaults
@@ -152,7 +153,7 @@ class AgentRosterControl:
         self.add_agent_btn: Optional[ui.button] = None
         self.add_agent_tooltip: Optional[ui.tooltip] = None
         self.agent_admin_hint: Optional[ui.label] = None
-        # conf.toml 에 있지만 꺼 둔 에이전트. 풀에는 등록되지 않아 카드로는 보이지
+        # conf.json 에 있지만 꺼 둔 에이전트. 풀에는 등록되지 않아 카드로는 보이지
         # 않으므로, 여기서 따로 보여주지 않으면 다시 켤 방법이 없습니다.
         self.disabled_row: Optional[ui.row] = None
         # 잠긴 대화가 잠글 때 굳힌 에이전트. 살아 있는 풀 대신 이것을 그립니다.
@@ -214,18 +215,18 @@ class AgentRosterControl:
                             .classes("text-[11px]")
                         )
                         self.resync_btn.tooltip(
-                            "이 대화가 굳혀 둔 모델·엔드포인트·API 키·도구를 지금 conf.toml "
+                            "이 대화가 굳혀 둔 모델·엔드포인트·API 키·도구를 지금 conf.json "
                             "값으로 다시 맞춥니다 (페르소나는 그대로)"
                         )
                         self.resync_btn.set_visibility(False)
                         self.reload_conf_btn = (
-                            ui.button("conf.toml 다시 읽기", icon="sync",
+                            ui.button("conf.json 다시 읽기", icon="sync",
                                       on_click=self._on_reload_conf)
                             .props("flat dense no-caps color=teal-4")
                             .classes("text-[11px]")
                         )
                         self.reload_conf_btn.tooltip(
-                            "앱을 다시 띄우지 않고 conf.toml 을 다시 읽어 에이전트 목록과 "
+                            "앱을 다시 띄우지 않고 conf.json 을 다시 읽어 에이전트 목록과 "
                             "모델·도구 설정을 갱신합니다"
                         )
                         self.persona_button = (
@@ -277,10 +278,10 @@ class AgentRosterControl:
                         )
                         self.mcp_reconnect_btn.tooltip("연결되지 않은 MCP 서버 다시 시도")
 
-                # 이 설정은 대화 하나의 것이 아닙니다. 작업 공간과 달리 conf.toml 에
+                # 이 설정은 대화 하나의 것이 아닙니다. 작업 공간과 달리 conf.json 에
                 # 저장되고, MCP 서버는 프로세스 전체가 공유합니다.
                 ui.label(
-                    "⚠️ MCP 서버의 추가·삭제·on/off 는 conf.toml 에 저장되며, 지금 열려 있는 모든 "
+                    "⚠️ MCP 서버의 추가·삭제·on/off 는 conf.json 에 저장되며, 지금 열려 있는 모든 "
                     "대화와 앞으로 만드는 모든 대화에 함께 적용됩니다."
                 ).classes("text-[10px] text-amber-400/90 w-full leading-snug -mt-1")
                 self.mcp_lock_hint = ui.label("").classes(
@@ -310,7 +311,7 @@ class AgentRosterControl:
                         .props("flat dense color=amber-4").classes("text-[11px] flex-shrink-0")
                     )
                     self.workspace_apply_btn.tooltip(
-                        "이 대화에서 쓸 폴더로 MCP 서버를 다시 띄웁니다. conf.toml 은 바뀌지 않습니다"
+                        "이 대화에서 쓸 폴더로 MCP 서버를 다시 띄웁니다. conf.json 은 바뀌지 않습니다"
                     )
                 self.workspace_hint = ui.label("").classes(
                     "text-[10px] text-slate-500 truncate w-full"
@@ -356,7 +357,7 @@ class AgentRosterControl:
         """이 대화의 로스터에 보일 에이전트.
 
         잠긴 대화는 잠글 때 굳은 구성을, 아직 시작하지 않은 대화는 살아 있는 풀을
-        씁니다. 이것을 쓰지 않으면 conf.toml 에서 지운 에이전트가 카드도 없이
+        씁니다. 이것을 쓰지 않으면 conf.json 에서 지운 에이전트가 카드도 없이
         발언하는 대화가 생깁니다 — 실행은 스냅샷을 보는데 화면만 풀을 보기 때문에.
         """
         agents = (
@@ -450,7 +451,7 @@ class AgentRosterControl:
                                 ui.badge("수정됨", color="indigo-7").props("dense text-[8px]").classes(
                                     "flex-shrink-0"
                                 )
-                            # conf.toml 에서는 사라졌지만 이 대화의 스냅샷에는 남아
+                            # conf.json 에서는 사라졌지만 이 대화의 스냅샷에는 남아
                             # 있는 에이전트. 계속 발언하므로 카드에도 나와야 합니다.
                             if agent.debate_stance != "neutral":
                                 ui.badge(
@@ -463,7 +464,7 @@ class AgentRosterControl:
                                 ui.badge("이 대화 전용", color="amber-8").props(
                                     "dense text-[8px]"
                                 ).classes("flex-shrink-0").tooltip(
-                                    "conf.toml 에서는 지워졌지만, 이 대화는 토론을 시작할 때 "
+                                    "conf.json 에서는 지워졌지만, 이 대화는 토론을 시작할 때 "
                                     "굳은 구성으로 계속 씁니다"
                                 )
                         ui.label(display_role).classes("text-[9px] text-slate-400 truncate")
@@ -476,9 +477,9 @@ class AgentRosterControl:
                             value=is_active,
                             on_change=lambda e, k=agent.key: self._on_agent_toggle(k, e.value),
                         ).props("dense dark color=indigo-4").tooltip(
-                            "이 대화의 토론에 참여시킬지 (conf.toml 은 그대로)"
+                            "이 대화의 토론에 참여시킬지 (conf.json 은 그대로)"
                         )
-                        # 진영·끄기·삭제는 conf.toml 을 고치는 조작이라, 이 대화에만
+                        # 진영·끄기·삭제는 conf.json 을 고치는 조작이라, 이 대화에만
                         # 걸리는 위의 참여 체크박스와 나란히 두면 반드시 헷갈립니다.
                         # 한 겹 안에 둡니다.
                         admin_btn = ui.button(icon="more_vert").props(
@@ -490,7 +491,7 @@ class AgentRosterControl:
                             admin_btn.tooltip(admin_reason)
                         else:
                             admin_btn.tooltip(
-                                "디베이트 진영 배정 · 비활성화 · 삭제 (conf.toml 에 저장)"
+                                "디베이트 진영 배정 · 비활성화 · 삭제 (conf.json 에 저장)"
                             )
                             with admin_btn, ui.menu().props("dark").classes("bg-slate-800"):
                                 ui.label("디베이트 진영").classes(
@@ -515,7 +516,7 @@ class AgentRosterControl:
                                     on_click=lambda k=agent.key: self._open_agent_delete_dialog(k),
                                 ).classes("text-xs text-rose-300")
 
-            # Model / endpoint / sequential-thinking summary (from conf.toml)
+            # Model / endpoint / sequential-thinking summary (from conf.json)
             with ui.row().classes("w-full items-center gap-1 mt-1 no-wrap"):
                 ui.icon("smart_toy", size="10px").classes("text-slate-500")
                 ui.label(agent.model).classes("text-[9px] text-slate-400 truncate max-w-[120px]")
@@ -526,7 +527,7 @@ class AgentRosterControl:
                     ui.badge("미설정", color="red-9").props("dense text-[8px]")
 
             # 이 에이전트가 쓸 수 있는 MCP 서버. 어느 도구를 주느냐가 발언의 질을
-            # 좌우하는데, 지금까지는 conf.toml 을 직접 고치는 수밖에 없었습니다.
+            # 좌우하는데, 지금까지는 conf.json 을 직접 고치는 수밖에 없었습니다.
             allowed = agent.allowed_mcp_servers or []
             with ui.row().classes("w-full items-center gap-1 mt-1 no-wrap"):
                 tools_button = ui.button(
@@ -585,7 +586,7 @@ class AgentRosterControl:
         self.refresh_agent_cards()
 
     def refresh_mcp_status(self) -> None:
-        """conf.toml 의 MCP 서버별 연결 상태를 칩으로 다시 그립니다."""
+        """conf.json 의 MCP 서버별 연결 상태를 칩으로 다시 그립니다."""
         if self.mcp_row is None or self.mcp_row.is_deleted:
             return
 
@@ -601,13 +602,13 @@ class AgentRosterControl:
 
         with self.mcp_row:
             if not configured:
-                ui.label("conf.toml 에 등록된 MCP 서버가 없습니다.").classes("text-[10px] text-slate-500")
+                ui.label("conf.json 에 등록된 MCP 서버가 없습니다.").classes("text-[10px] text-slate-500")
             for name, server_cfg in configured.items():
                 info = status.get(name)
 
                 if not server_cfg.enabled:
                     icon, icon_cls, color, detail = "toggle_off", "text-slate-500", "grey-8", "비활성"
-                    tip = f"{name}: conf.toml 에서 enabled = false"
+                    tip = f"{name}: conf.json 에서 enabled = false"
                 elif info is None:
                     icon, icon_cls, color, detail = "help_outline", "text-slate-500", "grey-8", "미기동"
                     tip = f"{name}: 아직 기동되지 않았습니다"
@@ -649,7 +650,7 @@ class AgentRosterControl:
                         toggle.tooltip(self.mcp_lock_reason)
                         remove.tooltip(self.mcp_lock_reason)
                     else:
-                        remove.tooltip(f"'{name}' 서버를 conf.toml 에서 삭제")
+                        remove.tooltip(f"'{name}' 서버를 conf.json 에서 삭제")
 
         enabled_total = len([c for c in configured.values() if c.enabled])
         if self.mcp_badge:
@@ -723,7 +724,7 @@ class AgentRosterControl:
 
     # --------------------------------------------- 에이전트 구성 (추가/진영/순서/삭제)
     #
-    # 에이전트 구성은 conf.toml 이 정본이라 모든 대화가 공유합니다. 그런데 대화는
+    # 에이전트 구성은 conf.json 이 정본이라 모든 대화가 공유합니다. 그런데 대화는
     # 첫 발언과 함께 참여 에이전트와 페르소나가 고정되므로, 여기서 바꾼 것은
     # **앞으로 만드는 대화와 아직 시작하지 않은 대화**에만 걸립니다. 그래서 이
     # 조작은 "이 대화가 아직 시작되지 않았고, 아무 대화도 토론 중이 아닐 때" 만
@@ -732,7 +733,7 @@ class AgentRosterControl:
     def _agent_admin_lock_reason(self) -> str:
         """지금 에이전트 구성을 바꾸면 안 되는 이유. 바꿔도 되면 빈 문자열.
 
-        이 하나가 conf.toml 을 고치는 조작 전부를 막습니다 — 추가·삭제·비활성화,
+        이 하나가 conf.json 을 고치는 조작 전부를 막습니다 — 추가·삭제·비활성화,
         디베이트 진영 배정, 발언 순서(드래그), 도구 할당. 그래서 문구도 그 전부를
         말해야 합니다. '추가·삭제' 만 말하면 순서를 바꾸려다 막힌 사용자가 엉뚱한
         안내를 읽습니다.
@@ -776,11 +777,11 @@ class AgentRosterControl:
         if self.add_agent_tooltip is not None and not self.add_agent_tooltip.is_deleted:
             self.add_agent_tooltip.set_text(
                 reason
-                or "conf.toml 에 새 에이전트를 추가합니다 (.env 와 [llm] 의 기본값이 미리 채워집니다)"
+                or "conf.json 에 새 에이전트를 추가합니다 (.env 와 llm 의 기본값이 미리 채워집니다)"
             )
 
         # 설정 갱신은 잠긴 대화에서만 뜻이 있습니다. 아직 시작하지 않은 대화는
-        # 애초에 살아 있는 conf.toml 을 보고 있으므로 갱신할 것이 없습니다.
+        # 애초에 살아 있는 conf.json 을 보고 있으므로 갱신할 것이 없습니다.
         if self.resync_btn is not None and not self.resync_btn.is_deleted:
             self.resync_btn.set_visibility(bool(self.personas_locked))
             if self.mcp_locked:
@@ -796,7 +797,7 @@ class AgentRosterControl:
                 )
             else:
                 self.agent_admin_hint.set_text(
-                    "⚠️ 에이전트 추가·삭제와 진영·발언 순서·도구 변경은 conf.toml 에 저장되어 "
+                    "⚠️ 에이전트 추가·삭제와 진영·발언 순서·도구 변경은 conf.json 에 저장되어 "
                     "앞으로 만드는 모든 대화에 적용됩니다. 이미 토론이 시작된 대화는 그때 "
                     "고정된 구성을 그대로 씁니다."
                 )
@@ -805,10 +806,10 @@ class AgentRosterControl:
                 )
 
     def _refresh_disabled_agents(self) -> None:
-        """conf.toml 에서 꺼 둔 에이전트를 칩으로 보여줍니다.
+        """conf.json 에서 꺼 둔 에이전트를 칩으로 보여줍니다.
 
         꺼진 에이전트는 풀에 등록되지 않아 카드로 나타나지 않습니다. 여기 없으면
-        화면에서 다시 켤 방법이 사라져 conf.toml 을 직접 열어야 합니다.
+        화면에서 다시 켤 방법이 사라져 conf.json 을 직접 열어야 합니다.
         """
         if self.disabled_row is None or self.disabled_row.is_deleted:
             return
@@ -816,7 +817,7 @@ class AgentRosterControl:
         try:
             configured = get_config().agents
         except Exception as e:  # noqa: BLE001 - UI 는 설정 오류로 죽지 않아야 합니다
-            logger.warning(f"Could not read agents from conf.toml: {e}")
+            logger.warning(f"Could not read agents from conf.json: {e}")
             configured = {}
 
         disabled = {k: c for k, c in configured.items() if not getattr(c, "enabled", True)}
@@ -851,10 +852,10 @@ class AgentRosterControl:
                         delete_btn.tooltip(reason)
                     else:
                         enable_btn.tooltip("이 에이전트를 다시 켭니다")
-                        delete_btn.tooltip("conf.toml 에서 이 에이전트를 삭제합니다")
+                        delete_btn.tooltip("conf.json 에서 이 에이전트를 삭제합니다")
 
     async def _on_resync_agent_configs(self) -> None:
-        """잠긴 대화가 굳혀 둔 구성을 지금 conf.toml 값으로 다시 맞춥니다.
+        """잠긴 대화가 굳혀 둔 구성을 지금 conf.json 값으로 다시 맞춥니다.
 
         스냅샷이 정본이 된 대가입니다. 게이트웨이 주소가 바뀌거나 API 키가 만료되면
         옛 대화가 죽은 엔드포인트를 계속 두드리게 되는데, 그때 이 버튼이 유일한
@@ -897,7 +898,7 @@ class AgentRosterControl:
 
         둘 다 "드래그가 안 먹는다" 로 보였습니다.
 
-        conf.toml 의 `debate_priority` 를 다시 매깁니다. 화면에 보이는 순서가 곧
+        conf.json 의 `debate_priority` 를 다시 매깁니다. 화면에 보이는 순서가 곧
         발언 순서이므로, 눈에 보이는 것과 실제로 도는 것이 같아야 합니다.
         """
         source_key = self.dragging_key
@@ -947,7 +948,7 @@ class AgentRosterControl:
             await self.on_config_changed()
 
     async def _on_agent_disable(self, agent_key: str) -> None:
-        """conf.toml 에서 이 에이전트를 끕니다 (설정과 프롬프트는 남습니다)."""
+        """conf.json 에서 이 에이전트를 끕니다 (설정과 프롬프트는 남습니다)."""
         if self._blocked_for_agent_admin():
             return
         await self._apply_agent_change(
@@ -981,7 +982,7 @@ class AgentRosterControl:
         ):
             ui.label("에이전트 삭제").classes("text-lg font-bold text-red-400 mb-1")
             ui.label(
-                f"conf.toml 에서 [agents.{agent_key}] 을 지웁니다. 모델·프롬프트 설정이 "
+                f"conf.json 에서 agents.{agent_key} 을 지웁니다. 모델·프롬프트 설정이 "
                 f"함께 사라지며 되돌릴 수 없습니다."
             ).classes("text-xs text-slate-300 leading-snug")
             # 예전에는 여기서 "이어서 진행하면 더 이상 발언하지 않습니다" 를 경고해야
@@ -1017,8 +1018,8 @@ class AgentRosterControl:
     def _open_agent_add_dialog(self) -> None:
         """새 에이전트를 만듭니다.
 
-        LLM 항목은 [llm] (즉 .env) 의 유효 기본값으로 미리 채워집니다. 그대로 둔
-        항목은 conf.toml 에 적지 않아 계속 [llm] 을 상속하므로, .env 를 바꾸면 이
+        LLM 항목은 llm (즉 .env) 의 유효 기본값으로 미리 채워집니다. 그대로 둔
+        항목은 conf.json 에 적지 않아 계속 llm 을 상속하므로, .env 를 바꾸면 이
         에이전트도 함께 따라갑니다. 화면에 보이는 값은 이미 환경변수가 풀린 값이라
         그대로 되쓰면 API 키가 파일에 평문으로 박히기도 합니다.
         """
@@ -1028,7 +1029,7 @@ class AgentRosterControl:
         try:
             cfg = get_config()
         except Exception as e:  # noqa: BLE001
-            ui.notify(f"conf.toml 을 읽지 못했습니다: {e}", type="negative", position="bottom-right")
+            ui.notify(f"conf.json 을 읽지 못했습니다: {e}", type="negative", position="bottom-right")
             return
 
         defaults = agent_defaults_from_llm(cfg.llm)
@@ -1061,7 +1062,7 @@ class AgentRosterControl:
         ):
             ui.label("에이전트 추가").classes("text-lg font-bold")
             ui.label(
-                "conf.toml 에 저장되어 앞으로 만드는 모든 대화에서 쓰입니다. "
+                "conf.json 에 저장되어 앞으로 만드는 모든 대화에서 쓰입니다. "
                 "이미 토론이 시작된 대화는 그때 고정된 구성을 그대로 씁니다."
             ).classes("text-[11px] text-amber-400 mb-1 leading-snug")
 
@@ -1070,7 +1071,7 @@ class AgentRosterControl:
                     key_in = ui.input("에이전트 키", placeholder="data_analyst").props(
                         "outlined dense dark"
                     ).classes("w-44 text-xs")
-                    key_in.tooltip("conf.toml 의 [agents.<키>]. 영문/숫자/밑줄/하이픈만 쓸 수 있습니다")
+                    key_in.tooltip("conf.json 의 agents.<키>. 영문/숫자/밑줄/하이픈만 쓸 수 있습니다")
                     name_in = ui.input("이름", placeholder="Data Analyst").props(
                         "outlined dense dark"
                     ).classes("flex-grow text-xs")
@@ -1109,8 +1110,8 @@ class AgentRosterControl:
                     "w-full bg-slate-800/40 rounded-lg border border-slate-800"
                 ):
                     ui.label(
-                        "아래 값은 .env 와 conf.toml 의 [llm] 에서 가져온 현재 기본값입니다. "
-                        "그대로 두면 파일에 적지 않고 [llm] 을 상속하므로 .env 를 바꾸면 이 "
+                        "아래 값은 .env 와 conf.json 의 llm 에서 가져온 현재 기본값입니다. "
+                        "그대로 두면 파일에 적지 않고 llm 을 상속하므로 .env 를 바꾸면 이 "
                         "에이전트도 함께 따라갑니다. 바꾼 항목만 기록됩니다."
                     ).classes("text-[10px] text-slate-500 leading-snug px-2 pb-1")
                     with ui.column().classes("w-full gap-2 p-2 pt-0"):
@@ -1120,7 +1121,7 @@ class AgentRosterControl:
                         with ui.row().classes("w-full gap-2 flex-wrap"):
                             _text("api_base", "LLM API URL", "https://gateway/v1")
                             _text("api_version", "api_version", "Azure 전용")
-                        _text("api_key", "API 키", "비우면 [llm] 값을 상속", password=True)
+                        _text("api_key", "API 키", "비우면 llm 값을 상속", password=True)
                         with ui.row().classes("w-full gap-2 flex-wrap"):
                             _number("temperature", "온도", step=0.05)
                             _number("top_p", "top_p", step=0.05)
@@ -1162,7 +1163,7 @@ class AgentRosterControl:
                     "text-[11px] font-semibold text-slate-400 mt-1"
                 )
                 if not servers:
-                    ui.label("conf.toml 에 등록된 MCP 서버가 없습니다.").classes(
+                    ui.label("conf.json 에 등록된 MCP 서버가 없습니다.").classes(
                         "text-xs text-slate-500"
                     )
                 with ui.row().classes("w-full gap-x-4 gap-y-1 flex-wrap"):
@@ -1256,12 +1257,12 @@ class AgentRosterControl:
     def _conf_path() -> str:
         """지금 앱이 읽고 있는 설정 파일. 없으면 기본값."""
         active = active_config_path()
-        return str(active) if active is not None else "conf.toml"
+        return str(active) if active is not None else DEFAULT_CONFIG_PATH
 
     async def _apply_conf_change(
         self, write, done_message: str, restart_servers: bool = True
     ) -> None:
-        """conf.toml 을 고치고, 바뀐 구성을 돌고 있는 앱에 그대로 반영합니다.
+        """conf.json 을 고치고, 바뀐 구성을 돌고 있는 앱에 그대로 반영합니다.
 
         파일만 고치고 끝내면 화면과 실제로 떠 있는 서버·에이전트가 어긋납니다.
         다음 기동 때까지 그 사실을 아무도 모르므로 여기서 바로 맞춥니다.
@@ -1275,8 +1276,8 @@ class AgentRosterControl:
         try:
             write()
         except Exception as e:  # noqa: BLE001 - 설정 오류는 화면에 그대로 알립니다
-            logger.error(f"Could not update MCP servers in conf.toml: {e}", exc_info=True)
-            ui.notify(f"conf.toml 을 고치지 못했습니다: {e}", type="negative", position="bottom-right")
+            logger.error(f"Could not update MCP servers in conf.json: {e}", exc_info=True)
+            ui.notify(f"conf.json 을 고치지 못했습니다: {e}", type="negative", position="bottom-right")
             self.refresh_mcp_status()
             return
         finally:
@@ -1296,7 +1297,7 @@ class AgentRosterControl:
         except Exception as e:  # noqa: BLE001
             logger.error(f"Applying the new configuration failed: {e}", exc_info=True)
             ui.notify(
-                f"conf.toml 은 저장했지만 실행 중인 앱에 반영하지 못했습니다: {e}",
+                f"conf.json 은 저장했지만 실행 중인 앱에 반영하지 못했습니다: {e}",
                 type="negative", position="bottom-right",
             )
         finally:
@@ -1329,7 +1330,7 @@ class AgentRosterControl:
         ):
             ui.label("MCP 서버 추가").classes("text-lg font-bold")
             ui.label(
-                "conf.toml 에 저장되어 지금 열려 있는 모든 대화와 앞으로 만드는 "
+                "conf.json 에 저장되어 지금 열려 있는 모든 대화와 앞으로 만드는 "
                 "모든 대화에 함께 적용됩니다."
             ).classes("text-[11px] text-amber-400 mb-2 leading-snug")
 
@@ -1351,7 +1352,7 @@ class AgentRosterControl:
 
             ui.label(
                 "${VAR} 와 ${VAR:-기본값} 표기를 그대로 쓸 수 있습니다. 추가한 뒤에는 "
-                "conf.toml 의 [agents.*].allowed_mcp_servers 에 이 이름을 넣어야 "
+                "conf.json 의 agents.*.allowed_mcp_servers 에 이 이름을 넣어야 "
                 "에이전트가 이 서버의 도구를 씁니다."
             ).classes("text-[10px] text-slate-500 leading-snug mt-1")
 
@@ -1406,7 +1407,7 @@ class AgentRosterControl:
         ):
             ui.label("MCP 서버 삭제").classes("text-lg font-bold text-red-400 mb-1")
             ui.label(
-                f"conf.toml 에서 [mcp_servers.{server_name}] 을 지우고 서버를 내립니다. "
+                f"conf.json 에서 mcp_servers.{server_name} 을 지우고 서버를 내립니다. "
                 f"모든 대화에 함께 적용됩니다."
             ).classes("text-xs text-slate-300 leading-snug")
             if users:
@@ -1462,7 +1463,7 @@ class AgentRosterControl:
         }
 
     async def _on_reload_conf(self) -> None:
-        """conf.toml 을 다시 읽어 에이전트 풀(과 필요하면 MCP 서버)을 갱신합니다.
+        """conf.json 을 다시 읽어 에이전트 풀(과 필요하면 MCP 서버)을 갱신합니다.
 
         앱을 다시 띄우지 않고 에이전트를 추가·수정하기 위한 버튼입니다. 설정
         파일이 깨져 있으면 아무것도 바꾸지 않고 돌아옵니다 — `get_config()` 는
@@ -1475,14 +1476,14 @@ class AgentRosterControl:
         before_agents = {agent.key for agent in self.agent_pool.list_all()}
         before_mcp = self._mcp_fingerprint()
 
-        progress = self._progress_toast("conf.toml 을 다시 읽는 중입니다...")
+        progress = self._progress_toast("conf.json 을 다시 읽는 중입니다...")
         try:
             try:
                 get_config(reload=True, config_path=self._conf_path())
             except Exception as e:  # noqa: BLE001 - 깨진 설정으로 앱이 죽으면 안 됩니다
-                logger.error(f"Could not reload conf.toml: {e}", exc_info=True)
+                logger.error(f"Could not reload conf.json: {e}", exc_info=True)
                 ui.notify(
-                    f"conf.toml 을 읽지 못했습니다. 실행 중인 설정은 그대로입니다: {e}",
+                    f"conf.json 을 읽지 못했습니다. 실행 중인 설정은 그대로입니다: {e}",
                     type="negative", position="bottom-right", multi_line=True,
                 )
                 return
@@ -1513,7 +1514,7 @@ class AgentRosterControl:
                 parts.append(f"제거: {', '.join(removed)}")
             if not added and not removed:
                 parts.append("목록은 그대로 (모델·프롬프트 등은 갱신됨)")
-            ui.notify("conf.toml 을 다시 읽었습니다 — " + " · ".join(parts),
+            ui.notify("conf.json 을 다시 읽었습니다 — " + " · ".join(parts),
                       type="positive", position="bottom-right", multi_line=True)
         finally:
             self._dismiss_toast(progress)
@@ -1528,7 +1529,7 @@ class AgentRosterControl:
     def _open_agent_tools_dialog(self, agent_key: str) -> None:
         """이 에이전트가 호출할 수 있는 MCP 서버를 고릅니다.
 
-        도구 할당은 conf.toml 에 저장되어 **아직 시작하지 않은 대화**에 걸립니다.
+        도구 할당은 conf.json 에 저장되어 **아직 시작하지 않은 대화**에 걸립니다.
         이미 시작한 대화는 첫 발언 때 도구 권한까지 스냅샷으로 굳었으므로 여기서
         바꿔도 그 대화에는 닿지 않습니다. 그래서 다른 구성 변경과 같은 잠금을
         씁니다 (`_agent_admin_lock_reason`) — 닿지 않는 조작을 열어 두면 바꿨다고
@@ -1550,7 +1551,7 @@ class AgentRosterControl:
             configured, status = {}, {}
 
         allowed = list(agent.allowed_mcp_servers or [])
-        # conf.toml 에서 이미 사라진 서버가 아직 적혀 있을 수 있습니다. 조용히
+        # conf.json 에서 이미 사라진 서버가 아직 적혀 있을 수 있습니다. 조용히
         # 지우지 않고 보여주고, 사용자가 체크를 풀어 정리하게 합니다.
         orphans = [name for name in allowed if name not in configured]
         boxes: Dict[str, ui.checkbox] = {}
@@ -1560,13 +1561,13 @@ class AgentRosterControl:
         ):
             ui.label(f"{agent.name} · 도구 할당").classes("text-lg font-bold")
             ui.label(
-                "이 에이전트가 발언 중 호출할 수 있는 MCP 서버입니다. conf.toml 에 저장되어 "
+                "이 에이전트가 발언 중 호출할 수 있는 MCP 서버입니다. conf.json 에 저장되어 "
                 "아직 시작하지 않은 대화와 앞으로 만드는 대화에 적용됩니다. 이미 시작한 "
                 "대화는 그때 굳은 도구 권한을 그대로 씁니다."
             ).classes("text-[11px] text-amber-400 mb-2 leading-snug")
 
             if not configured and not orphans:
-                ui.label("conf.toml 에 등록된 MCP 서버가 없습니다.").classes("text-xs text-slate-400")
+                ui.label("conf.json 에 등록된 MCP 서버가 없습니다.").classes("text-xs text-slate-400")
 
             with ui.column().classes("w-full gap-1 max-h-[46vh] overflow-y-auto"):
                 for name, server_cfg in configured.items():
@@ -1692,7 +1693,7 @@ class AgentRosterControl:
     async def _on_workspace_apply(self) -> None:
         """작업 공간을 바꾸고 MCP 서버를 다시 띄웁니다.
 
-        conf.toml 은 건드리지 않습니다. 이것은 대화의 설정입니다.
+        conf.json 은 건드리지 않습니다. 이것은 대화의 설정입니다.
         """
         if self.workspace_input is None:
             return
@@ -1767,7 +1768,7 @@ class AgentRosterControl:
 
         `active_keys` 는 켜 둔 것만 담는 허용 목록이라, 목록에 없다는 사실만으로는
         "사용자가 끈 것" 과 "그 대화를 설정할 때는 없던 것" 을 구분할 수 없습니다.
-        구분하지 않으면 둘 중 하나가 반드시 틀립니다 — conf.toml 에 에이전트를
+        구분하지 않으면 둘 중 하나가 반드시 틀립니다 — conf.json 에 에이전트를
         추가했더니 기존 대화에서 전부 꺼진 것으로 보이거나(지금까지의 증상),
         반대로 사용자가 끈 에이전트가 새로고침할 때마다 되살아납니다.
 
@@ -1775,7 +1776,7 @@ class AgentRosterControl:
         여기에 없는 키는 그 뒤에 추가된 것이므로, 기본값(켜짐)으로 둡니다.
 
         단 **이미 토론이 시작된 대화**는 예외입니다. 첫 발언과 함께 참여 에이전트와
-        페르소나가 고정되므로, 그 뒤에 conf.toml 에 추가된 에이전트가 저절로
+        페르소나가 고정되므로, 그 뒤에 conf.json 에 추가된 에이전트가 저절로
         끼어들면 앞선 발언과 뒤의 발언이 서로 다른 구성에서 나오게 됩니다. 그런
         키는 꺼 둔 채로 보여주고, 정말 합류시킬지는 사용자가 정합니다.
         """

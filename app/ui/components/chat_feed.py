@@ -391,7 +391,7 @@ class ChatFeed:
         round_num = msg.get("round_number", 0)
         tool_calls = msg.get("tool_calls", [])
 
-        # conf.toml 에 새로 추가한 에이전트는 이 표에 없습니다. 예전에는 그때
+        # conf.json 에 새로 추가한 에이전트는 이 표에 없습니다. 예전에는 그때
         # 사용자 스타일로 떨어져, 에이전트 발언이 사용자 말풍선처럼 보였습니다.
         style = style_for_agent(sender_key)
 

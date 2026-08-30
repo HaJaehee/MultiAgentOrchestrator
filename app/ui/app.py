@@ -236,7 +236,7 @@ def create_ui() -> None:
                     await db.commit()
 
         async def on_resync_agents() -> None:
-            """잠긴 대화가 굳혀 둔 에이전트 구성을 지금 conf.toml 값으로 다시 맞춥니다.
+            """잠긴 대화가 굳혀 둔 에이전트 구성을 지금 conf.json 값으로 다시 맞춥니다.
 
             대화가 자기완결적이 된 대가입니다. 엔드포인트나 API 키가 바뀌면 옛 대화가
             죽은 주소를 계속 두드리므로, 인격은 그대로 두고 운영 설정만 다시 굳힙니다.
@@ -259,13 +259,13 @@ def create_ui() -> None:
             roster_control.refresh_agent_cards(personas)
             if updated:
                 ui.notify(
-                    f"에이전트 {len(updated)}개의 모델·엔드포인트·도구를 conf.toml 값으로 "
+                    f"에이전트 {len(updated)}개의 모델·엔드포인트·도구를 conf.json 값으로 "
                     f"갱신했습니다 ({', '.join(sorted(updated))}). 페르소나는 그대로입니다.",
                     type="positive", position="bottom-right", multi_line=True,
                 )
             else:
                 ui.notify(
-                    "갱신할 에이전트가 없습니다. 이 대화의 에이전트가 모두 conf.toml 에서 "
+                    "갱신할 에이전트가 없습니다. 이 대화의 에이전트가 모두 conf.json 에서 "
                     "사라졌습니다.",
                     type="warning", position="bottom-right", multi_line=True,
                 )
@@ -413,7 +413,7 @@ def create_ui() -> None:
                     pool = roster_control.agent_pool
                     personas = await effective_personas(db, sid, pool)
                     # 잠긴 대화는 잠글 때 굳은 에이전트로 로스터를 그립니다.
-                    # conf.toml 에서 지워진 에이전트도 이 대화에서는 계속 발언합니다.
+                    # conf.json 에서 지워진 에이전트도 이 대화에서는 계속 발언합니다.
                     frozen = await session_roster_agents(db, s_obj, pool)
                     roster_control.load_from_session(
                         active_keys=s_obj.active_agents or [],

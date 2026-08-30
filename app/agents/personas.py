@@ -1,30 +1,30 @@
 """세션별 에이전트 페르소나 / 시스템 프롬프트 관리.
 
-`conf.toml` 의 에이전트 정의는 서버 전역 기본값입니다. 세션마다 다른 페르소나로
+`conf.json` 의 에이전트 정의는 서버 전역 기본값입니다. 세션마다 다른 페르소나로
 토론시키려면 서버를 재기동해야 했는데, 이 모듈이 그 제약을 없앱니다.
 
 수명주기:
 
 1. **세션 생성 직후 (열림)** — 유저가 페르소나 편집 페이지에서 이름/역할/시스템
    프롬프트를 고칩니다. 편집분은 `session_agents` 에 초안으로 저장됩니다.
-   저장하지 않은 에이전트는 `conf.toml` 기본값을 그대로 씁니다.
+   저장하지 않은 에이전트는 `conf.json` 기본값을 그대로 씁니다.
 2. **첫 유저 메시지 (잠금)** — 그 시점의 유효값이 *모든* 에이전트에 대해
    기록되고 `sessions.personas_locked` 가 True 가 됩니다. 토론 도중 페르소나가
    바뀌면 앞선 발언과 뒤의 발언이 서로 다른 인격에서 나오게 되므로, 기록을
    해석할 수 없게 됩니다.
-3. **세션 재개** — 저장된 값이 그대로 사용됩니다. 그 사이 `conf.toml` 이
+3. **세션 재개** — 저장된 값이 그대로 사용됩니다. 그 사이 `conf.json` 이
    바뀌었더라도 세션은 잠글 때의 페르소나를 유지합니다.
 
 **시작한 대화는 자기완결적입니다.** 잠그는 시점에 인격(이름·역할·시스템 프롬프트)만이
 아니라 `AgentConfig` 전체 — 모델·엔드포인트·API 키·샘플링 값·도구 권한·단계적 사고까지 —
-를 `session_agents.config_snapshot` 에 굳힙니다. 그 뒤 `conf.toml` 에서 그 에이전트를
+를 `session_agents.config_snapshot` 에 굳힙니다. 그 뒤 `conf.json` 에서 그 에이전트를
 지우거나, 끄거나, 모델을 바꿔도 이 대화는 잠글 때의 구성 그대로 이어집니다.
 
 그래서 편집 화면의 잠금 규칙과 실행이 같은 말을 합니다 — "이미 시작한 대화에는 영향이
 없다" 가 인격뿐 아니라 구성 전체에 대해 참입니다.
 
 바꾼 게이트웨이 주소나 새 API 키를 옛 대화에도 먹여야 한다면 `resync_agent_configs()`
-가 스냅샷을 지금 `conf.toml` 값으로 다시 굳힙니다 (인격은 그대로 둡니다).
+가 스냅샷을 지금 `conf.json` 값으로 다시 굳힙니다 (인격은 그대로 둡니다).
 """
 
 import logging
@@ -41,7 +41,7 @@ from app.database.models import SessionAgentModel, SessionModel
 
 logger = logging.getLogger(__name__)
 
-# 세션별로 편집할 수 있는 항목. 나머지 운영 설정은 conf.toml 이 정본이되, 대화를
+# 세션별로 편집할 수 있는 항목. 나머지 운영 설정은 conf.json 이 정본이되, 대화를
 # 잠그는 순간 `config_snapshot` 으로 함께 굳습니다.
 EDITABLE_FIELDS = ("name", "role", "system_prompt")
 
@@ -63,7 +63,7 @@ class AgentPersona(BaseModel):
     name: str
     role: str
     system_prompt: str = ""
-    # conf.toml 기본값과 다른지 여부 (UI 표시용).
+    # conf.json 기본값과 다른지 여부 (UI 표시용).
     # "저장된 행이 있는가" 가 아니라 "값이 실제로 다른가" 입니다. 세션을 잠글 때
     # 손대지 않은 에이전트까지 전부 스냅샷되므로, 행의 존재만으로는 판단할 수 없습니다.
     is_customized: bool = Field(default=False)
@@ -75,7 +75,7 @@ def _differs(a: AgentPersona, b: AgentPersona) -> bool:
 
 
 def persona_from_agent(agent: Agent) -> AgentPersona:
-    """conf.toml 기반 에이전트에서 기본 페르소나를 만듭니다."""
+    """conf.json 기반 에이전트에서 기본 페르소나를 만듭니다."""
     return AgentPersona(
         agent_key=agent.key,
         name=agent.name,
@@ -85,7 +85,7 @@ def persona_from_agent(agent: Agent) -> AgentPersona:
 
 
 def default_personas(pool: AgentPool) -> Dict[str, AgentPersona]:
-    """conf.toml 기준 기본 페르소나 전체."""
+    """conf.json 기준 기본 페르소나 전체."""
     return {a.key: persona_from_agent(a) for a in pool.list_all()}
 
 
@@ -118,8 +118,8 @@ async def effective_personas(
 ) -> Dict[str, AgentPersona]:
     """이 세션에서 실제로 쓰이는 페르소나.
 
-    저장분이 있으면 그것을, 없으면 `conf.toml` 기본값을 씁니다. 세션을 잠근 뒤에
-    `conf.toml` 에 새로 추가된 에이전트는 저장분이 없으므로 기본값으로 참여합니다.
+    저장분이 있으면 그것을, 없으면 `conf.json` 기본값을 씁니다. 세션을 잠근 뒤에
+    `conf.json` 에 새로 추가된 에이전트는 저장분이 없으므로 기본값으로 참여합니다.
     """
     defaults = default_personas(pool)
     personas = dict(defaults)
@@ -167,7 +167,7 @@ async def save_persona(
 
 
 async def reset_persona(db: AsyncSession, session_model: SessionModel, agent_key: str) -> None:
-    """초안을 지워 `conf.toml` 기본값으로 되돌립니다."""
+    """초안을 지워 `conf.json` 기본값으로 되돌립니다."""
     if session_model.personas_locked:
         raise PersonasLockedError(session_model.id)
 
@@ -187,7 +187,7 @@ async def freeze_personas(
     """첫 유저 메시지 시점의 유효 구성을 전부 기록하고 세션을 잠급니다.
 
     인격뿐 아니라 `AgentConfig` 전체를 `config_snapshot` 에 굳힙니다. 이 대화는
-    이 순간부터 conf.toml 에 의존하지 않습니다 — 에이전트가 지워지든 모델이
+    이 순간부터 conf.json 에 의존하지 않습니다 — 에이전트가 지워지든 모델이
     바뀌든 잠글 때의 구성 그대로 이어집니다.
 
     이미 잠긴 세션이면 저장된 값을 그대로 돌려줍니다 (멱등).
@@ -202,7 +202,7 @@ async def freeze_personas(
     for key, persona in personas.items():
         row = rows.get(key)
         if row is None:
-            # 초안이 없던 에이전트. conf.toml 기본값이 그대로 이 대화의 값이 됩니다.
+            # 초안이 없던 에이전트. conf.json 기본값이 그대로 이 대화의 값이 됩니다.
             row = SessionAgentModel(
                 session_id=session_model.id,
                 agent_key=key,
@@ -283,7 +283,7 @@ async def frozen_agents(
     순서는 화면에 그대로 나가므로 결정적이어야 합니다. `session_agents` 의 행들은
     잠글 때 한 커밋에 들어가 `created_at` 이 같고, 그러면 정렬이 무작위 UUID 로
     떨어져 카드가 열 때마다 뒤바뀝니다. 오케스트레이터를 맨 앞에 두고, 그 뒤는
-    conf.toml 순서를 따르며, 이 대화에만 남은 에이전트는 맨 뒤에 모읍니다.
+    conf.json 순서를 따르며, 이 대화에만 남은 에이전트는 맨 뒤에 모읍니다.
     """
     agents: List[Agent] = []
     for row in await _stored_rows(db, session_id):
@@ -318,13 +318,13 @@ async def session_roster_agents(
 async def resync_agent_configs(
     db: AsyncSession, session_model: SessionModel, pool: AgentPool
 ) -> List[str]:
-    """잠긴 대화의 구성 스냅샷을 지금 conf.toml 값으로 다시 굳힙니다.
+    """잠긴 대화의 구성 스냅샷을 지금 conf.json 값으로 다시 굳힙니다.
 
     인격(이름·역할·시스템 프롬프트)은 건드리지 않습니다. 바뀌는 것은 모델·
     엔드포인트·키·도구처럼 운영에 속하는 값뿐입니다.
 
     스냅샷이 없으면 옛 대화를 이어갈 수 없게 되는 상황 — 게이트웨이 주소가
-    바뀌었거나 API 키가 만료된 경우 — 을 위한 탈출구입니다. 지금 conf.toml 에
+    바뀌었거나 API 키가 만료된 경우 — 을 위한 탈출구입니다. 지금 conf.json 에
     없는 에이전트는 그대로 둡니다. 이 대화에서만 살아 있는 에이전트를 지우는 것이
     이 함수의 일은 아닙니다.
 
@@ -359,7 +359,7 @@ async def prepare_agents_for_turn(
     """토론 한 턴에 쓸 에이전트를 준비합니다.
 
     첫 턴이면 그 시점의 구성을 통째로 기록하고 잠급니다. 이후 턴은 그 스냅샷을
-    그대로 씁니다 — conf.toml 이 그 사이 어떻게 바뀌었든.
+    그대로 씁니다 — conf.json 이 그 사이 어떻게 바뀌었든.
     """
     personas = await freeze_personas(db, session_model, pool)
     frozen = {agent.key: agent for agent in await frozen_agents(db, session_model.id, pool)}

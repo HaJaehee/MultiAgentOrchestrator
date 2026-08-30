@@ -1,36 +1,83 @@
-# conf.toml Configuration Reference
+# conf.json Configuration Reference
 
-The [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml) file is the single source of truth for all runtime behaviors in the MADO: Multi-Agent Debate & Orchestration Platform. It dynamically configures the web application, default LLM provider options, MCP background servers, and all specialist agent personas.
+The [conf.json](file:///d:/MultiAgentOrchestrator/conf.json) file is the single source of truth for all runtime behaviors in the MADO: Multi-Agent Debate & Orchestration Platform. It dynamically configures the web application, default LLM provider options, MCP background servers, and all specialist agent personas.
 
-The configuration file is loaded, validated, and normalized by [app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py) using `tomllib` and Pydantic v2.
+The configuration file is loaded, validated, and normalized by [app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py) using the standard-library `json` module and Pydantic v2.
 
 ---
 
 ## 1. High-Level Schema Structure
 
-```toml
-[app]
-# Application network and storage settings
-
-[llm]
-# Global LLM settings inherited by all agents
-[llm.sequential_thinking]
-# Global default for step-by-step reasoning
-
-[mcp_servers.<name>]
-# External/local MCP server processes (stdio)
-
-[agents.<key>]
-# Specialist agent definitions (overrides [llm])
-[agents.<key>.sequential_thinking]
-# Optional per-agent sequential thinking overrides
+```json
+{
+  "app": { },
+  "llm": {
+    "sequential_thinking": { }
+  },
+  "mcp_servers": {
+    "<name>": { }
+  },
+  "agents": {
+    "<key>": {
+      "sequential_thinking": { }
+    }
+  }
+}
 ```
+
+| Object | Purpose |
+| :--- | :--- |
+| `app` | Application network and storage settings |
+| `llm` | Global LLM settings inherited by all agents |
+| `llm.sequential_thinking` | Global default for step-by-step reasoning |
+| `mcp_servers.<name>` | External/local MCP server processes (stdio) |
+| `agents.<key>` | Specialist agent definitions (override `llm`) |
+| `agents.<key>.sequential_thinking` | Optional per-agent reasoning overrides |
+
+### 1.1. Comments
+
+JSON has no comment syntax, so the loader treats **any key beginning with `//` as
+documentation** and strips it before validation ([`strip_comment_keys`](file:///d:/MultiAgentOrchestrator/app/config.py)).
+The value is a string, or an array of strings for a multi-line note. Because the
+writers read and rewrite the raw file, these notes survive every edit made from
+the roster panel.
+
+```json
+"// filesystem": [
+  "공용 작업 공간 파일 I/O (공식 서버, 툴 14종).",
+  "지정한 디렉터리 밖 경로는 서버가 자체적으로 차단합니다."
+],
+"filesystem": { "command": "${NODE_BIN:-node}", "args": ["..."], "enabled": true }
+```
+
+### 1.2. Multi-line text
+
+Any long text field — `system_prompt`, `prompt_template` — accepts either a plain
+string or an **array of strings**, which the loader joins with newlines. The
+writers emit the array form whenever the text has more than one line, so prompts
+stay readable in the file instead of collapsing into `
+` escapes.
+
+```json
+"system_prompt": [
+  "당신은 수석 소프트웨어 아키텍트입니다.",
+  "확장성과 유지보수성을 고려하여 구조를 제안하세요."
+]
+```
+
+### 1.3. Formatting
+
+Writes go through [`write_conf_file()`](file:///d:/MultiAgentOrchestrator/app/config.py), which emits
+`json.dumps(..., ensure_ascii=False, indent=2)` and swaps the file in with `os.replace()`. The shipped
+[conf.example.json](file:///d:/MultiAgentOrchestrator/conf.example.json) adds blank lines between
+sections for readability; the first edit made from the roster panel normalizes them away. Only
+whitespace is affected — every `//` note, value, and key order is carried through.
 
 ---
 
 ## 2. Section Specifications
 
-### 2.1. `[app]` Section
+### 2.1. `app` Object
 Configures the FastAPI and NiceGUI host environment.
 
 | Key | Type | Default | Description |
@@ -40,7 +87,7 @@ Configures the FastAPI and NiceGUI host environment.
 | `db_url` | `str` | `"sqlite+aiosqlite:///./multiagent.db"` | SQLAlchemy async database connection URI. |
 | `debug` | `bool` | `true` | Enables FastAPI auto-reload and verbose database logging. |
 
-### 2.2. `[llm]` Global Section
+### 2.2. `llm` Global Object
 Defines system-wide defaults. Any agent that does not explicitly set an attribute inherits the value defined here.
 
 | Key | Type | Default | Description |
@@ -62,10 +109,10 @@ Defines system-wide defaults. Any agent that does not explicitly set an attribut
 | `extra_body` | `dict` | `{}` | Custom JSON body fields sent with requests. |
 
 #### Inheritance Rules ([app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py#L148-L175))
-- If an agent leaves an inheritable field empty or whitespace-only (e.g., `${LLM_API_BASE}` with no value in the environment), the field resolves to `None` and inherits from `[llm]`.
+- If an agent leaves an inheritable field empty or whitespace-only (e.g., `${LLM_API_BASE}` with no value in the environment), the field resolves to `None` and inherits from `llm`.
 - Setting any alias in an alias group (e.g., `api_base`, `api_url`, `base_url`) overrides the entire group.
 
-### 2.3. Sequential Thinking Configuration (`[llm.sequential_thinking]`)
+### 2.3. Sequential Thinking Configuration (`llm.sequential_thinking`)
 Controls step-by-step cognitive reasoning before generating final responses.
 
 | Key | Type | Default | Description |
@@ -79,7 +126,7 @@ Controls step-by-step cognitive reasoning before generating final responses.
 | `mcp_server` | `str` | `"sequential_thinking"` | MCP server identifier providing the `sequentialthinking` tool. |
 | `prompt_template` | `str` | `...` | Custom reasoning protocol template supporting `{max_steps}` replacement. |
 
-### 2.4. `[mcp_servers.<name>]` Section
+### 2.4. `mcp_servers.<name>` Object
 Declares external MCP server processes launched and monitored by the backend.
 
 | Key | Type | Default | Description |
@@ -91,11 +138,12 @@ Declares external MCP server processes launched and monitored by the backend.
 
 > **Important**: Never use `npx` in air-gapped or offline production environments, as `npx` attempts to reach the npm registry if packages are not in the current working directory. Execute entrypoint scripts directly with `node` (e.g. `node ./mcp_node/node_modules/.../dist/index.js`).
 
-### 2.5. `[agents.<key>]` Section
+### 2.5. `agents.<key>` Object
 Configures specialist agents in the agent pool.
 
-> These sections can be added, edited, and removed from the roster panel without restarting the app;
-> the writers edit line ranges so comments and `${VAR}` placeholders survive. See
+> These objects can be added, edited, and removed from the roster panel without restarting the app.
+> Every writer reads the raw file, edits the parsed dictionary, and rewrites it in one atomic
+> `os.replace`, so `//` notes and `${VAR}` placeholders survive untouched. See
 > [roster-editing.md](../agents/roster-editing.md).
 
 | Key | Type | Default | Description |
@@ -109,10 +157,10 @@ Configures specialist agents in the agent pool.
 | `temperature` | `float` | Inherited | Custom sampling temperature override. |
 | `max_tokens` | `int` | Inherited | Token budget override. |
 | `allowed_mcp_servers` | `list[str]` | `[]` | List of MCP server keys this agent is authorized to call. |
-| `debate_priority` | `int` | `100` | Speaking order within a round; lower speaks first. Ties keep `conf.toml` order, so leaving every agent at the default speaks in file order. Rewritten as `10, 20, 30…` when cards are dragged in the roster. |
+| `debate_priority` | `int` | `100` | Speaking order within a round; lower speaks first. Ties keep `conf.json` order, so leaving every agent at the default speaks in file order. Rewritten as `10, 20, 30…` when cards are dragged in the roster. |
 | `debate_stance` | `str` | `"neutral"` | `"proponent"` / `"critic"` / `"neutral"`. Read only by the adversarial strategy, which alternates the two sides. If no agent declares a side, that strategy degrades to a single priority-ordered pass. |
-| `system_prompt` | `str` | `""` | Base persona instruction and behavioral guidelines. |
-| `sequential_thinking` | `dict` | Inherited | Per-agent sequential thinking overrides (keys merge with `[llm]`). |
+| `system_prompt` | `str \| list[str]` | `""` | Base persona instruction and behavioral guidelines. An array is joined with newlines. |
+| `sequential_thinking` | `dict` | Inherited | Per-agent sequential thinking overrides (keys merge with `llm`). |
 
 ---
 
@@ -142,18 +190,18 @@ def is_live(self) -> bool:
 The platform applies settings through a strictly defined 3-tier precedence hierarchy:
 
 ```text
-Environment Variables (.env) ──> conf.toml ──> Command-Line Arguments (CLI)
+Environment Variables (.env) ──> conf.json ──> Command-Line Arguments (CLI)
       (Lowest precedence)         (Base)              (Highest precedence)
 ```
 
 1. **`.env` Environment Variables**:
    Variables defined in `.env` (or inherited from the parent shell) provide base configuration defaults and sensitive credentials.
-2. **`conf.toml` File Configuration**:
-   References environment variables via syntax such as `host = "${APP_HOST:-${HOST:-127.0.0.1}}"` and `port = "${APP_PORT:-${PORT:-8000}}"`. If the environment variable exists, it is substituted; otherwise, the default fallback is used.
+2. **`conf.json` File Configuration**:
+   References environment variables via syntax such as `"host": "${APP_HOST:-${HOST:-127.0.0.1}}"` and `"port": "${APP_PORT:-${PORT:-8000}}"`. If the environment variable exists, it is substituted; otherwise, the default fallback is used.
 3. **Command-Line Parameters (`app.main`)**:
-   CLI arguments (`--host`, `--port`, `--config`, `--reload`, `--no-reload`) supersede any values found in both `.env` and `conf.toml`. For example:
+   CLI arguments (`--host`, `--port`, `--config`, `--reload`, `--no-reload`) supersede any values found in both `.env` and `conf.json`. For example:
    ```bash
-   python -m app.main --host 0.0.0.0 --port 9000 --config custom_conf.toml
+   python -m app.main --host 0.0.0.0 --port 9000 --config custom_conf.json
    ```
-   binds to `0.0.0.0:9000` regardless of values defined in `.env` or `custom_conf.toml`.
+   binds to `0.0.0.0:9000` regardless of values defined in `.env` or `custom_conf.json`.
 

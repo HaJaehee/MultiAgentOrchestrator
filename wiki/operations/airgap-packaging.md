@@ -11,7 +11,7 @@ Running `python package_offline.py` on an internet-connected build machine gener
 ```text
 MultiAgentOrchestrator_bundle/
 ├── app/                       # Application source code
-├── conf.toml                  # Configuration file (copied from conf.example.toml)
+├── conf.json                  # Configuration file (copied from conf.example.json)
 ├── wheels/                    # Offline pip wheel archive
 ├── python_runtime/            # Portable CPython distribution
 ├── node_runtime/              # Standalone node.exe binary (no npm needed)
@@ -101,7 +101,7 @@ server process on purpose:
 - The server must keep the console so logs are visible and Ctrl+C stops it. Waiting is the
   launcher's job, not the server's.
 
-The address comes from `conf.toml [app]`, overridden by the same `--host` / `--port` arguments
+The address comes from `conf.json`'s `app` object, overridden by the same `--host` / `--port` arguments
 that were forwarded to `app.main`, so a custom port always opens the right URL. A wildcard bind
 address (`0.0.0.0`) is rewritten to `127.0.0.1` — it is a bind address, not a reachable one.
 Set `MAO_NO_BROWSER=1` to opt out, `MAO_BROWSER_TIMEOUT` to change the 90-second wait.
@@ -118,7 +118,7 @@ Run it on the target after copying new sources when the launcher itself changed.
 ### Parameter Forwarding & Encoding
 - **CLI Parameter Forwarding**: Both `run_offline.ps1` (`$args`) and `run_offline.bat` (`%*`) pass all command-line arguments directly to `app.main`. Users can run `.\run_offline.ps1 --port 9000` to override the bound port dynamically.
 - **UTF-8 BOM Protection**: `run_offline.ps1` is saved with UTF-8 BOM (`utf-8-sig`) and configures `[Console]::OutputEncoding = UTF8`, preventing PowerShell parser errors on Korean Windows systems.
-- **Zero Configuration Drift**: Because paths and settings are injected via environment variables, [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml) requires **zero manual adjustments** when moving between environments.
+- **Zero Configuration Drift**: Because paths and settings are injected via environment variables, [conf.json](file:///d:/MultiAgentOrchestrator/conf.json) requires **zero manual adjustments** when moving between environments.
 
 
 ---
@@ -144,8 +144,8 @@ Only what a running installation needs in order to be updated.
 | Included | Excluded |
 | :--- | :--- |
 | `app/`, `mcp_servers/` | `python_runtime/`, `node_runtime/`, `wheels/`, `mcp_sandbox/` |
-| `mcp_node/memory-scoped.mjs` (the forked server's runnable copy) | `workspace/`, `multiagent.db`, `conf.toml` |
-| `conf.example.toml`, `.env.example`, `requirements.txt` | `tests/`, `wiki/`, `CLAUDE.md` |
+| `mcp_node/memory-scoped.mjs` (the forked server's runnable copy) | `workspace/`, `multiagent.db`, `conf.json` |
+| `conf.example.json`, `.env.example`, `requirements.txt` | `tests/`, `wiki/`, `CLAUDE.md` |
 | `setup_mcp.py`, `open_browser.py`, `README.md` | the packaging scripts themselves |
 
 The include list is an **allow-list**, not a deny-list. With a deny-list, a directory added
@@ -153,22 +153,22 @@ later rides along silently; with an allow-list it is simply absent, and absence 
 
 ### Three things the script refuses to do
 
-1. **Overwrite the target's `conf.toml`.** The local file is not shipped at all. The
+1. **Overwrite the target's `conf.json`.** The local file is not shipped at all. The
    deployed one holds that network's real endpoints; replacing it would point every agent
-   at nothing. New settings are carried over by hand from `conf.example.toml`.
+   at nothing. New settings are carried over by hand from `conf.example.json`.
 2. **Ship an oversized file.** Anything above `--max-file-mb` (default 2 MB) aborts the run.
    A source package has no business containing a megabyte-scale file — if one appears, a
    runtime artifact leaked into the tree.
 3. **Ship something that looks like a credential.** API keys, tokens, and private-key headers
-   are scanned for and abort the run (`--allow-secrets` to override). `conf.toml` is
+   are scanned for and abort the run (`--allow-secrets` to override). `conf.json` is
    gitignored, so nothing stops someone from pasting a real key into it, and a transfer
    review is the wrong place to discover that.
 
 ### Applying on the target
 
-Overwrite the installation with the extracted files (replace `app/` wholesale rather than file by file, so modules deleted in this update do not linger and keep getting imported). `conf.toml` is not in the package, so the target's own endpoints survive:
+Overwrite the installation with the extracted files (replace `app/` wholesale rather than file by file, so modules deleted in this update do not linger and keep getting imported). `conf.json` is not in the package, so the target's own endpoints survive:
 
-Back up `app/` and `conf.toml` first. `MANIFEST.txt` lists SHA-256 per file, for the
+Back up `app/` and `conf.json` first. `MANIFEST.txt` lists SHA-256 per file, for the
 transfer record and for verifying the extracted tree on the far side:
 
 ```powershell

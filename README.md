@@ -1,14 +1,14 @@
 # 🤖 MADO — Multi-Agent Debate & Orchestration Platform
 
 > **MCP 도구를 활용하는 반응형 멀티 에이전트 협업 & 토론 웹 애플리케이션**  
-> Dynamic Agent Profiling via `conf.toml`, MCP Tool Integration, Multi-Model LLM Abstraction (LiteLLM), StateGraph Orchestration, and NiceGUI + FastAPI Reactive Web Interface.
+> Dynamic Agent Profiling via `conf.json`, MCP Tool Integration, Multi-Model LLM Abstraction (LiteLLM), StateGraph Orchestration, and NiceGUI + FastAPI Reactive Web Interface.
 
 ---
 
 ## 🌟 주요 특징 (Key Features)
 
-1. **`conf.toml` 기반 동적 에이전트 프로파일링**:
-   - 시스템 기동 시 `conf.toml` 설정 파일로부터 에이전트 풀(Agent Pool)과 MCP 서버를 동적으로 등록.
+1. **`conf.json` 기반 동적 에이전트 프로파일링**:
+   - 시스템 기동 시 `conf.json` 설정 파일로부터 에이전트 풀(Agent Pool)과 MCP 서버를 동적으로 등록.
    - `${OPENAI_API_KEY}`, `${ANTHROPIC_API_KEY}` 등 환경 변수 동적 치환 지원.
 2. **Model Context Protocol (MCP) 내장 호스트 & 도구 연동**:
    - Filesystem · Memory(지식 그래프) · Git · Python 코드 실행 샌드박스 MCP 서버와 JSON-RPC stdio 통신.
@@ -16,7 +16,7 @@
    - 도구 검색 및 Function Calling 스키마 자동 변환, 실행 결과(Observation) 피드백.
 3. **다양한 LLM 프로바이더 추상화 (LiteLLM)**:
    - OpenAI (`gpt-4o`), Anthropic (`claude-3-5-sonnet`), Google (`gemini-1.5-pro`), Ollama 등 통합 지원.
-   - `[llm]` 전역 섹션에서 **API URL(`api_base`), 모델 명, API 버전, provider, timeout/재시도, 커스텀 헤더**를 지정하고 모든 에이전트가 상속.
+   - `llm` 전역 설정에서 **API URL(`api_base`), 모델 명, API 버전, provider, timeout/재시도, 커스텀 헤더**를 지정하고 모든 에이전트가 상속.
    - 사내 OpenAI 호환 게이트웨이 · vLLM · LM Studio · Ollama 등 **API 키 없는 로컬 엔드포인트도 그대로 사용 가능**.
    - **Sequential Thinking(단계적 사고)** 을 `prompt` / `native` / `mcp` 3가지 모드로 에이전트별 설정.
    - 엔드포인트에 닿지 못하면 **대체 답변을 지어내지 않고** 해당 발언 자리에 연결 실패 사실을 그대로 기록합니다.
@@ -28,7 +28,7 @@
 5. **세션별 페르소나 & 시스템 프롬프트 (첫 대화 시 고정)**:
    - `/personas/{session_id}` 편집 페이지에서 에이전트의 이름·역할·시스템 프롬프트를 세션마다 다르게 지정.
    - 첫 유저 메시지가 기록되는 순간 전 에이전트의 페르소나가 DB 에 스냅샷되고 잠깁니다.
-   - 세션을 나중에 다시 열면 그때 저장된 페르소나로 이어서 토론합니다 (`conf.toml` 이 바뀌었어도 유지).
+   - 세션을 나중에 다시 열면 그때 저장된 페르소나로 이어서 토론합니다 (`conf.json` 이 바뀌었어도 유지).
 6. **멀티 에이전트 토론 & 상태 머신 오케스트레이션**:
    - **Master Orchestrator**: 목표 분해, 발언자 선정, 토론 중재, 합의 검증 및 최종 산출물 합성.
    - **3가지 토론 전략**: 순차 토론 (`sequential_debate`), 디베이트 (`adversarial_debate`), 오케스트레이터 지명 (`orchestrator_led`).
@@ -36,7 +36,7 @@
    - 무한 루프 방지를 위한 `max_rounds` 및 `is_consensus_reached` 종료 보장.
 7. **반응형 모던 Web GUI (FastAPI + NiceGUI)**:
    - **좌측 사이드바**: 세션 히스토리, 신규 생성(`+ New Chat`), 이름 변경, 삭제, 그리고 대화 전체를 마크다운 파일로 저장(💾).
-   - **상단 제어 패널**: 에이전트 온/오프 토글, 라운드 제한 슬라이더, 전략 선택, 세션별 커스텀 지침, 그리고 앱 재기동 없이 `conf.toml` 을 다시 읽어 에이전트 목록을 갱신하는 버튼.
+   - **상단 제어 패널**: 에이전트 온/오프 토글, 라운드 제한 슬라이더, 전략 선택, 세션별 커스텀 지침, 그리고 앱 재기동 없이 `conf.json` 을 다시 읽어 에이전트 목록을 갱신하는 버튼.
    - **메인 토론 피드**: 에이전트별 색상/아바타 구분 대화창, 접이식(Accordion) MCP 도구 호출 로그.
    - **우측 산출물 뷰어**: 최종 종합 보고서(Markdown), 소스코드(Code), Mermaid 아키텍처 다이어그램 탭 및 원클릭 복사/다운로드.
 8. **SQLite 영구 저장소 (SQLAlchemy Async)**:
@@ -74,11 +74,11 @@ graph TD
 
 ```
 MultiAgentOrchestrator/
-├── conf.example.toml         # 설정 템플릿 (저장소에 커밋되는 원본)
+├── conf.example.json         # 설정 템플릿 (저장소에 커밋되는 원본)
 ├── setup_mcp.py              # 개발 PC용 MCP 서버 일괄 설치
 ├── package_offline.py        # 폐쇄망 배포 번들 패키징 (런타임 + MCP 서버 동봉)
 ├── package_source.py         # 소스·설정만 패키징 (런타임 제외, 갱신 반입용)
-├── conf.toml                 # 실제 시스템 설정 파일 (로컬 전용, .gitignore 대상)
+├── conf.json                 # 실제 시스템 설정 파일 (로컬 전용, .gitignore 대상)
 ├── .env.example              # 환경 변수 템플릿
 ├── requirements.txt          # 파이썬 의존성 패키지
 ├── README.md                 # 프로젝트 문서
@@ -87,7 +87,7 @@ MultiAgentOrchestrator/
 ├── workspace/                # 에이전트 공용 작업 공간 (.gitignore 대상)
 ├── app/
 │   ├── main.py               # FastAPI + NiceGUI 실행 엔트리포인트
-│   ├── config.py             # TOML 로더, 환경변수 치환 및 Pydantic 검증
+│   ├── config.py             # JSON 로더/기록기, 환경변수 치환 및 Pydantic 검증
 │   ├── database/             # SQLite & SQLAlchemy 비동기 ORM
 │   │   ├── models.py         # Session, Message, ToolCallRecord, Artifact, SessionAgent 모델
 │   │   └── session.py        # Async Engine 및 세션 관리
@@ -116,10 +116,10 @@ MultiAgentOrchestrator/
 └── tests/                    # 자동화 테스트 스위트
     ├── test_config.py
     ├── test_personas.py       # 페르소나 편집 → 고정 → 재개 수명주기
-    ├── test_agent_admin.py    # 에이전트 추가/비활성화/삭제 → conf.toml 편집과 잠금 규칙
+    ├── test_agent_admin.py    # 에이전트 추가/비활성화/삭제 → conf.json 편집과 잠금 규칙
     ├── test_session_snapshot.py # 시작한 대화의 구성 스냅샷 (삭제·키 교체에도 자기완결)
     ├── test_speaker_selection.py # 오케스트레이터 지명 전략 (지명·해석·실패 시 물러서기)
-    ├── test_llm_settings.py   # [llm] 상속, 엔드포인트/단계적 사고 설정
+    ├── test_llm_settings.py   # llm 상속, 엔드포인트/단계적 사고 설정
     ├── test_db.py
     ├── test_mcp.py
     └── test_orchestrator.py
@@ -135,7 +135,7 @@ pip install -r requirements.txt
 ```
 
 ### 1-1. MCP 서버 준비
-`conf.toml` 이 기본으로 켜 두는 MCP 서버를 한 번에 준비합니다 (인터넷 필요, 최초 1회).
+`conf.json` 이 기본으로 켜 두는 MCP 서버를 한 번에 준비합니다 (인터넷 필요, 최초 1회).
 ```bash
 python setup_mcp.py
 ```
@@ -145,12 +145,12 @@ python setup_mcp.py
 - `./mcp_sandbox` 에 [AirgappedPySandbox](https://github.com/HaJaehee/AirgappedPySandbox) 체크아웃
 
 Node 를 쓰지 않거나 샌드박스가 필요 없으면 `--skip-node` / `--skip-sandbox` 를 붙이고,
-해당 서버는 `conf.toml` 에서 `enabled = false` 로 꺼두세요.
+해당 서버는 `conf.json` 에서 `"enabled": false` 로 꺼두세요.
 
 ### 2. 설정 파일 준비
-`conf.toml` 은 로컬 전용 파일이라 저장소에 포함되지 않습니다. 템플릿을 복사해서 시작하세요.
+`conf.json` 은 로컬 전용 파일이라 저장소에 포함되지 않습니다. 템플릿을 복사해서 시작하세요.
 ```bash
-cp conf.example.toml conf.toml
+cp conf.example.json conf.json
 ```
 
 ### 3. 환경 변수 설정 (선택사항)
@@ -169,14 +169,15 @@ LLM_API_KEY=                              # 키가 필요 없는 서버라면 �
 ```bash
 python -m app.main
 ```
-접속 주소는 기동 로그의 `Web UI: http://...` 줄에 표시됩니다. 주소는 `conf.toml` 의
-`[app] host / port` 를 따르며, 이 값은 `.env` 의 `APP_HOST` / `APP_PORT` 로도 덮어쓸 수 있습니다.
+접속 주소는 기동 로그의 `Web UI: http://...` 줄에 표시됩니다. 주소는 `conf.json` 의
+`app.host` / `app.port` 를 따르며, 이 값은 `.env` 의 `APP_HOST` / `APP_PORT` 로도 덮어쓸 수 있습니다.
 실행 스크립트에 주소를 하드코딩하지 않으므로 포트를 바꾸려면 한 곳만 고치면 됩니다.
 
-```toml
-[app]
-host = "${APP_HOST:-127.0.0.1}"
-port = "${APP_PORT:-8000}"
+```json
+"app": {
+  "host": "${APP_HOST:-127.0.0.1}",
+  "port": "${APP_PORT:-8000}"
+}
 ```
 
 ---
@@ -189,31 +190,62 @@ pytest -v tests/
 
 ---
 
-## ⚙️ `conf.toml` 커스텀 가이드
+## ⚙️ `conf.json` 커스텀 가이드
 
-### 전역 LLM 설정 `[llm]`
+### 설정 파일의 문법
 
-`[llm]` 섹션의 값은 각 에이전트가 같은 항목을 직접 지정하지 않는 한 **모든 에이전트에 상속**됩니다.
-따라서 사내 게이트웨이나 로컬 LLM 서버를 쓸 때는 `[llm]` 한 곳만 고치면 됩니다.
+설정은 JSON 입니다. 표준 라이브러리 `json` 하나로 읽고 쓰므로 화면에서 고친 값이 그대로 파일에
+반영되고, 문법 오류는 **줄 번호와 함께** 보고됩니다. JSON 에 없는 두 가지는 아래 규칙으로 채웁니다.
 
-```toml
-[llm]
-model = "openai/qwen2.5-coder-32b"          # 모델 명
-api_base = "https://llm-gateway.mycorp.com/v1"  # LLM API URL (api_url / base_url 도 동일)
-api_key = "${CORP_LLM_TOKEN}"               # 로컬 모델이면 비워두어도 됩니다
-api_version = "2024-10-21"                  # Azure OpenAI 전용
-provider = "openai"                          # LiteLLM provider 강제 지정 (선택)
-temperature = 0.4
-max_tokens = 4096
-max_context_window = 128000  # 엔드포인트의 실제 한도로 맞추세요.
-                             # 전사가 이 값에 맞춰 잘립니다. 실제보다 크게 잡으면
-                             # 잘리지 않은 채 나가 400 을 받습니다.
-timeout = 120            # 요청 타임아웃(초)
-num_retries = 2          # 재시도 횟수
-drop_params = true       # 엔드포인트가 모르는 파라미터 자동 제거 (로컬 모델 호환성)
-max_tool_iterations = 30 # 한 턴에서 허용할 MCP 도구 루프 횟수 (1~50)
-extra_headers = { "X-Org-Id" = "${MY_ORG_ID}" }
-extra_body = { "user" = "multiagent-orchestrator" }
+| 필요한 것 | 규칙 |
+|---|---|
+| 주석 | 키를 `//` 로 시작하면 설명으로 보고 읽을 때 걷어냅니다. 값은 문자열 또는 문자열 배열(여러 줄) |
+| 여러 줄 글 | `system_prompt` / `prompt_template` 은 **문자열 배열**로 적을 수 있고, 읽을 때 줄바꿈으로 이어 붙입니다 |
+
+```json
+"// filesystem": [
+  "공용 작업 공간 파일 I/O (공식 서버, 툴 14종).",
+  "지정한 디렉터리 밖 경로는 서버가 자체적으로 차단합니다."
+],
+"filesystem": { "command": "${NODE_BIN:-node}", "args": ["..."], "enabled": true }
+```
+
+설명은 데이터의 일부라 화면에서 에이전트를 추가·삭제해도 그대로 남습니다.
+
+### 전역 LLM 설정 `llm`
+
+`llm` 의 값은 각 에이전트가 같은 항목을 직접 지정하지 않는 한 **모든 에이전트에 상속**됩니다.
+따라서 사내 게이트웨이나 로컬 LLM 서버를 쓸 때는 `llm` 한 곳만 고치면 됩니다.
+
+```json
+"llm": {
+  "model": "openai/qwen2.5-coder-32b",
+  "// api_base": "LLM API URL (api_url / base_url 도 동일)",
+  "api_base": "https://llm-gateway.mycorp.com/v1",
+  "// api_key": "로컬 모델이면 비워두어도 됩니다",
+  "api_key": "${CORP_LLM_TOKEN}",
+  "// api_version": "Azure OpenAI 전용",
+  "api_version": "2024-10-21",
+  "// provider": "LiteLLM provider 강제 지정 (선택)",
+  "provider": "openai",
+  "temperature": 0.4,
+  "max_tokens": 4096,
+  "// max_context_window": [
+    "엔드포인트의 실제 한도로 맞추세요.",
+    "전사가 이 값에 맞춰 잘립니다. 실제보다 크게 잡으면 잘리지 않은 채 나가 400 을 받습니다."
+  ],
+  "max_context_window": 128000,
+  "// timeout": "요청 타임아웃(초)",
+  "timeout": 120,
+  "// num_retries": "재시도 횟수",
+  "num_retries": 2,
+  "// drop_params": "엔드포인트가 모르는 파라미터 자동 제거 (로컬 모델 호환성)",
+  "drop_params": true,
+  "// max_tool_iterations": "한 턴에서 허용할 MCP 도구 루프 횟수 (1~50)",
+  "max_tool_iterations": 30,
+  "extra_headers": { "X-Org-Id": "${MY_ORG_ID}" },
+  "extra_body": { "user": "multiagent-orchestrator" }
+}
 ```
 
 > **호출 모드 판정**: `api_base` 또는 `api_key` 중 하나라도 설정되어 있으면(또는 모델이 `ollama/`, `ollama_chat/`, `lm_studio/` 로 시작하면) 실제 LLM 을 호출합니다.
@@ -222,16 +254,24 @@ extra_body = { "user" = "multiagent-orchestrator" }
 
 ### Sequential Thinking (단계적 사고)
 
-```toml
-[llm.sequential_thinking]        # 또는 [agents.<key>.sequential_thinking]
-enabled = true
-mode = "prompt"                  # "prompt" | "native" | "mcp"
-max_steps = 5
-show_steps = true                # false 면 최종 결론만 피드에 노출
-reasoning_effort = "high"        # native 모드: minimal | low | medium | high
-thinking_budget_tokens = 8192    # native 모드: 확장 사고 토큰 예산 (Anthropic 계열)
-mcp_server = "sequential_thinking"  # mcp 모드에서 사용할 MCP 서버 키
-# prompt_template = """...{max_steps}..."""   # 프로토콜 문구 직접 작성
+`llm.sequential_thinking` (또는 `agents.<key>.sequential_thinking`) 에 적습니다.
+
+```json
+"sequential_thinking": {
+  "enabled": true,
+  "// mode": "\"prompt\" | \"native\" | \"mcp\"",
+  "mode": "prompt",
+  "max_steps": 5,
+  "// show_steps": "false 면 최종 결론만 피드에 노출",
+  "show_steps": true,
+  "// reasoning_effort": "native 모드: minimal | low | medium | high",
+  "reasoning_effort": "high",
+  "// thinking_budget_tokens": "native 모드: 확장 사고 토큰 예산 (Anthropic 계열)",
+  "thinking_budget_tokens": 8192,
+  "// mcp_server": "mcp 모드에서 사용할 MCP 서버 키",
+  "mcp_server": "sequential_thinking",
+  "// prompt_template": "프로토콜 문구 직접 작성. {max_steps} 치환자를 쓸 수 있습니다"
+}
 ```
 
 | mode | 동작 | 적용 대상 |
@@ -240,31 +280,31 @@ mcp_server = "sequential_thinking"  # mcp 모드에서 사용할 MCP 서버 키
 | `native` | `reasoning_effort` / `thinking` 파라미터를 실제 요청에 전달 | 추론 지원 모델 |
 | `mcp` | `@modelcontextprotocol/server-sequential-thinking` 도구를 강제 사용 | MCP 서버 활성화 필요 |
 
-에이전트 블록의 `[agents.<key>.sequential_thinking]` 은 전역 값과 **키 단위로 병합**되므로,
-바꾸고 싶은 항목만 적으면 나머지는 `[llm.sequential_thinking]` 값을 그대로 사용합니다.
+에이전트의 `agents.<key>.sequential_thinking` 은 전역 값과 **키 단위로 병합**되므로,
+바꾸고 싶은 항목만 적으면 나머지는 `llm.sequential_thinking` 값을 그대로 사용합니다.
 
 ### 에이전트 페르소나 (세션별 오버라이드)
 
-`conf.toml` 의 `[agents.*]` 는 **서버 전역 기본값**입니다. 세션마다 다른 인격으로 토론시키려고
+`conf.json` 의 `agents` 는 **서버 전역 기본값**입니다. 세션마다 다른 인격으로 토론시키려고
 서버를 재기동할 필요는 없습니다.
 
 로스터 패널의 **페르소나 편집** 버튼 → `/personas/{session_id}` 에서 에이전트별로
 **이름 · 역할 · 시스템 프롬프트**를 고칠 수 있습니다. 모델·엔드포인트·도구 권한은 운영 설정이라
-`conf.toml` 에 남습니다.
+`conf.json` 에 남습니다.
 
 | 시점 | 상태 | 동작 |
 |------|------|------|
-| 세션 생성 ~ 첫 메시지 직전 | 🟢 편집 가능 | 저장분은 이 세션에만 적용. 손대지 않은 에이전트는 `conf.toml` 기본값 |
+| 세션 생성 ~ 첫 메시지 직전 | 🟢 편집 가능 | 저장분은 이 세션에만 적용. 손대지 않은 에이전트는 `conf.json` 기본값 |
 | 첫 유저 메시지 | 🔒 고정 | 그 시점의 유효값이 **전 에이전트**에 대해 `session_agents` 에 기록되고 `personas_locked = true` |
-| 세션 재개 | 🔒 고정 유지 | 저장된 값을 그대로 사용. 그 사이 `conf.toml` 이 바뀌어도 세션은 잠글 때의 인격을 유지 |
+| 세션 재개 | 🔒 고정 유지 | 저장된 값을 그대로 사용. 그 사이 `conf.json` 이 바뀌어도 세션은 잠글 때의 인격을 유지 |
 
 ### 시작한 대화는 자기완결적입니다
 
 첫 메시지가 굳히는 것은 인격만이 아닙니다. `AgentConfig` **전체** — 모델 · 엔드포인트 ·
 API 키 · 샘플링 값 · 도구 권한 · 단계적 사고 설정 — 가 `session_agents.config_snapshot`
-(JSON) 에 함께 기록됩니다. 그래서 대화는 이 순간부터 `conf.toml` 에 의존하지 않습니다.
+(JSON) 에 함께 기록됩니다. 그래서 대화는 이 순간부터 `conf.json` 에 의존하지 않습니다.
 
-| `conf.toml` 에 한 일 | 시작한 대화 | 아직 시작하지 않은 대화 |
+| `conf.json` 에 한 일 | 시작한 대화 | 아직 시작하지 않은 대화 |
 |----------------------|-------------|--------------------------|
 | 에이전트 추가 | 영향 없음 (꺼진 채로 보이며, 원하면 직접 켤 수 있음) | 켜진 채로 참여 |
 | 에이전트 삭제 · 비활성화 | **영향 없음** — 그 에이전트는 굳은 구성으로 계속 발언하고, 로스터에 `이 대화 전용` 뱃지로 표시 | 풀에서 빠짐 |
@@ -277,8 +317,8 @@ API 키 · 샘플링 값 · 도구 권한 · 단계적 사고 설정 — 가 `se
 
 **설정 갱신 (탈출구).** 스냅샷이 정본이 되면 게이트웨이 주소가 바뀌거나 API 키가
 만료됐을 때 옛 대화가 죽은 엔드포인트를 계속 두드리게 됩니다. 잠긴 세션의 로스터에
-나타나는 **설정 갱신** 버튼이 스냅샷을 지금 `conf.toml` 값으로 다시 굳힙니다 — 인격은
-건드리지 않으므로 기록의 화자는 그대로입니다. `conf.toml` 에 더 이상 없는 에이전트는
+나타나는 **설정 갱신** 버튼이 스냅샷을 지금 `conf.json` 값으로 다시 굳힙니다 — 인격은
+건드리지 않으므로 기록의 화자는 그대로입니다. `conf.json` 에 더 이상 없는 에이전트는
 손대지 않고 남겨 둡니다.
 
 > **API 키가 DB 에 들어갑니다.** 자기완결성의 대가입니다. `multiagent.db` 는 평문
@@ -286,7 +326,7 @@ API 키 · 샘플링 값 · 도구 권한 · 단계적 사고 설정 — 가 `se
 > 이름 · 역할 · 시스템 프롬프트만 돌려주며 스냅샷을 노출하지 않습니다.
 
 `config_snapshot` 이 `NULL` 인 행은 이 컬럼이 생기기 전에 잠긴 대화입니다. 그런 대화는
-예전처럼 살아 있는 `conf.toml` 을 따릅니다 (기존 DB 는 기동 시 자동 이관됩니다).
+예전처럼 살아 있는 `conf.json` 을 따릅니다 (기존 DB 는 기동 시 자동 이관됩니다).
 
 토론 도중 인격이 바뀌면 앞선 발언과 뒤의 발언이 서로 다른 화자에서 나오게 되어 기록을 해석할 수
 없습니다. 그래서 첫 메시지 이후로는 UI 가 읽기 전용이 되고, 서버 측에서도 저장 요청을 거부합니다
@@ -302,12 +342,12 @@ API 키 · 샘플링 값 · 도구 권한 · 단계적 사고 설정 — 가 `se
 한 턴은 **오케스트레이터 계획 → N 라운드 전문가 토론 → 오케스트레이터 합성** 입니다.
 오케스트레이터는 라운드 밖에 섭니다 — 라운드 안에서 말하지 않습니다.
 
-라운드 안의 순서는 두 값이 정합니다. 둘 다 `conf.toml` 의 `[agents.<key>]` 에 있고,
+라운드 안의 순서는 두 값이 정합니다. 둘 다 `conf.json` 의 `agents.<key>` 에 있고,
 로스터에서 바꿀 수 있으며, 대화가 시작되면 스냅샷으로 함께 굳습니다.
 
 | 값 | 뜻 | 화면에서 |
 |----|-----|----------|
-| `debate_priority` | 라운드 안의 발언 순서. 낮을수록 먼저. 같으면 `conf.toml` 에 적힌 순서 | 카드를 **끌어서** 배치 |
+| `debate_priority` | 라운드 안의 발언 순서. 낮을수록 먼저. 같으면 `conf.json` 에 적힌 순서 | 카드를 **끌어서** 배치 |
 | `debate_stance` | 디베이트 전략에서의 진영: `proponent` · `critic` · `neutral` | 카드의 **⋮ 메뉴** |
 
 로스터에 놓인 카드 순서가 곧 발언 순서입니다. 카드를 끌어 놓으면 `debate_priority` 가
@@ -348,19 +388,19 @@ API 키 · 샘플링 값 · 도구 권한 · 단계적 사고 설정 — 가 `se
 
 ### 에이전트 구성 편집 (추가 · 진영 · 순서 · 삭제)
 
-로스터 패널에서 `conf.toml` 의 `[agents.*]` 를 화면에서 직접 고칩니다. 앱을 다시 띄울
+로스터 패널에서 `conf.json` 의 `agents` 를 화면에서 직접 고칩니다. 앱을 다시 띄울
 필요는 없습니다.
 
 | 조작 | 어디서 | 저장되는 값 |
 |------|--------|-------------|
-| 에이전트 추가 | 헤더의 **에이전트 추가** 버튼 | 새 `[agents.<key>]` 섹션 |
+| 에이전트 추가 | 헤더의 **에이전트 추가** 버튼 | `agents` 에 새 `<key>` 항목 |
 | 발언 순서 | 카드를 **끌어서** 배치 | `debate_priority` |
 | 디베이트 진영 | 카드의 **⋮ 메뉴** | `debate_stance` |
 | 비활성화 · 삭제 | 카드의 **⋮ 메뉴** | `enabled` / 섹션 제거 |
 | 도구 할당 | 카드의 **도구 N** 버튼 | `allowed_mcp_servers` |
 
 페르소나 편집과는 **적용 범위가 다릅니다.** 페르소나(이름·역할·시스템 프롬프트)는 대화별
-오버라이드지만, 위의 것들은 배포 설정이라 `conf.toml` 이 정본이고 다음 기동에서도 그대로
+오버라이드지만, 위의 것들은 배포 설정이라 `conf.json` 이 정본이고 다음 기동에서도 그대로
 살아 있습니다.
 
 위 다섯 가지는 **하나의 잠금**을 함께 씁니다. 하나만 열어 두면 "바꿨는데 왜 이 대화에는
@@ -373,15 +413,15 @@ API 키 · 샘플링 값 · 도구 권한 · 단계적 사고 설정 — 가 `se
 | 어느 대화든 토론이 돌고 있음 | 🔒 잠김 — 에이전트 풀은 프로세스 전체가 공유합니다 |
 
 **추가.** 폼의 LLM 항목(모델 · API URL · API 키 · provider · 온도 · 컨텍스트 창 · 응답 토큰 ·
-타임아웃 · 재시도 · 도구 루프 한도 등)은 `.env` 와 `[llm]` 에서 온 **현재 유효 기본값**으로 미리
-채워집니다. 그대로 둔 항목은 `conf.toml` 에 **적지 않습니다** — 화면이 보는 값은 이미 환경변수가
+타임아웃 · 재시도 · 도구 루프 한도 등)은 `.env` 와 `llm` 에서 온 **현재 유효 기본값**으로 미리
+채워집니다. 그대로 둔 항목은 `conf.json` 에 **적지 않습니다** — 화면이 보는 값은 이미 환경변수가
 풀린 값이라, 되쓰면 해석된 API 키가 파일에 평문으로 박히고 `.env` 를 바꿔도 따라오지 않게 됩니다.
-적지 않은 항목은 계속 `[llm]` 을 상속하므로 `.env` 를 바꾸면 이 에이전트도 함께 따라갑니다.
+적지 않은 항목은 계속 `llm` 을 상속하므로 `.env` 를 바꾸면 이 에이전트도 함께 따라갑니다.
 페르소나(시스템 프롬프트)와 MCP 도구 할당, 단계적 사고 설정도 같은 창에서 지정합니다.
 
 **비활성화 vs 삭제.** 둘 다 그 에이전트를 풀에서 빼지만, 비활성화(`enabled = false`)는 설정과
 프롬프트를 파일에 남겨 두어 '꺼둔 에이전트' 칩에서 언제든 되살릴 수 있습니다. 삭제는 섹션과 하위
-블록(`[agents.<key>.sequential_thinking]`)까지 지웁니다. 오케스트레이터는 토론 진행과 최종
+블록(`agents.<key>.sequential_thinking`)까지 지웁니다. 오케스트레이터는 토론 진행과 최종
 합성을 맡으므로 끄거나 지울 수 없습니다.
 
 **이미 시작한 대화는 건드리지 않습니다.** 첫 메시지와 함께 참여 에이전트와 그 구성 전체가
@@ -391,10 +431,10 @@ API 키 · 샘플링 값 · 도구 권한 · 단계적 사고 설정 — 가 `se
 (`sessions.known_agents` 로 "사용자가 끈 것" 과 "그 뒤에 생긴 것" 을 구분합니다). 정말
 합류시키려면 그 대화에서 직접 체크하세요.
 
-`conf.toml` 을 편집기로 직접 고쳤다면 **conf.toml 다시 읽기** 버튼으로 같은 결과를 얻습니다.
+`conf.json` 을 편집기로 직접 고쳤다면 **conf.json 다시 읽기** 버튼으로 같은 결과를 얻습니다.
 어느 경로든 주석과 `${VAR}` 표기는 보존됩니다 — 줄 단위로 고치기 때문입니다.
 
-### MCP 도구 구성 `[mcp_servers.*]`
+### MCP 도구 구성 `mcp_servers`
 
 기본 구성에는 아래 서버가 등록되어 있습니다. 모든 서버는 진입점을 `node` / `python` 으로
 **직접** 실행합니다 — `npx` 는 패키지가 로컬에 없으면 npm 레지스트리에 접속하므로 폐쇄망에서
@@ -410,7 +450,7 @@ API 키 · 샘플링 값 · 도구 권한 · 단계적 사고 설정 — 가 `se
 | `fetch` | Python (공식) | 1 | 비활성 | URL 조회. **폐쇄망에서는 켜지 마세요** |
 
 > `@modelcontextprotocol/server-brave-search` 는 공식 레포에서 `servers-archived` 로 이관되어
-> 더 이상 유지보수되지 않으므로 기본 구성에서 제외했습니다. 검색이 필요하면 `conf.example.toml`
+> 더 이상 유지보수되지 않으므로 기본 구성에서 제외했습니다. 검색이 필요하면 `conf.example.json`
 > 하단의 DuckDuckGo / SearXNG 예시를 참고하세요.
 
 기본 도구 배분은 다음과 같습니다. Critic 에게 `sandbox` 를 주는 것이 핵심으로, 코드를 직접
@@ -456,7 +496,7 @@ MCP 는 두 종류의 실패를 구분합니다.
 | 🟢 `filesystem 툴 14` | 연결됨 · 등록된 도구 수 |
 | 🟠 `연결 끊김` | 세션이 끊김. 다음 도구 호출 시 자동 재연결 |
 | 🔴 `연결 실패` | 기동 실패. 툴팁에 원인 표시 |
-| ⚪ `비활성` | `conf.toml` 에서 `enabled = false` |
+| ⚪ `비활성` | `conf.json` 에서 `"enabled": false` |
 
 헤더의 새로고침 버튼은 연결되지 않은 서버만 다시 띄웁니다. 같은 정보를 `GET /api/mcp`
 로도 조회할 수 있습니다.
@@ -531,7 +571,7 @@ python -c "import os, app.config; print(os.environ['WORKSPACE_DIR'])"
 #### 대화별 작업 공간 (런타임 변경)
 
 에이전트 설정 패널의 **작업 공간** 칸에 폴더를 적고 `적용` 을 누르면 그 대화에서 쓸
-폴더가 바뀝니다. 값은 **세션에 저장되며 `conf.toml` 은 바뀌지 않습니다.** 비워 두면
+폴더가 바뀝니다. 값은 **세션에 저장되며 `conf.json` 은 바뀌지 않습니다.** 비워 두면
 기본값을 씁니다.
 
 MCP 서버는 허용 경로를 기동 시점에 받으므로(`filesystem` 은 argv, `sandbox` 는
@@ -610,8 +650,8 @@ python package_source.py   # dist/MultiAgentOrchestrator_source_YYYYMMDD.zip (�
 | 담기는 것 | 빠지는 것 |
 |---|---|
 | `app/`, `mcp_servers/` | `python_runtime/`, `node_runtime/`, `wheels/`, `mcp_sandbox/` |
-| `mcp_node/memory-scoped.mjs` (포크한 서버의 실행 사본) | `workspace/`, `multiagent.db`, `conf.toml` |
-| `conf.example.toml`, `.env.example`, `requirements.txt` | `tests/`, `wiki/`, `CLAUDE.md` |
+| `mcp_node/memory-scoped.mjs` (포크한 서버의 실행 사본) | `workspace/`, `multiagent.db`, `conf.json` |
+| `conf.example.json`, `.env.example`, `requirements.txt` | `tests/`, `wiki/`, `CLAUDE.md` |
 | `setup_mcp.py`, `open_browser.py`, `README.md` | 패키징 스크립트 (`package_*.py|ps1`) |
 
 포함 목록은 제외 목록이 아니라 **허용 목록**입니다. 제외 목록으로 짜면 나중에 생긴 디렉터리가
@@ -619,18 +659,18 @@ python package_source.py   # dist/MultiAgentOrchestrator_source_YYYYMMDD.zip (�
 
 스크립트가 거부하는 세 가지:
 
-1. **대상의 `conf.toml` 덮어쓰기.** 로컬 `conf.toml` 은 아예 담지 않습니다. 배포본의
-   `conf.toml` 에는 그 망의 실제 엔드포인트가 있고, 새 설정 항목은 `conf.example.toml`
+1. **대상의 `conf.json` 덮어쓰기.** 로컬 `conf.json` 은 아예 담지 않습니다. 배포본의
+   `conf.json` 에는 그 망의 실제 엔드포인트가 있고, 새 설정 항목은 `conf.example.json`
    과 비교해 손으로 옮깁니다.
 2. **큰 파일.** `--max-file-mb`(기본 2MB)를 넘으면 중단합니다. 소스 패키지에 메가바이트급
    파일이 있다면 런타임 산출물이 새어 들어온 것입니다.
 3. **키처럼 보이는 값.** API 키·토큰·개인 키 헤더를 스캔해 중단합니다(`--allow-secrets` 로 강행).
-   `conf.toml` 은 gitignore 대상이라 누군가 실제 키를 적어 두었을 수 있고, 그것을 반입 심사에서
+   `conf.json` 은 gitignore 대상이라 누군가 실제 키를 적어 두었을 수 있고, 그것을 반입 심사에서
    발견하는 것은 곤란합니다.
 
 대상 장비에서는 압축을 푼 내용을 설치본 위에 덮어씁니다. `app/` 은 파일 단위로 덮지 말고
 **통째로 교체**하세요 — 이번 갱신에서 삭제된 모듈이 대상에 남으면 계속 import 됩니다.
-`conf.toml` 은 패키지에 없으므로 그대로 살아남습니다. 동봉된 `MANIFEST.txt` 에 파일별
+`conf.json` 은 패키지에 없으므로 그대로 살아남습니다. 동봉된 `MANIFEST.txt` 에 파일별
 SHA-256 이 있어 반입 심사와 무결성 확인에 씁니다.
 
 ```powershell
@@ -645,7 +685,7 @@ Get-Content MANIFEST.txt | Where-Object { $_ -notmatch '^#' } | ForEach-Object {
 
 #### 실행 경로 재정의
 
-`command` / `args` 도 환경변수 치환을 지원하므로, 개발 PC와 폐쇄망 배포 번들이 `conf.toml`
+`command` / `args` 도 환경변수 치환을 지원하므로, 개발 PC와 폐쇄망 배포 번들이 `conf.json`
 하나를 그대로 공유합니다. 값을 비워두면 괄호 안의 기본값이 쓰입니다.
 
 | 변수 | 기본값 | 용도 |
@@ -664,47 +704,55 @@ Get-Content MANIFEST.txt | Where-Object { $_ -notmatch '^#' } | ForEach-Object {
 
 ### 로컬 / 사내 엔드포인트 예시
 
-```toml
-# Ollama (API 키 불필요)
-[agents.coder]
-model = "ollama_chat/qwen2.5-coder:14b"
-api_base = "http://localhost:11434"
+`agents` 안의 해당 에이전트에 아래 항목을 넣습니다.
 
-# LM Studio / vLLM (OpenAI 호환)
-[agents.coder]
-model = "openai/local-model"
-api_base = "http://localhost:1234/v1"
-api_key = "lm-studio"
+```json
+"agents": {
+  "// coder": "Ollama (API 키 불필요)",
+  "coder": {
+    "model": "ollama_chat/qwen2.5-coder:14b",
+    "api_base": "http://localhost:11434"
+  },
 
-# Azure OpenAI
-[agents.orchestrator]
-model = "azure/my-gpt4o-deployment"
-api_base = "https://my-resource.openai.azure.com"
-api_version = "2024-10-21"
-api_key = "${AZURE_OPENAI_API_KEY}"
+  "// coder (LM Studio / vLLM, OpenAI 호환)": [
+    "\"model\": \"openai/local-model\",",
+    "\"api_base\": \"http://localhost:1234/v1\",",
+    "\"api_key\": \"lm-studio\""
+  ],
+
+  "// orchestrator": "Azure OpenAI",
+  "orchestrator": {
+    "model": "azure/my-gpt4o-deployment",
+    "api_base": "https://my-resource.openai.azure.com",
+    "api_version": "2024-10-21",
+    "api_key": "${AZURE_OPENAI_API_KEY}"
+  }
+}
 ```
 
 환경 변수는 `${VAR}` 외에 `${VAR:-기본값}`, 그리고 중첩(`${A:-${B:-기본값}}`) 형태까지 지원합니다.
-빈 값으로 해석된 항목은 "미설정"으로 간주되어 `[llm]` 전역값을 상속합니다.
+빈 값으로 해석된 항목은 "미설정"으로 간주되어 `llm` 전역값을 상속합니다.
 
 ### 에이전트 추가
 
-새로운 전문 에이전트를 추가하거나 MCP 서버를 확장하려면 `conf.toml`에 아래와 같이 추가하기만 하면 자동으로 등록됩니다
-(생략한 항목은 `[llm]` 값을 상속하며, `enabled = false` 로 잠시 비활성화할 수 있습니다):
+새로운 전문 에이전트를 추가하거나 MCP 서버를 확장하려면 `conf.json` 의 `agents` 에 아래와 같이
+추가하기만 하면 자동으로 등록됩니다
+(생략한 항목은 `llm` 값을 상속하며, `"enabled": false` 로 잠시 비활성화할 수 있습니다):
 
-```toml
-[agents.data_scientist]
-name = "Data Scientist"
-role = "Data Analysis & ML Pipeline"
-model = "openai/gpt-4o"
-api_key = "${OPENAI_API_KEY}"
-temperature = 0.2
-allowed_mcp_servers = ["filesystem"]
-system_prompt = "데이터 파이프라인 설계 및 머신러닝 모델 아키텍처 검토를 전담합니다."
-
-[agents.data_scientist.sequential_thinking]
-enabled = true
-max_steps = 8
+```json
+"data_scientist": {
+  "name": "Data Scientist",
+  "role": "Data Analysis & ML Pipeline",
+  "model": "openai/gpt-4o",
+  "api_key": "${OPENAI_API_KEY}",
+  "temperature": 0.2,
+  "allowed_mcp_servers": ["filesystem"],
+  "system_prompt": "데이터 파이프라인 설계 및 머신러닝 모델 아키텍처 검토를 전담합니다.",
+  "sequential_thinking": {
+    "enabled": true,
+    "max_steps": 8
+  }
+}
 ```
 
 현재 각 에이전트가 어떤 모델/엔드포인트로 잡혔는지는 `GET /api/agents` 또는 UI 로스터 카드의 툴팁에서 확인할 수 있습니다.

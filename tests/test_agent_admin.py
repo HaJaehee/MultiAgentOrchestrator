@@ -1,15 +1,14 @@
-"""화면에서 에이전트를 추가·비활성화·삭제할 때 conf.toml 이 어떻게 바뀌는가.
+"""화면에서 에이전트를 추가·비활성화·삭제할 때 conf.json 이 어떻게 바뀌는가.
 
-MCP 서버 편집(`test_mcp_admin.py`)과 같은 규칙을 따릅니다 — 주석이 살아남고,
+MCP 서버 편집(`test_mcp_admin.py`)과 같은 규칙을 따릅니다 — `//` 설명이 살아남고,
 `${VAR}` 표기가 그대로 남습니다. 여기에 하나가 더 붙습니다.
 
-**미리 채운 기본값은 되쓰지 않는다.** 화면은 새 에이전트 폼을 [llm] (곧 .env) 의
+**미리 채운 기본값은 되쓰지 않는다.** 화면은 새 에이전트 폼을 llm (곧 .env) 의
 유효 기본값으로 채워 보여주지만, 사용자가 실제로 바꾼 항목만 파일에 적습니다.
 화면이 보는 값은 이미 환경변수가 풀린 값이라, 그대로 되쓰면 해석된 API 키가
-conf.toml 에 평문으로 박히고 .env 를 바꿔도 따라오지 않게 됩니다.
+conf.json 에 평문으로 박히고 .env 를 바꿔도 따라오지 않게 됩니다.
 """
 
-import tomllib
 from pathlib import Path
 from typing import List
 
@@ -20,83 +19,84 @@ from app.config import (
     add_agent_to_conf_file,
     agent_defaults_from_llm,
     prune_agent_overrides,
+    read_conf_file,
     remove_agent_from_conf_file,
     set_agent_debate_order_in_conf_file,
     set_agent_debate_stance_in_conf_file,
     set_agent_enabled_in_conf_file,
+    strip_comment_keys,
+    write_conf_file,
 )
 from app.ui.components import roster as roster_module
 from app.ui.components.roster import AgentRosterControl
 
-SAMPLE = """[app]
-port = 8000
-
-[llm]
-model = "${LLM_MODEL:-openai/gpt-4o}"
-api_key = "${LLM_API_KEY}"
-temperature = 0.4
-max_tokens = 4096
-
-[mcp_servers.filesystem]
-command = "${NODE_BIN:-node}"
-args = ["${MCP_NODE_HOME:-./mcp_node}/server.js"]
-
-# 1. 필수 오케스트레이터
-[agents.orchestrator]
-name = "Master Orchestrator"
-role = "Moderator & Synthesizer"
-model = "${ORCHESTRATOR_MODEL:-${LLM_MODEL:-openai/gpt-4o}}"
-allowed_mcp_servers = ["filesystem"]
-
-[agents.orchestrator.sequential_thinking]
-enabled = true
-max_steps = 6
-
-# 2. 크리티컬 리뷰어. 프롬프트 안의 대괄호 줄이 섹션 헤더로 읽히면 안 됩니다.
-[agents.critic]
-name = "Critic"
-role = "Review"
-system_prompt = \"\"\"
-[검토 항목]
-- 보안 취약점
-\"\"\"
-allowed_mcp_servers = []
-
-# 이 주석은 아래 예시 블록을 설명합니다.
-# [agents.example]
-# model = "openai/gpt-4o-mini"
-"""
+SAMPLE = {
+    "app": {"port": 8000},
+    "llm": {
+        "model": "${LLM_MODEL:-openai/gpt-4o}",
+        "api_key": "${LLM_API_KEY}",
+        "temperature": 0.4,
+        "max_tokens": 4096,
+    },
+    "mcp_servers": {
+        "filesystem": {
+            "command": "${NODE_BIN:-node}",
+            "args": ["${MCP_NODE_HOME:-./mcp_node}/server.js"],
+        }
+    },
+    "agents": {
+        "// orchestrator": "1. 필수 오케스트레이터",
+        "orchestrator": {
+            "name": "Master Orchestrator",
+            "role": "Moderator & Synthesizer",
+            "model": "${ORCHESTRATOR_MODEL:-${LLM_MODEL:-openai/gpt-4o}}",
+            "allowed_mcp_servers": ["filesystem"],
+            "sequential_thinking": {"enabled": True, "max_steps": 6},
+        },
+        "// critic": "2. 크리티컬 리뷰어. 프롬프트 안의 대괄호 줄은 그냥 글입니다.",
+        "critic": {
+            "name": "Critic",
+            "role": "Review",
+            "system_prompt": ["[검토 항목]", "- 보안 취약점"],
+            "allowed_mcp_servers": [],
+        },
+        "// 예시": [
+            "이 설명은 아래 예시 블록을 위한 것입니다.",
+            '  "example": { "model": "openai/gpt-4o-mini" }',
+        ],
+    },
+}
 
 
 @pytest.fixture()
 def conf(tmp_path: Path) -> Path:
-    path = tmp_path / "conf.toml"
-    path.write_text(SAMPLE, encoding="utf-8")
+    path = tmp_path / "conf.json"
+    write_conf_file(path, SAMPLE)
     return path
 
 
 def _load(path: Path) -> dict:
-    with open(path, "rb") as f:
-        return tomllib.load(f)
+    """설정값만 (`//` 설명은 걷어낸 뒤)."""
+    return strip_comment_keys(read_conf_file(path))
 
 
 # --------------------------------------------------------------- 미리 채운 기본값
 
 
 def test_defaults_come_from_llm_then_fall_back_to_the_model():
-    """[llm] 에 있으면 그것을, 없으면 `AgentConfig` 의 기본값을 씁니다."""
+    """llm 에 있으면 그것을, 없으면 `AgentConfig` 의 기본값을 씁니다."""
     defaults = agent_defaults_from_llm(
         LLMConfig(model="openai/gpt-4o-mini", temperature=0.4)
     )
 
-    assert defaults["model"] == "openai/gpt-4o-mini"   # [llm] 에서
-    assert defaults["temperature"] == 0.4              # [llm] 에서
+    assert defaults["model"] == "openai/gpt-4o-mini"   # llm 에서
+    assert defaults["temperature"] == 0.4              # llm 에서
     assert defaults["max_tokens"] == 4096              # AgentConfig 기본값
     assert defaults["drop_params"] is True             # AgentConfig 기본값
 
 
 def test_untouched_fields_are_not_written_back():
-    """폼을 그대로 제출하면 아무 항목도 기록되지 않습니다 → 전부 [llm] 상속."""
+    """폼을 그대로 제출하면 아무 항목도 기록되지 않습니다 → 전부 llm 상속."""
     defaults = agent_defaults_from_llm(
         LLMConfig(model="openai/gpt-4o", api_key="sk-live-secret", temperature=0.4)
     )
@@ -144,40 +144,59 @@ def test_added_agent_lands_in_the_agent_group_and_inherits_the_rest(conf: Path):
     assert agent["temperature"] == 0.15
     assert agent["max_tokens"] == 8192
     assert agent["allowed_mcp_servers"] == ["filesystem"]
-    assert "지표의 정의" in agent["system_prompt"]
-    # 적지 않은 항목은 파일에도 없어야 [llm] 을 상속합니다.
+    # 여러 줄 글은 한 줄이 한 항목인 배열로 적힙니다.
+    assert agent["system_prompt"] == [
+        "당신은 데이터 분석가입니다.",
+        "지표의 정의와 표본을 먼저 따집니다.",
+    ]
+    # 적지 않은 항목은 파일에도 없어야 llm 을 상속합니다.
     assert "model" not in agent
     assert "api_key" not in agent
 
+    # 에이전트 무리 안에, 마지막 자리에 들어갑니다.
+    assert list(_load(conf)["agents"]) == ["orchestrator", "critic", "data_analyst"]
     text = conf.read_text(encoding="utf-8")
-    # 에이전트 무리 안에, 예시 주석 블록 앞에 들어갑니다.
-    assert text.index("[agents.data_analyst]") > text.index("[agents.critic]")
-    assert text.index("[agents.data_analyst]") < text.index("# 이 주석은 아래 예시 블록을")
+    assert text.index('"data_analyst"') > text.index('"critic"')
 
 
 def test_added_agent_actually_inherits_the_llm_section(conf: Path):
-    """파일에 적지 않은 값이 설정을 읽었을 때 [llm] 값으로 채워지는지."""
+    """파일에 적지 않은 값이 설정을 읽었을 때 llm 값으로 채워지는지."""
     add_agent_to_conf_file("data_analyst", "Data Analyst", "Data", config_path=conf)
 
     from app.config import load_config
 
     agent = load_config(conf).agents["data_analyst"]
-    assert agent.temperature == 0.4      # [llm]
-    assert agent.max_tokens == 4096      # [llm]
+    assert agent.temperature == 0.4      # llm
+    assert agent.max_tokens == 4096      # llm
+
+
+def test_multiline_prompts_survive_the_round_trip(conf: Path):
+    """배열로 적고 문자열로 읽습니다. 그 왕복에서 글이 상하면 안 됩니다."""
+    from app.config import load_config
+
+    prompt = "첫 줄\n둘째 줄\n\n넷째 줄"
+    add_agent_to_conf_file(
+        "writer", "Writer", "Docs", system_prompt=prompt, config_path=conf
+    )
+
+    assert load_config(conf).agents["writer"].system_prompt == prompt
 
 
 def test_integers_are_written_as_integers(conf: Path):
-    """`ui.number` 는 무엇을 넣든 float 를 돌려줍니다. 4096.0 이 적히면 안 됩니다."""
+    """`ui.number` 는 무엇을 넣든 float 를 돌려줍니다. 8192.0 이 적히면 안 됩니다."""
     add_agent_to_conf_file(
         "data_analyst", "Data Analyst", "Data",
-        overrides={"max_tokens": 8192, "num_retries": 3},
+        overrides={"max_tokens": 8192.0, "num_retries": 3.0},
         config_path=conf,
     )
 
     text = conf.read_text(encoding="utf-8")
-    assert "max_tokens = 8192\n" in text
-    assert "num_retries = 3\n" in text
-    assert _load(conf)["agents"]["data_analyst"]["max_tokens"] == 8192
+    assert '"max_tokens": 8192' in text and "8192.0" not in text
+    assert '"num_retries": 3' in text and "3.0" not in text
+
+    agent = _load(conf)["agents"]["data_analyst"]
+    assert isinstance(agent["max_tokens"], int)
+    assert agent["max_tokens"] == 8192
 
 
 def test_sequential_thinking_block_is_optional(conf: Path):
@@ -197,7 +216,7 @@ def test_comments_and_placeholders_survive_an_add(conf: Path):
     add_agent_to_conf_file("data_analyst", "Data Analyst", "Data", config_path=conf)
 
     text = conf.read_text(encoding="utf-8")
-    assert "# 1. 필수 오케스트레이터" in text
+    assert "1. 필수 오케스트레이터" in text
     assert "${ORCHESTRATOR_MODEL:-${LLM_MODEL:-openai/gpt-4o}}" in text
     assert "${LLM_API_KEY}" in text
 
@@ -218,13 +237,13 @@ def test_add_rejects_duplicates_and_bad_input(conf: Path):
 # --------------------------------------------------------------- 비활성화
 
 
-def test_disable_and_enable_only_touch_the_enabled_line(conf: Path):
+def test_disable_and_enable_only_touch_the_enabled_flag(conf: Path):
     set_agent_enabled_in_conf_file("critic", False, conf)
 
     data = _load(conf)
     assert data["agents"]["critic"]["enabled"] is False
     assert data["agents"]["critic"]["name"] == "Critic"
-    assert "[검토 항목]" in data["agents"]["critic"]["system_prompt"]
+    assert data["agents"]["critic"]["system_prompt"][0] == "[검토 항목]"
     # 하위 블록의 enabled 를 건드리지 않았습니다.
     assert data["agents"]["orchestrator"]["sequential_thinking"]["enabled"] is True
 
@@ -246,7 +265,7 @@ def test_disabling_an_unknown_agent_is_an_error(conf: Path):
 # --------------------------------------------------------------- 삭제
 
 
-def test_delete_removes_the_section_and_its_sub_blocks(conf: Path):
+def test_delete_removes_the_agent_and_its_sub_blocks(conf: Path):
     add_agent_to_conf_file(
         "thinker", "Thinker", "Role",
         sequential_thinking={"enabled": True, "max_steps": 3},
@@ -255,8 +274,7 @@ def test_delete_removes_the_section_and_its_sub_blocks(conf: Path):
     remove_agent_from_conf_file("thinker", conf)
 
     text = conf.read_text(encoding="utf-8")
-    assert "[agents.thinker]" not in text
-    assert "[agents.thinker.sequential_thinking]" not in text
+    assert "thinker" not in text
     assert "thinker" not in _load(conf)["agents"]
 
 
@@ -282,10 +300,10 @@ def test_delete_keeps_the_neighbouring_comments(conf: Path):
 
     text = conf.read_text(encoding="utf-8")
     assert "critic" not in _load(conf)["agents"]
-    # 섹션 위에 붙은 설명은 사람이 쓴 글입니다. 지우지 않습니다.
-    assert "# 2. 크리티컬 리뷰어" in text
-    # 다음 블록의 주석도 그대로입니다.
-    assert "# 이 주석은 아래 예시 블록을 설명합니다." in text
+    # 위에 붙은 설명은 사람이 쓴 글입니다. 지우지 않습니다.
+    assert "2. 크리티컬 리뷰어" in text
+    # 다음 블록의 설명도 그대로입니다.
+    assert "이 설명은 아래 예시 블록을 위한 것입니다." in text
 
 
 def test_the_orchestrator_cannot_be_deleted(conf: Path):
@@ -379,7 +397,7 @@ def test_the_add_dialog_does_not_open_while_frozen(roster, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_frozen_roster_never_writes_to_conf_toml(roster, monkeypatch):
+async def test_a_frozen_roster_never_writes_to_the_conf_file(roster, monkeypatch):
     control, _ = roster
     writes: List[tuple] = []
     monkeypatch.setattr(
@@ -428,9 +446,9 @@ def test_reordering_rewrites_the_existing_value(conf: Path):
     agents = _load(conf)["agents"]
     assert agents["orchestrator"]["debate_priority"] == 10
     assert agents["critic"]["debate_priority"] == 20
-    # 한 줄만 갈아 끼웠습니다. 프롬프트와 주석은 그대로입니다.
-    assert "[검토 항목]" in agents["critic"]["system_prompt"]
-    assert "# 1. 필수 오케스트레이터" in conf.read_text(encoding="utf-8")
+    # 한 값만 갈아 끼웠습니다. 프롬프트와 설명은 그대로입니다.
+    assert agents["critic"]["system_prompt"][0] == "[검토 항목]"
+    assert "1. 필수 오케스트레이터" in conf.read_text(encoding="utf-8")
 
 
 def test_reordering_an_unknown_agent_is_an_error(conf: Path):

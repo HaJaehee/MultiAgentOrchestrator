@@ -13,11 +13,11 @@ wiki/
 │   ├── overview.md                        # High-level architecture, technology stack & data flow
 │   └── database-schema.md                 # SQLite + SQLAlchemy async ORM data models & relationships
 ├── configuration/
-│   ├── conf-toml-reference.md             # Complete conf.toml configuration guide & schema
+│   ├── conf-json-reference.md             # Complete conf.json configuration guide & schema
 │   └── environment-variables.md           # Dynamic env var substitution, defaults & nested evaluation
 ├── agents/
 │   ├── agent-pool-and-roles.md            # AgentPool registry, built-in roles, styling & debate placement
-│   ├── roster-editing.md                  # Editing conf.toml from the UI: add, order, stance, disable, delete
+│   ├── roster-editing.md                  # Editing conf.json from the UI: add, order, stance, disable, delete
 │   ├── session-personas.md                # Persona lifecycle, freeze/lock & the self-contained session snapshot
 │   └── llm-integration.md                 # LiteLLM multi-provider abstraction, tool loops & failure handling
 ├── mcp/
@@ -43,7 +43,7 @@ wiki/
 | Topic Area | Documentation Link | Key Subjects Covered |
 | :--- | :--- | :--- |
 | **Architecture** | [Overview](file:///d:/MultiAgentOrchestrator/wiki/architecture/overview.md)<br>[Database Schema](file:///d:/MultiAgentOrchestrator/wiki/architecture/database-schema.md) | FastAPI, NiceGUI, LiteLLM, Async SQLAlchemy, SQLite, Stdio MCP, StateGraph-inspired debate loops |
-| **Configuration** | [conf.toml Reference](file:///d:/MultiAgentOrchestrator/wiki/configuration/conf-toml-reference.md)<br>[Environment Variables](file:///d:/MultiAgentOrchestrator/wiki/configuration/environment-variables.md) | TOML parsing, global `[llm]` inheritance, per-agent overrides, `${VAR:-default}` substitution |
+| **Configuration** | [conf.json Reference](file:///d:/MultiAgentOrchestrator/wiki/configuration/conf-json-reference.md)<br>[Environment Variables](file:///d:/MultiAgentOrchestrator/wiki/configuration/environment-variables.md) | JSON parsing, `//` comment keys, global `llm` inheritance, per-agent overrides, `${VAR:-default}` substitution |
 | **Agents & Personas** | [Agent Pool & Roles](file:///d:/MultiAgentOrchestrator/wiki/agents/agent-pool-and-roles.md)<br>[Roster Editing](file:///d:/MultiAgentOrchestrator/wiki/agents/roster-editing.md)<br>[Session Personas](file:///d:/MultiAgentOrchestrator/wiki/agents/session-personas.md)<br>[LLM Integration](file:///d:/MultiAgentOrchestrator/wiki/agents/llm-integration.md) | Master Orchestrator, System Architect, Senior Coder, Security Critic, adding/removing agents from the UI, `debate_priority` / `debate_stance`, session freeze and config snapshot |
 | **MCP Tool Protocol** | [Overview & Protocol](file:///d:/MultiAgentOrchestrator/wiki/mcp/overview-and-protocol.md)<br>[Bundled Servers](file:///d:/MultiAgentOrchestrator/wiki/mcp/bundled-servers.md)<br>[Resilience & Errors](file:///d:/MultiAgentOrchestrator/wiki/mcp/error-handling-resilience.md) | Stdio client lifecycle, long-lived server processes, tool dispatch, `isError: true` feedback, stderr tee |
 | **Orchestration** | [Engine Lifecycle](file:///d:/MultiAgentOrchestrator/wiki/orchestration/engine-lifecycle.md)<br>[Debate Strategies](file:///d:/MultiAgentOrchestrator/wiki/orchestration/debate-strategies.md)<br>[Artifact Synthesis](file:///d:/MultiAgentOrchestrator/wiki/orchestration/artifact-generation.md) | Round-based debate, speaker order from agent fields, orchestrator-led turn assignment, consensus criteria, multi-artifact parsing (Code, Markdown, Mermaid) |
@@ -85,7 +85,7 @@ graph TD
 ```
 
 ### Core Value Propositions
-1. **Dynamic Configuration-Driven Profiling**: All agents, endpoints, credentials, models, MCP bindings, and debate placement are defined in [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml) without touching source code — and can be edited from the roster panel without restarting the app.
-2. **Self-Contained Sessions**: Personas and prompts can be customized per debate session. At the first user message the full `AgentConfig` of every agent — persona, model, endpoint, credentials, tool permissions, debate placement — is snapshot into the database and locked. Afterwards the conversation no longer reads `conf.toml`: agents can be deleted or re-pointed globally and that conversation keeps running exactly as it started.
+1. **Dynamic Configuration-Driven Profiling**: All agents, endpoints, credentials, models, MCP bindings, and debate placement are defined in [conf.json](file:///d:/MultiAgentOrchestrator/conf.json) without touching source code — and can be edited from the roster panel without restarting the app.
+2. **Self-Contained Sessions**: Personas and prompts can be customized per debate session. At the first user message the full `AgentConfig` of every agent — persona, model, endpoint, credentials, tool permissions, debate placement — is snapshot into the database and locked. Afterwards the conversation no longer reads `conf.json`: agents can be deleted or re-pointed globally and that conversation keeps running exactly as it started.
 3. **Robust Tool Calling via MCP**: Agents can inspect real files, maintain persistent knowledge graphs across token truncations, commit diffs to a Git repository, and execute Python code in an isolated IPython kernel sandbox.
 4. **Air-Gap First Design**: The platform bundles offline runtimes (Node.js, CPython), reference MCP servers, and pinned wheels for zero-internet intranet deployment.

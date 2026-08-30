@@ -14,7 +14,7 @@ Traditional LLM tool integrations hardcode proprietary Python functions inside t
 
 1. **Language-Agnostic Isolation**: Tools run as separate subprocesses (Node.js or Python) with dedicated memory spaces, ensuring that unstable tools or heavy dependencies (such as Jupyter kernels) cannot crash the main application.
 2. **Standardized Tool Schemas**: MCP servers describe their own tools, parameter types, and descriptions dynamically via JSON-RPC.
-3. **Plug-and-Play Extensibility**: New tools can be connected simply by adding their startup command to [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml).
+3. **Plug-and-Play Extensibility**: New tools can be connected simply by adding their startup command to [conf.json](file:///d:/MultiAgentOrchestrator/conf.json).
 
 ---
 

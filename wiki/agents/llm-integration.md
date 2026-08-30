@@ -66,7 +66,7 @@ sequenceDiagram
 
 ## 3. Sequential Thinking (Step-by-Step Reasoning)
 
-Sequential Thinking enforces deliberate reasoning before answering. Configured in `[llm.sequential_thinking]` or `[agents.<key>.sequential_thinking]`, it supports three operational modes:
+Sequential Thinking enforces deliberate reasoning before answering. Configured in ``llm.sequential_thinking`` or `agents.<key>.sequential_thinking`, it supports three operational modes:
 
 | Mode | Mechanism | Target Models |
 | :--- | :--- | :--- |
@@ -104,7 +104,7 @@ arrived before the connection dropped is kept above the failure notice.
 
 ### 5.1. Trim to the context window (`fit_context_window`)
 
-A debate transcript grows every round, and `max_context_window` was declared in `conf.toml`
+A debate transcript grows every round, and `max_context_window` was declared in `conf.json`
 and read nowhere. Past a few rounds the request exceeded the model's window and the endpoint
 answered **400** (`maximum context length ... however you requested ...`).
 

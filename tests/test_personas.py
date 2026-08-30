@@ -53,7 +53,7 @@ async def _new_session(factory, **kwargs) -> str:
 
 @pytest.mark.asyncio
 async def test_defaults_come_from_config(db_factory):
-    """저장분이 없으면 conf.toml 값이 그대로 쓰인다."""
+    """저장분이 없으면 conf.json 값이 그대로 쓰인다."""
     sid = await _new_session(db_factory)
     async with db_factory() as db:
         personas = await effective_personas(db, sid, _pool())
@@ -127,14 +127,14 @@ async def test_locked_session_rejects_edits(db_factory):
 
 @pytest.mark.asyncio
 async def test_resumed_session_keeps_frozen_personas(db_factory):
-    """세션을 다시 열면 conf.toml 이 바뀌었어도 잠글 때의 페르소나를 쓴다."""
+    """세션을 다시 열면 conf.json 이 바뀌었어도 잠글 때의 페르소나를 쓴다."""
     sid = await _new_session(db_factory)
     async with db_factory() as db:
         session_model = await db.get(SessionModel, sid)
         await save_persona(db, session_model, "critic", "보안 감사관", "Auditor", "엄격하게.")
         await freeze_personas(db, session_model, _pool())
 
-    # 그 사이 conf.toml 이 바뀐 상황을 흉내낸다
+    # 그 사이 conf.json 이 바뀐 상황을 흉내낸다
     changed_pool = AgentPool({
         "orchestrator": AgentConfig(
             name="완전히 다른 오케스트레이터", role="Other", model="openai/gpt-4o",

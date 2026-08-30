@@ -29,7 +29,7 @@ from tests.fake_llm import ARCHITECT_REPLY, FakeLLMCaller
 
 
 def _fixed_pool() -> AgentPool:
-    """conf.toml 이나 다른 테스트가 건드린 전역 풀에 흔들리지 않는 고정 풀."""
+    """conf.json 이나 다른 테스트가 건드린 전역 풀에 흔들리지 않는 고정 풀."""
     return AgentPool({
         key: AgentConfig(name=name, role=role, model="fake/model", api_key="test-key")
         for key, name, role in (
@@ -374,20 +374,19 @@ async def test_synthesis_prompt_is_bounded_by_context_window():
 # --------------------------------------------------------------- 6. 도구 루프 한도
 
 def test_tool_iteration_default_is_consistent_everywhere():
-    """코드 기본값·conf.toml·문서가 어긋나면 설정이 안 먹는 것처럼 보입니다."""
-    import re
+    """코드 기본값·conf.json·문서가 어긋나면 설정이 안 먹는 것처럼 보입니다."""
     import pathlib
-    from app.config import AgentConfig
+    from app.config import AgentConfig, read_conf_file, strip_comment_keys
 
     assert Agent(key="k", name="n", role="r").max_tool_iterations == 30
     assert AgentConfig(name="n", role="r").max_tool_iterations == 30
 
-    for name in ("conf.toml", "conf.example.toml"):
+    for name in ("conf.json", "conf.example.json"):
         path = pathlib.Path(name)
         if not path.exists():
             continue
-        found = re.search(r"^max_tool_iterations\s*=\s*(\d+)", path.read_text(encoding="utf-8"), re.M)
-        assert found and int(found.group(1)) == 30, f"{name} 의 값이 코드 기본값과 다릅니다"
+        llm = strip_comment_keys(read_conf_file(path)).get("llm", {})
+        assert llm.get("max_tool_iterations") == 30, f"{name} 의 값이 코드 기본값과 다릅니다"
 
 
 @pytest.mark.asyncio

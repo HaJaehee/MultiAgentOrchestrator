@@ -31,7 +31,7 @@ ORCHESTRATOR_KEY = "orchestrator"
 
 
 def order_by_priority(agents: List[Agent]) -> List[Agent]:
-    """`debate_priority` 오름차순. 같은 값이면 원래 순서(= conf.toml 순서)를 지킵니다.
+    """`debate_priority` 오름차순. 같은 값이면 원래 순서(= conf.json 순서)를 지킵니다.
 
     파이썬 `sorted` 는 안정 정렬이라, 아무도 순서를 지정하지 않은 설정에서는
     (전원이 기본값이므로) 파일에 적힌 순서가 그대로 나옵니다.

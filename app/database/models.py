@@ -25,13 +25,13 @@ class SessionModel(Base):
     #
     # `active_agents` 는 켜 둔 것만 담는 허용 목록이라, 목록에 없는 키가 "사용자가
     # 끈 에이전트" 인지 "그때는 없던 에이전트" 인지 구분할 수 없습니다. 그래서
-    # conf.toml 에 에이전트를 새로 추가하면 기존 대화에서 전부 꺼진 것으로 보였습니다.
+    # conf.json 에 에이전트를 새로 추가하면 기존 대화에서 전부 꺼진 것으로 보였습니다.
     # 그때 무엇이 있었는지를 함께 적어 두면 둘을 가릴 수 있습니다.
     known_agents: Mapped[List[str]] = mapped_column(JSON, default=list)
     custom_instructions: Mapped[str] = mapped_column(Text, default="")
     # 첫 유저 메시지가 기록되는 순간 True 가 되며, 이후 페르소나 수정이 금지됩니다.
     personas_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    # 이 대화가 쓸 작업 공간. 비어 있으면 conf.toml 의 WORKSPACE_DIR 기본값을 씁니다.
+    # 이 대화가 쓸 작업 공간. 비어 있으면 conf.json 의 WORKSPACE_DIR 기본값을 씁니다.
     # 페르소나와 달리 잠기지 않습니다 — 토론 도중에도 바꿀 수 있어야 합니다.
     workspace_dir: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -105,12 +105,12 @@ class SessionAgentModel(Base):
     """세션별 에이전트 페르소나 / 시스템 프롬프트 / 운영 설정 스냅샷.
 
     첫 유저 메시지 전에는 유저가 편집한 값을 담는 초안이고, 첫 메시지가 기록되는
-    순간 그 시점의 유효값(초안이 없으면 conf.toml 기본값)이 모든 에이전트에 대해
+    순간 그 시점의 유효값(초안이 없으면 conf.json 기본값)이 모든 에이전트에 대해
     기록되고 세션이 잠깁니다. 이후 세션을 다시 열면 여기 저장된 값이 사용됩니다.
 
     `config_snapshot` 은 그 시점의 `AgentConfig` 전체입니다 — 모델·엔드포인트·키·
     샘플링 값·도구 권한까지. 이것이 있어야 **시작한 대화가 자기완결적**입니다.
-    conf.toml 에서 그 에이전트를 지우거나 모델을 바꿔도 이 대화는 잠글 때의
+    conf.json 에서 그 에이전트를 지우거나 모델을 바꿔도 이 대화는 잠글 때의
     구성 그대로 이어집니다.
     """
 
@@ -124,7 +124,7 @@ class SessionAgentModel(Base):
     role: Mapped[str] = mapped_column(String(150), default="")
     system_prompt: Mapped[str] = mapped_column(Text, default="")
     # 잠글 때 굳힌 `AgentConfig` 전체. None 이면 이 컬럼이 생기기 전에 잠긴 대화라
-    # 살아 있는 conf.toml 을 그대로 씁니다 (지금까지 그래 왔던 대로).
+    # 살아 있는 conf.json 을 그대로 씁니다 (지금까지 그래 왔던 대로).
     config_snapshot: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)

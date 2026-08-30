@@ -1,6 +1,6 @@
 # Session Personas & Immutability Lifecycle
 
-In the MADO: Multi-Agent Debate & Orchestration Platform, `conf.toml` defines system-wide default agent configurations. However, different collaboration scenarios (e.g. cloud migration vs. embedded systems) require tailored system prompts and agent titles.
+In the MADO: Multi-Agent Debate & Orchestration Platform, `conf.json` defines system-wide default agent configurations. However, different collaboration scenarios (e.g. cloud migration vs. embedded systems) require tailored system prompts and agent titles.
 
 The session persona management system, implemented in [app/agents/personas.py](file:///d:/MultiAgentOrchestrator/app/agents/personas.py), provides session-specific persona overrides while guaranteeing **persona immutability** once a debate begins.
 
@@ -11,7 +11,7 @@ The session persona management system, implemented in [app/agents/personas.py](f
 If an agent's persona, role, or instructions change mid-conversation:
 - Later arguments directly contradict earlier statements made by the same speaker.
 - The Master Orchestrator cannot reliably trace consensus or accountability.
-- Re-opening old sessions fails if the global `conf.toml` has since been updated.
+- Re-opening old sessions fails if the global `conf.json` has since been updated.
 
 Therefore, the platform enforces a strict **three-phase lifecycle**:
 
@@ -44,20 +44,20 @@ stateDiagram-v2
 - When a new session is created, `session.personas_locked` is `False`.
 - The user can open the persona editor at `/personas/{session_id}` (accessed via the **"Persona Settings"** button in the agent roster panel).
 - **Editable Fields**: `name`, `role`, and `system_prompt`.
-- Operational settings (`model`, `api_base`, `allowed_mcp_servers`, credentials) are not editable here — they are governed by `conf.toml` while the session is open, and frozen into the session at the first message (see §6).
+- Operational settings (`model`, `api_base`, `allowed_mcp_servers`, credentials) are not editable here — they are governed by `conf.json` while the session is open, and frozen into the session at the first message (see §6).
 - Draft changes are saved to the [`session_agents`](file:///d:/MultiAgentOrchestrator/app/database/models.py#L94-L115) table in SQLite.
-- Agents that have not been edited continue to reflect their `conf.toml` defaults.
+- Agents that have not been edited continue to reflect their `conf.json` defaults.
 
 ### Phase 2: Freeze & Lock (First User Message)
 - When the user sends their first message, [prepare_agents_for_turn()](file:///d:/MultiAgentOrchestrator/app/agents/personas.py#L217-L229) triggers [`freeze_personas()`](file:///d:/MultiAgentOrchestrator/app/agents/personas.py#L163-L195).
-- The system resolves the effective persona for **every** agent in the pool. For any agent lacking an explicit draft in `session_agents`, a snapshot of its current `conf.toml` configuration is written to the database.
+- The system resolves the effective persona for **every** agent in the pool. For any agent lacking an explicit draft in `session_agents`, a snapshot of its current `conf.json` configuration is written to the database.
 - `session.personas_locked` is set to `True`.
 - Any subsequent attempt to call `save_persona()` or `reset_persona()` raises [`PersonasLockedError`](file:///d:/MultiAgentOrchestrator/app/agents/personas.py#L36-L44).
 - The UI transitions the editor into a locked read-only state.
 
 ### Phase 3: Session Resumption (Historical Fidelity)
 - When a user resumes an existing session days or weeks later, [`effective_personas()`](file:///d:/MultiAgentOrchestrator/app/agents/personas.py#L95-L110) loads the frozen snapshot from SQLite.
-- Even if `conf.toml` has been modified or updated in the interim, the session continues executing with the exact personas that created the historical debate transcript.
+- Even if `conf.json` has been modified or updated in the interim, the session continues executing with the exact personas that created the historical debate transcript.
 
 ---
 
@@ -70,7 +70,7 @@ Freezing the persona alone was not enough. The three editable fields were snapsh
 return apply_personas(pool.get_active(active_keys), personas)   # old
 ```
 
-`AgentPool.get_active()` silently skips keys it does not have. So deleting an agent from `conf.toml`
+`AgentPool.get_active()` silently skips keys it does not have. So deleting an agent from `conf.json`
 made it disappear from conversations that had already used it — the stored persona row could not
 bring it back, because the snapshot held no model, endpoint, or credentials to rebuild it with.
 
@@ -78,9 +78,9 @@ bring it back, because the snapshot held no model, endpoint, or credentials to r
 
 `session_agents.config_snapshot` (JSON, nullable) now holds the **entire `AgentConfig`** at lock
 time: model, endpoint, API key, sampling values, tool permissions, sequential-thinking settings, and
-the persona merged in. From that moment the conversation does not consult `conf.toml` at all.
+the persona merged in. From that moment the conversation does not consult `conf.json` at all.
 
-| Change to `conf.toml` | Started conversation | Not-yet-started conversation |
+| Change to `conf.json` | Started conversation | Not-yet-started conversation |
 | :--- | :--- | :--- |
 | Add an agent | unaffected — shown unchecked, joins only if the user checks it | enabled by default |
 | Delete or disable an agent | **unaffected** — it keeps speaking with its frozen configuration | drops out of the pool |
@@ -102,15 +102,15 @@ live pool instead, a deleted agent would speak with no card to explain it.
 `session_agents` rows are written in a single commit, so their `created_at` values tie and sorting by
 `(created_at, id)` falls through to a random UUID — card order changed on every read.
 [`frozen_agents()`](file:///d:/MultiAgentOrchestrator/app/agents/personas.py) sorts deterministically
-instead: orchestrator first, then `conf.toml` order, then conversation-only agents.
+instead: orchestrator first, then `conf.json` order, then conversation-only agents.
 
 ### 6.3. Re-syncing (the escape hatch)
 
 Making the snapshot authoritative has a cost: rotate an API key or move the gateway, and old
 conversations keep hammering a dead endpoint. The **설정 갱신** button, shown on locked sessions,
 calls [`resync_agent_configs()`](file:///d:/MultiAgentOrchestrator/app/agents/personas.py), which
-rewrites the snapshots from the current `conf.toml` **without touching the personas** — the speakers
-in the transcript stay who they were. Agents no longer present in `conf.toml` are left alone.
+rewrites the snapshots from the current `conf.json` **without touching the personas** — the speakers
+in the transcript stay who they were. Agents no longer present in `conf.json` are left alone.
 
 ### 6.4. Credentials in the database
 
@@ -119,7 +119,7 @@ deploying. `GET /api/sessions/{session_id}/personas` returns only `AgentPersona`
 prompt) and never exposes the snapshot; a test asserts it.
 
 `config_snapshot` is `NULL` for conversations locked before the column existed. Those keep following
-the live `conf.toml`, exactly as they always did, and
+the live `conf.json`, exactly as they always did, and
 [`_add_missing_columns()`](file:///d:/MultiAgentOrchestrator/app/database/session.py) adds the column
 to existing databases at startup.
 
@@ -141,7 +141,7 @@ def _differs(a: AgentPersona, b: AgentPersona) -> bool:
     return any(getattr(a, f) != getattr(b, f) for f in EDITABLE_FIELDS)
 ```
 
-If `name`, `role`, or `system_prompt` differs from the `conf.toml` baseline, `is_customized` is set to `True`.
+If `name`, `role`, or `system_prompt` differs from the `conf.json` baseline, `is_customized` is set to `True`.
 
 ---
 
@@ -177,13 +177,13 @@ Clients can query session persona statuses programmatically:
 
 ---
 
-## 5. Global Persona Configuration Sync (`conf.toml` Persistence)
+## 5. Global Persona Configuration Sync (`conf.json` Persistence)
 
-Starting from the latest enhancement, editing an agent's persona on the Web UI (`/personas/{session_id}`) not only updates the draft persona in SQLite for the session, but also persists the updated baseline directly into `conf.toml`:
+Starting from the latest enhancement, editing an agent's persona on the Web UI (`/personas/{session_id}`) not only updates the draft persona in SQLite for the session, but also persists the updated baseline directly into `conf.json`:
 
 ### Workflow
-1. **Targeted TOML Modification**:
-   [`update_agent_persona_in_conf_file()`](file:///d:/MultiAgentOrchestrator/app/config.py) parses the existing `conf.toml` file, preserving existing formatting, multiline prompts, and comments. It locates `[agents.<agent_key>]` and updates `name`, `role`, and `system_prompt`.
+1. **Targeted JSON Modification**:
+   [`update_agent_persona_in_conf_file()`](file:///d:/MultiAgentOrchestrator/app/config.py) reads the raw `conf.json` — `//` documentation keys and unresolved `${VAR}` placeholders included — locates `agents.<agent_key>`, updates `name`, `role`, and `system_prompt`, and rewrites the file atomically. A multi-line prompt is written as an array of lines so it stays readable. Everything else in the file, including the notes and every other agent, is carried through untouched.
 2. **In-Memory Pool Reloading**:
    After writing to disk, `get_config(reload=True)` re-reads the configuration, and `get_agent_pool().reload()` refreshes all in-memory `Agent` instances.
 3. **Reactive UI Synchronization**:

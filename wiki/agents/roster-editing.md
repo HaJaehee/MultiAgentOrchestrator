@@ -1,15 +1,15 @@
-# Roster Editing — Changing `conf.toml` From the UI
+# Roster Editing — Changing `conf.json` From the UI
 
-Agents used to exist only in [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml). Adding one, giving
+Agents used to exist only in [conf.json](file:///d:/MultiAgentOrchestrator/conf.json). Adding one, giving
 it a different place in the round, or removing it meant opening the file in an editor and restarting
-the app. The roster panel now performs all of it in place, writing through to `conf.toml` so the
+the app. The roster panel now performs all of it in place, writing through to `conf.json` so the
 change survives the next boot.
 
 Five operations share one surface and **one lock**:
 
 | Operation | Control | Value written |
 | :--- | :--- | :--- |
-| Add an agent | **에이전트 추가** button in the roster header | a new `[agents.<key>]` section |
+| Add an agent | **에이전트 추가** button in the roster header | a new `agents.<key>` section |
 | Speaking order | **drag a card** | `debate_priority` |
 | Debate stance | the card's **⋮ menu** | `debate_stance` |
 | Disable / delete | the card's **⋮ menu** | `enabled` / section removal |
@@ -41,25 +41,37 @@ would change the speaker list of a turn already in flight.
 
 ---
 
-## 2. Writing to `conf.toml` without destroying it
+## 2. Writing to `conf.json` without destroying it
 
-Half of `conf.toml` is prose — comments explaining what each server does and why something is
-switched off. Python's standard library has a TOML *reader* but no writer, so a read-modify-rewrite
-cycle would erase all of it. Every writer in
-[app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py) therefore edits **line ranges**:
+Half of `conf.json` is prose — notes explaining what each server does and why something is switched
+off. JSON has no comment syntax, so those notes live as **keys beginning with `//`**, which
+[`strip_comment_keys()`](file:///d:/MultiAgentOrchestrator/app/config.py) removes before validation.
+They are ordinary data, which is what makes the writers simple. Every writer in
+[app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py) is the same four steps:
 
-- [`_find_toml_section()`](file:///d:/MultiAgentOrchestrator/app/config.py) returns the line span of a
-  section, skipping multi-line strings — a `system_prompt` full of `[검토 항목]` lines must not be
-  mistaken for section headers — and excluding the trailing comments that belong to the *next*
-  section.
-- [`_set_key_in_section()`](file:///d:/MultiAgentOrchestrator/app/config.py) swaps a single
-  `key = ...` line, again skipping multi-line strings so a prompt containing `enabled = ...` is not
-  read as configuration.
-- Deleting a section leaves the explanatory comment above it. Deleting prose a human wrote cannot be
-  undone, and it is exactly what you want back when you re-add the agent.
+1. **Validate the input first.** Agent keys and server names must match `BARE_KEY_PATTERN`, stances
+   must be one of `DEBATE_STANCES`, and unknown override fields are rejected. Nothing has been
+   written yet, so a bad request cannot leave a half-edited file behind.
+2. **Read the raw file** with [`read_conf_file()`](file:///d:/MultiAgentOrchestrator/app/config.py) —
+   `//` notes included, `${VAR}` placeholders unresolved. The screen shows *resolved* values; echoing
+   those back would bake another machine's absolute paths and a plaintext API key into the file.
+3. **Edit the parsed dictionary.** Assigning to an existing key keeps its position; a new key is
+   appended inside its own object, so a new agent lands among the agents and a new server among the
+   servers, with no insertion-point arithmetic.
+4. **Rewrite it once** with [`write_conf_file()`](file:///d:/MultiAgentOrchestrator/app/config.py),
+   which writes to a temporary file and `os.replace()`s it into place. A crash mid-write cannot leave
+   a truncated config — that state stops the app from booting at all.
+
+Deleting an agent or server leaves the `//` note above it. Deleting prose a human wrote cannot be
+undone, and it is exactly what you want back when you re-add the agent.
 
 Adding then deleting an agent restores the file **byte for byte**; that round-trip is asserted in
 [tests/test_agent_admin.py](file:///d:/MultiAgentOrchestrator/tests/test_agent_admin.py).
+
+> This used to be considerably harder. TOML has a standard-library reader but no writer, so the
+> writers edited **line ranges** — tracking multi-line string state so a `system_prompt` containing
+> a `[검토 항목]` line was not mistaken for a section header, and excluding trailing comments that
+> belonged to the *next* section. Moving to JSON deleted that machinery outright.
 
 ---
 
@@ -68,27 +80,31 @@ Adding then deleting an agent restores the file **byte for byte**; that round-tr
 The add dialog prefills every LLM field — model, API URL, API key, provider, temperature, context
 window, response tokens, timeout, retries, tool-loop limit — from
 [`agent_defaults_from_llm()`](file:///d:/MultiAgentOrchestrator/app/config.py), which resolves the
-effective default (the `[llm]` value if set, otherwise the `AgentConfig` default).
+effective default (the `llm` value if set, otherwise the `AgentConfig` default).
 
 **Fields left untouched are not written to the file.**
 [`prune_agent_overrides()`](file:///d:/MultiAgentOrchestrator/app/config.py) drops anything equal to
 the prefilled default, and only the remainder lands in the section:
 
-```toml
-[agents.data_analyst]
-name = "Data Analyst"
-role = "Data & Metrics Analysis"
-temperature = 0.15                      # the only field the user changed
-allowed_mcp_servers = ["filesystem", "git"]
-system_prompt = "..."
+```json
+"data_analyst": {
+  "name": "Data Analyst",
+  "role": "Data & Metrics Analysis",
+  "temperature": 0.15,
+  "allowed_mcp_servers": ["filesystem", "git"],
+  "system_prompt": "..."
+}
 ```
+
+`temperature` is the only LLM field the user changed; everything else is absent and therefore
+inherited.
 
 Two reasons this matters:
 
 1. **Secrets.** What the browser displays is the *resolved* value. Echoing it back would write a
-   plaintext API key into `conf.toml` — the same file the MCP-server writers work hard to keep free
+   plaintext API key into `conf.json` — the same file the MCP-server writers work hard to keep free
    of resolved `${VAR}` values.
-2. **Inheritance.** Fields that are absent keep inheriting `[llm]`, so changing `.env` moves this
+2. **Inheritance.** Fields that are absent keep inheriting `llm`, so changing `.env` moves this
    agent along with everyone else.
 
 The same dialog sets the persona (`system_prompt`), MCP tool assignment, sequential-thinking mode,
@@ -98,12 +114,12 @@ and debate stance.
 
 ## 4. Disable versus delete
 
-Both remove the agent from the pool — `AgentPool.reload()` skips `enabled = false` — but they differ
+Both remove the agent from the pool — `AgentPool.reload()` skips `"enabled": false` — but they differ
 in what is recoverable.
 
 | | Disable | Delete |
 | :--- | :--- | :--- |
-| `conf.toml` | `enabled = false` added | section and sub-blocks removed |
+| `conf.json` | `"enabled": false` added | the whole agent object removed |
 | Recoverable from the UI | yes, via the **꺼둔 에이전트** chips | no |
 | Effect on started conversations | none | none |
 
@@ -166,7 +182,7 @@ alternates the two sides. It replaced a hardcoded `["architect", "coder"]` versu
 broke the moment agents could be created from the UI. See
 [debate-strategies.md](../orchestration/debate-strategies.md#22-adversarial-debate-adversarial_debate).
 
-The shipped `conf.toml` and `conf.example.toml` declare stances for the four built-in agents. Without
+The shipped `conf.json` and `conf.example.json` declare stances for the four built-in agents. Without
 them every agent is `neutral`, the adversarial strategy finds no opposing side, and it quietly
 degrades to a single priority-ordered pass.
 
@@ -179,14 +195,14 @@ Writing the file is not enough — the screen and the live pool would drift unti
 
 ```mermaid
 graph LR
-    W[write conf.toml] --> R[get_config reload=True]
+    W[write conf.json] --> R[get_config reload=True]
     R --> P[reload_agent_pool]
     P --> C[refresh cards + disabled chips]
     C --> S[save active_agents / known_agents to this session]
 ```
 
 MCP servers are **not** restarted — none of these five operations changes a server's command line,
-and restarting them costs seconds for nothing. A broken `conf.toml` leaves the running configuration
+and restarting them costs seconds for nothing. A broken `conf.json` leaves the running configuration
 untouched: `get_config()` swaps the global only after a successful parse.
 
-The **conf.toml 다시 읽기** button reaches the same end state for edits made in an external editor.
+The **conf.json 다시 읽기** button reaches the same end state for edits made in an external editor.

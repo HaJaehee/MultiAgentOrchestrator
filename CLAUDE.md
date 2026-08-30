@@ -1,7 +1,7 @@
 # [Project Specification] Python 기반 자율형 멀티 에이전트 협업 & 토론 플랫폼
 
 당신은 최신 AI 시스템 아키텍처 및 풀스택 파이썬 개발 전문가입니다.
-아래 명세와 아키텍처 요구사항에 따라 `conf.toml` 설정 기반의 **"MCP 도구를 활용하는 반응형 멀티 에이전트 토론 & 오케스트레이션 웹 애플리케이션"**을 구축해주세요.
+아래 명세와 아키텍처 요구사항에 따라 `conf.json` 설정 기반의 **"MCP 도구를 활용하는 반응형 멀티 에이전트 토론 & 오케스트레이션 웹 애플리케이션"**을 구축해주세요.
 
 ---
 
@@ -13,14 +13,14 @@
 - **Tool Protocol**: **Model Context Protocol (MCP)** Python SDK (백엔드가 MCP Host/Client 역할 수행)
 - **LLM Integration**: **LiteLLM** 또는 **LangChain / OpenAI SDK** 호환 인터페이스 (다양한 LLM Provider를 단일 인터페이스로 추상화)
 - **Database & Storage**: **SQLite + SQLAlchemy/SQLModel** (세션, 대화 내역, 산출물 영구 저장)
-- **Configuration**: **TOML** (`conf.toml` 파싱 및 유효성 검증 via Pydantic)
+- **Configuration**: **JSON** (`conf.json` 파싱/기록 및 유효성 검증 via Pydantic)
 
 ---
 
 ## 2. 세부 기능 요구사항
 
-### 2.1. `conf.toml` 기반 동적 에이전트 프로파일링
-- 시스템 시작 시 `conf.toml`을 읽어 에이전트 풀(Agent Pool)을 동적으로 등록합니다.
+### 2.1. `conf.json` 기반 동적 에이전트 프로파일링
+- 시스템 시작 시 `conf.json`을 읽어 에이전트 풀(Agent Pool)을 동적으로 등록합니다.
 - 각 에이전트별 필수/선택 속성:
   - `name`, `role`, `model` (e.g., `gpt-4o`, `claude-3-5-sonnet`, `gemini-1.5-pro`, `ollama/...`)
   - `api_key` / `api_base` (환경 변수 치환 지원: `${OPENAI_API_KEY}`)
@@ -60,76 +60,94 @@
 
 ---
 
-## 3. `conf.toml` 샘플 구조 명세
+## 3. `conf.json` 샘플 구조 명세
 
-```toml
-[app]
-host = "0.0.0.0"
-port = 8000
-db_url = "sqlite:///./multiagent.db"
-debug = true
+설정은 JSON 입니다. 표준 라이브러리 `json` 만으로 읽고 쓸 수 있어 화면에서 고친 값을 안전하게
+되쓸 수 있습니다. JSON 에 없는 두 가지는 다음 규칙으로 채웁니다.
 
-# MCP 서버 연동 설정
-[mcp_servers.filesystem]
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
+- **주석**: 키가 `//` 로 시작하면 설명으로 보고 읽을 때 걷어냅니다 (값은 문자열 또는 문자열 배열).
+- **여러 줄 글**: `system_prompt` 등은 문자열 배열로 적을 수 있고, 읽을 때 줄바꿈으로 이어 붙입니다.
 
-[mcp_servers.brave_search]
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-brave-search"]
-env = { BRAVE_API_KEY = "${BRAVE_API_KEY}" }
+```json
+{
+  "app": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "db_url": "sqlite+aiosqlite:///./multiagent.db",
+    "debug": true
+  },
 
-# 1. 필수 오케스트레이터 에이전트
-[agents.orchestrator]
-name = "Master Orchestrator"
-role = "Moderator & Synthesizer"
-model = "openai/gpt-4o"
-api_key = "${OPENAI_API_KEY}"
-temperature = 0.2
-max_tokens = 4096
-allowed_mcp_servers = ["filesystem", "brave_search"]
-system_prompt = """
-당신은 멀티 에이전트 토론을 이끄는 수석 오케스트레이터입니다.
-유저의 요구사항을 분해하고 적절한 전문가 에이전트에게 발언권을 부여하며,
-토론이 완료되면 결과를 통합하여 최종 아티팩트(코드, 아키텍처 등)를 작성하세요.
-"""
+  "// mcp_servers": "MCP 서버 연동 설정",
+  "mcp_servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
+    },
+    "brave_search": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": { "BRAVE_API_KEY": "${BRAVE_API_KEY}" }
+    }
+  },
 
-# 2. 소프트웨어 아키텍트 에이전트
-[agents.architect]
-name = "System Architect"
-role = "High-Level Architecture & Tech Stack"
-model = "anthropic/claude-3-5-sonnet-20241022"
-api_key = "${ANTHROPIC_API_KEY}"
-temperature = 0.5
-allowed_mcp_servers = ["brave_search"]
-system_prompt = "시스템 아키텍처 설계, 모듈 분리, 기술 스택 선정 및 Mermaid 다이어그램 작성을 전담합니다."
+  "agents": {
+    "// orchestrator": "1. 필수 오케스트레이터 에이전트",
+    "orchestrator": {
+      "name": "Master Orchestrator",
+      "role": "Moderator & Synthesizer",
+      "model": "openai/gpt-4o",
+      "api_key": "${OPENAI_API_KEY}",
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "allowed_mcp_servers": ["filesystem", "brave_search"],
+      "system_prompt": [
+        "당신은 멀티 에이전트 토론을 이끄는 수석 오케스트레이터입니다.",
+        "유저의 요구사항을 분해하고 적절한 전문가 에이전트에게 발언권을 부여하며,",
+        "토론이 완료되면 결과를 통합하여 최종 아티팩트(코드, 아키텍처 등)를 작성하세요."
+      ]
+    },
 
-# 3. 시니어 코더 에이전트
-[agents.coder]
-name = "Senior Python Engineer"
-role = "Implementation & Code Refinement"
-model = "openai/gpt-4o"
-api_key = "${OPENAI_API_KEY}"
-temperature = 0.1
-allowed_mcp_servers = ["filesystem"]
-system_prompt = "구체적인 소스코드 작성, 클린 코드 원칙 준수, 스켈레톤 프로젝트 생성을 전담합니다."
+    "// architect": "2. 소프트웨어 아키텍트 에이전트",
+    "architect": {
+      "name": "System Architect",
+      "role": "High-Level Architecture & Tech Stack",
+      "model": "anthropic/claude-3-5-sonnet-20241022",
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "temperature": 0.5,
+      "allowed_mcp_servers": ["brave_search"],
+      "system_prompt": "시스템 아키텍처 설계, 모듈 분리, 기술 스택 선정 및 Mermaid 다이어그램 작성을 전담합니다."
+    },
 
-# 4. 크리티컬 리뷰어 에이전트
-[agents.critic]
-name = "Security & Quality Critic"
-role = "Code Review & Edge Case Analysis"
-model = "google/gemini-1.5-pro"
-api_key = "${GEMINI_API_KEY}"
-temperature = 0.3
-allowed_mcp_servers = []
-system_prompt = "작성된 설계와 코드의 보안 취약점, 성능 병목, 엣지 케이스를 비판적으로 검토합니다."
+    "// coder": "3. 시니어 코더 에이전트",
+    "coder": {
+      "name": "Senior Python Engineer",
+      "role": "Implementation & Code Refinement",
+      "model": "openai/gpt-4o",
+      "api_key": "${OPENAI_API_KEY}",
+      "temperature": 0.1,
+      "allowed_mcp_servers": ["filesystem"],
+      "system_prompt": "구체적인 소스코드 작성, 클린 코드 원칙 준수, 스켈레톤 프로젝트 생성을 전담합니다."
+    },
 
+    "// critic": "4. 크리티컬 리뷰어 에이전트",
+    "critic": {
+      "name": "Security & Quality Critic",
+      "role": "Code Review & Edge Case Analysis",
+      "model": "google/gemini-1.5-pro",
+      "api_key": "${GEMINI_API_KEY}",
+      "temperature": 0.3,
+      "allowed_mcp_servers": [],
+      "system_prompt": "작성된 설계와 코드의 보안 취약점, 성능 병목, 엣지 케이스를 비판적으로 검토합니다."
+    }
+  }
+}
+```
 
 ---
 
 4. 구현 우선순위 및 단계별 작업 지시
 Phase 1: Config & Model Layer
-Pydantic 모델을 통한 conf.toml 파서 구현 (환경변수 동적 해석 포함).
+Pydantic 모델을 통한 conf.json 파서/기록기 구현 (환경변수 동적 해석 포함).
 SQLite DB 스키마 구축 (Session, Message, AgentState, Artifact).
 Phase 2: MCP Host & Agent Execution Engine
 비동기 MCP Client Manager 구현 (Tool Discovery 및 Call 추상화).

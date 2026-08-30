@@ -74,6 +74,6 @@ The system exposes connection states via [`MCPManager.connection_status()`](file
 | 🟢 `filesystem 툴 14` | Green Chip | Connected and healthy; shows registered tool count. |
 | 🟠 `연결 끊김` | Orange Chip | Subprocess terminated; will auto-reconnect on next call. |
 | 🔴 `연결 실패` | Red Chip | Process startup failed; hover displays stderr diagnostic trace. |
-| ⚪ `비활성` | Grey Chip | Server explicitly disabled (`enabled = false` in `conf.toml`). |
+| ⚪ `비활성` | Grey Chip | Server explicitly disabled (`"enabled": false` in `conf.json`). |
 
 A **"Refresh"** button in the UI header invokes `mcp_manager.reconnect_disconnected()`, re-attempting initialization solely for failed servers without interrupting healthy ones.

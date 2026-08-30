@@ -2,8 +2,12 @@
 .env
 .env.*
 !.env.example
-# 로컬 설정 파일 (공유용 템플릿은 conf.example.toml)
+# 로컬 설정 파일 (공유용 템플릿은 conf.example.json)
+conf.json
+conf.json.tmp
+# 예전 TOML 설정을 옮기고 남은 백업
 conf.toml
+conf.toml.bak
 
 # --- Build & packaging output ---
 dist/

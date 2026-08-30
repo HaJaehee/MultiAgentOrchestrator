@@ -48,7 +48,7 @@ The web application workspace is organized into four primary UI components in [a
 - **Agent Toggle Cards**: Allows users to include or exclude specific specialists (e.g. toggling the Critic off for faster brainstorming). The Master Orchestrator is fixed and always enabled.
 - **Card anatomy**: drag handle · avatar · name with `수정됨` / stance / `이 대화 전용` badges · role ·
   participation checkbox · ⋮ menu (stance, disable, delete) · model line · tool button. The checkbox
-  scopes to *this conversation*; everything in the ⋮ menu writes to `conf.toml`. They are deliberately
+  scopes to *this conversation*; everything in the ⋮ menu writes to `conf.json`. They are deliberately
   one layer apart — side by side they are indistinguishable and the mistake is expensive.
 - **Reordering**: cards are dragged to set `debate_priority`; the lifted card fades and the drop edge
   is marked. See [roster-editing.md](../agents/roster-editing.md#5-speaking-order-by-drag).
@@ -58,14 +58,14 @@ The web application workspace is organized into four primary UI components in [a
 - **Dynamic Live Refresh**: Rendered inside a reactive container (`cards_row`). When personas are updated via the persona editor or config reloads, `refresh_agent_cards()` rebuilds the cards in place, so labels, roles, order, and badges update without a page reload.
 - **Configuration Tooltips**: Hovering over an agent card reveals its configured model, endpoint URL, and sequential thinking mode.
 - **Strategy Dropdown**: Selects between `sequential_debate`, `adversarial_debate`, and `orchestrator_led`.
-- **Agent Cards**: Drag to reorder (writes `debate_priority` to `conf.toml`); the ⋮ menu sets `debate_stance` and can disable or delete the agent.
+- **Agent Cards**: Drag to reorder (writes `debate_priority` to `conf.json`); the ⋮ menu sets `debate_stance` and can disable or delete the agent.
 - **Max Rounds Slider**: Sets the maximum debate depth ($1$ to $10$ rounds).
 - **Custom Instructions Box**: Allows injecting ad-hoc guidelines into all agent prompts for the current session.
 - **Persona Settings Button**: Links directly to `/personas/{session_id}`. Displays a lock icon if debate has commenced.
 - **MCP Server Chips**: Displays real-time connection states (Green/Orange/Red) and opens diagnostic tooltips on hover.
 - **Workspace Field**: The folder every workspace-bound MCP server (`filesystem`, `git`, `memory`,
   `sandbox`) shares, for *this conversation*. Applying it restarts those servers, since each one
-  receives its root at spawn time. The value is stored on the session row — `conf.toml` is never
+  receives its root at spawn time. The value is stored on the session row — `conf.json` is never
   written. Blocked while a debate is running, here or in another conversation.
 
 ### 1.3. Chat & Debate Feed ([app/ui/components/chat_feed.py](file:///d:/MultiAgentOrchestrator/app/ui/components/chat_feed.py))
@@ -110,7 +110,7 @@ The web application workspace is organized into four primary UI components in [a
   - **Display Name**
   - **Role Title**
   - **System Instructions**
-- **Draft & Reset Controls**: Allows saving drafts to `session_agents` or resetting to `conf.toml` defaults.
+- **Draft & Reset Controls**: Allows saving drafts to `session_agents` or resetting to `conf.json` defaults.
 - **Lock Banner**: If the session has already begun (`personas_locked = true`), inputs are disabled, displaying a read-only warning badge.
 - **In-Progress Banner**: If a debate is running for this session, a banner says so and states that
   opening this page does not interrupt it. Navigating here used to kill the running turn.

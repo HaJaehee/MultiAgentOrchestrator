@@ -9,7 +9,7 @@ This document describes the high-level architecture, technology stack, component
 The MADO: Multi-Agent Debate & Orchestration Platform is designed around five foundational principles:
 
 1. **Python-Native Full-Stack Unification**: The application combines backend logic ([FastAPI](file:///d:/MultiAgentOrchestrator/app/main.py)) and frontend reactive rendering ([NiceGUI](file:///d:/MultiAgentOrchestrator/app/ui/app.py)) in a single Python runtime. This eliminates separate Node.js frontend build steps, transpilation, or split deployments.
-2. **Dynamic Declarative Configuration**: Everything from model endpoints and API keys to individual agent personas and MCP tool access permissions is governed by [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml). The application never requires code changes to switch models, tune temperatures, or register new agent roles.
+2. **Dynamic Declarative Configuration**: Everything from model endpoints and API keys to individual agent personas and MCP tool access permissions is governed by [conf.json](file:///d:/MultiAgentOrchestrator/conf.json). The application never requires code changes to switch models, tune temperatures, or register new agent roles.
 3. **Decoupled Tool Protocol (MCP)**: Instead of proprietary tool implementations, the system integrates the open **Model Context Protocol (MCP)**. Tool execution runs in isolated background processes (Node.js or Python) communicating via standard JSON-RPC over `stdio`.
 4. **Resilient Multi-Provider LLM Abstraction**: Powered by [LiteLLM](file:///d:/MultiAgentOrchestrator/app/agents/llm.py), agents can utilize OpenAI, Anthropic, Google Gemini, Azure OpenAI, Ollama, LM Studio, or vLLM endpoints interchangeably. In development or offline environments lacking credentials, an embedded intelligent simulator seamlessly takes over.
 5. **Stateful Conversation & Persona Immutability**: While agent configurations are globally defined, each session allows independent persona customization. Once debate commences, personas are locked into the database ([SessionAgentModel](file:///d:/MultiAgentOrchestrator/app/database/models.py#L94-L115)) to guarantee consistent reasoning across multiple rounds and later sessions.
@@ -20,13 +20,13 @@ The MADO: Multi-Agent Debate & Orchestration Platform is designed around five fo
 
 | Layer | Component | Description & Rationale |
 | :--- | :--- | :--- |
-| **Runtime** | Python 3.11+ | Modern async/await, task groups, strong typing, and standard `tomllib`. |
+| **Runtime** | Python 3.11+ | Modern async/await, task groups, and strong typing. |
 | **Server & API** | FastAPI + Uvicorn | High-performance asynchronous ASGI web server handling REST endpoints and application lifespan. |
 | **Reactive Web UI** | NiceGUI (Vue / Quasar) | Python-based reactive UI engine using WebSocket connections for live message streaming and UI bindings. |
 | **LLM Provider Gateway** | LiteLLM | Unified abstraction over 100+ LLM providers, parameter normalization, and function-calling schemas. |
 | **Tool Protocol** | MCP Python SDK (`mcp`) | Host/client implementation managing `stdio` JSON-RPC communication with local and external MCP servers. |
 | **Database & ORM** | SQLAlchemy (Async) + aiosqlite | Asynchronous SQLite ORM for persisting sessions, messages, tool traces, artifacts, and persona snapshots. |
-| **Configuration** | Pydantic v2 + `tomllib` | Strictly validated data classes with dynamic environment variable resolution (`${VAR:-default}`). |
+| **Configuration** | Pydantic v2 + stdlib `json` | Strictly validated data classes with dynamic environment variable resolution (`${VAR:-default}`). A JSON config needs no third-party reader *or* writer, so the UI can safely write settings back. |
 
 ---
 
@@ -99,9 +99,9 @@ flowchart TD
 - On shutdown, gracefully closes all running MCP subprocesses and releases resources.
 
 ### 4.2. Configuration Subsystem ([app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py))
-- Parses [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml) using Python 3.11's `tomllib`.
+- Parses [conf.json](file:///d:/MultiAgentOrchestrator/conf.json) with the standard-library `json` module, stripping `//` documentation keys.
 - Replaces environment variable patterns recursively: `${VAR}`, `${VAR:-default}`, and nested `${VAR:-${FALLBACK:-default}}`.
-- Binds global `[llm]` configurations onto individual agent configurations unless explicitly overridden.
+- Binds global `llm` configurations onto individual agent configurations unless explicitly overridden.
 - Validates configs using Pydantic models: `AppConfig`, `LLMConfig`, `MCPServerConfig`, `AgentConfig`, and `SequentialThinkingConfig`.
 
 ### 4.3. Persistence Subsystem ([app/database/](file:///d:/MultiAgentOrchestrator/app/database/))

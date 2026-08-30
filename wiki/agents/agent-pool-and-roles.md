@@ -6,7 +6,7 @@ The MADO: Multi-Agent Debate & Orchestration Platform coordinates multiple speci
 
 ## 1. Agent Architecture & UI Styling
 
-Each agent is represented by the [`Agent`](file:///d:/MultiAgentOrchestrator/app/agents/base.py#L17-L64) Pydantic model. When loaded from [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml), UI styling attributes (avatar icon, Quasar color, and hex badge color) are assigned automatically:
+Each agent is represented by the [`Agent`](file:///d:/MultiAgentOrchestrator/app/agents/base.py#L17-L64) Pydantic model. When loaded from [conf.json](file:///d:/MultiAgentOrchestrator/conf.json), UI styling attributes (avatar icon, Quasar color, and hex badge color) are assigned automatically:
 
 ```python
 AGENT_STYLE_MAP = {
@@ -34,7 +34,7 @@ tests.
 
 | Field | Default | Meaning |
 | :--- | :--- | :--- |
-| `debate_priority` | `100` | Speaking order within a round; lower speaks first. Equal values keep `conf.toml` order, so an unconfigured file speaks in file order. |
+| `debate_priority` | `100` | Speaking order within a round; lower speaks first. Equal values keep `conf.json` order, so an unconfigured file speaks in file order. |
 | `debate_stance` | `"neutral"` | `proponent` / `critic` / `neutral`; read only by the adversarial strategy. |
 
 Both are edited from the roster (drag to reorder, ⋮ menu for stance — see
@@ -112,28 +112,32 @@ class AgentPool:
 ```
 
 ### Invariants:
-1. **Guaranteed Orchestrator**: Calling `pool.get_orchestrator()` raises `RuntimeError` if the orchestrator is missing from `conf.toml`.
+1. **Guaranteed Orchestrator**: Calling `pool.get_orchestrator()` raises `RuntimeError` if the orchestrator is missing from `conf.json`.
 2. **Orchestrator Prioritization**: `get_active(keys)` guarantees that the Master Orchestrator is always present and placed at the head of the active roster (`keys = ["orchestrator"] + ...`).
 
 ---
 
 ## 4. Extending with Custom Specialist Agents
 
-To add a new specialist (e.g. a Data Scientist or DevOps Engineer), append a new block to [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml):
+To add a new specialist (e.g. a Data Scientist or DevOps Engineer), add an entry to the `agents`
+object in [conf.json](file:///d:/MultiAgentOrchestrator/conf.json):
 
-```toml
-[agents.data_scientist]
-name = "Lead Data Scientist"
-role = "Data Pipeline & ML Architecture"
-model = "openai/gpt-4o"
-temperature = 0.2
-allowed_mcp_servers = ["filesystem", "sandbox"]
-system_prompt = """You specialize in data engineering, ETL pipelines, and machine learning models.
-Ensure efficient DataFrame operations and validate data validation schemas."""
-
-[agents.data_scientist.sequential_thinking]
-enabled = true
-max_steps = 6
+```json
+"data_scientist": {
+  "name": "Lead Data Scientist",
+  "role": "Data Pipeline & ML Architecture",
+  "model": "openai/gpt-4o",
+  "temperature": 0.2,
+  "allowed_mcp_servers": ["filesystem", "sandbox"],
+  "system_prompt": [
+    "You specialize in data engineering, ETL pipelines, and machine learning models.",
+    "Ensure efficient DataFrame operations and validate data validation schemas."
+  ],
+  "sequential_thinking": {
+    "enabled": true,
+    "max_steps": 6
+  }
+}
 ```
 
 Upon restart (or `pool.reload()`), the new agent is automatically registered, displayed in the web UI roster, and capable of participating in multi-agent debates.

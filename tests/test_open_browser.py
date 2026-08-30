@@ -2,7 +2,7 @@
 
 여기서 지키려는 것.
 
-* **주소가 한 곳에서만 온다.** conf.toml 의 `[app]` 이 정본이고, 실행 스크립트가
+* **주소가 한 곳에서만 온다.** conf.json 의 `[app]` 이 정본이고, 실행 스크립트가
   `--port` 로 덮어썼으면 그쪽을 따릅니다. 두 곳에 같은 값을 적어 두면 언젠가
   반드시 어긋납니다.
 * **바인딩 주소를 그대로 열지 않는다.** `0.0.0.0` 은 접속 주소가 아닙니다.
@@ -26,7 +26,7 @@ class _FakeApp:
 
 @pytest.fixture()
 def conf_app(monkeypatch):
-    """conf.toml 대신 쓸 [app] 값."""
+    """conf.json 대신 쓸 [app] 값."""
     holder = {"app": _FakeApp("127.0.0.1", 8000)}
 
     class _Cfg:
@@ -76,7 +76,7 @@ def test_no_config_and_no_port_means_no_browser(monkeypatch):
     import app.config
 
     def _boom(*a, **k):
-        raise RuntimeError("conf.toml 없음")
+        raise RuntimeError("conf.json 없음")
 
     monkeypatch.setattr(app.config, "get_config", _boom)
     assert open_browser.resolve_target([]) is None

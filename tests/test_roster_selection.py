@@ -1,4 +1,4 @@
-"""conf.toml 에 에이전트를 추가했을 때 기존 대화의 로스터가 어떻게 보이는가.
+"""conf.json 에 에이전트를 추가했을 때 기존 대화의 로스터가 어떻게 보이는가.
 
 `sessions.active_agents` 는 켜 둔 것만 담는 허용 목록입니다. 목록에 없다는 사실
 하나로는 "사용자가 끈 에이전트" 와 "그 대화를 설정할 때는 없던 에이전트" 를
@@ -64,7 +64,7 @@ def test_a_session_with_no_roster_at_all_enables_everything():
 def test_a_started_conversation_does_not_pick_up_new_agents():
     """첫 발언과 함께 참여 에이전트가 고정됩니다.
 
-    그 뒤 conf.toml 에 추가된 에이전트가 저절로 끼어들면, 앞선 발언과 뒤의 발언이
+    그 뒤 conf.json 에 추가된 에이전트가 저절로 끼어들면, 앞선 발언과 뒤의 발언이
     서로 다른 구성에서 나오게 되어 기록을 해석할 수 없습니다. 꺼 둔 채로 보여주고
     정말 합류시킬지는 사용자가 정합니다.
     """

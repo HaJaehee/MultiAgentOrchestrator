@@ -19,7 +19,7 @@ class AgentPool:
         self._agents.clear()
         for key, cfg in self.agent_configs.items():
             if not getattr(cfg, "enabled", True):
-                logger.info(f"Agent '{key}' is disabled in conf.toml; skipping registration.")
+                logger.info(f"Agent '{key}' is disabled in conf.json; skipping registration.")
                 continue
             agent = Agent.from_config(key, cfg)
             self._agents[key] = agent
@@ -67,7 +67,7 @@ def get_agent_pool() -> AgentPool:
 
 
 def reload_agent_pool() -> AgentPool:
-    """다시 읽어 들인 conf.toml 로 전역 풀을 갱신합니다.
+    """다시 읽어 들인 conf.json 으로 전역 풀을 갱신합니다.
 
     새 객체를 만들지 않고 제자리에서 다시 채웁니다. 엔진과 화면이 이 풀을 각자
     붙잡고 있어서, 갈아 끼우면 이미 들고 있던 쪽은 예전 구성을 계속 보게 됩니다.

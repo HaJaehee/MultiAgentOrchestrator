@@ -46,14 +46,14 @@ python setup_mcp.py
 3. Clones [AirgappedPySandbox](https://github.com/HaJaehee/AirgappedPySandbox) into `./mcp_sandbox`.
 
 > **Custom Options**:
-> - If Node.js is not installed: `python setup_mcp.py --skip-node` (remember to set `enabled = false` for Node servers in `conf.toml`).
+> - If Node.js is not installed: `python setup_mcp.py --skip-node` (remember to set `"enabled": false` for Node servers in `conf.json`).
 > - If Python sandbox is not needed: `python setup_mcp.py --skip-sandbox`.
 
 ### Step 4: Prepare Configuration Files
 Copy the template files to create local configurations:
 ```bash
 # Copy configuration template
-cp conf.example.toml conf.toml
+cp conf.example.json conf.json
 
 # Copy environment variables template
 cp .env.example .env
@@ -102,7 +102,7 @@ pytest -v tests/
 ### Test Suite Coverage:
 - `test_config.py`: Environment variable resolution, nested defaults, and Pydantic validation.
 - `test_personas.py`: Persona customization, snapshot freeze on first message, and lock error assertions.
-- `test_llm_settings.py`: Global `[llm]` inheritance, parameter dropping, and sequential thinking modes.
+- `test_llm_settings.py`: Global `llm` inheritance, parameter dropping, and sequential thinking modes.
 - `test_db.py`: Database session CRUD, message history, and artifact persistence.
 - `test_mcp.py`: Stdio MCP client discovery, tool execution, and error resilience.
 - `test_orchestrator.py`: Multi-turn debate state transitions and artifact synthesis.

@@ -12,7 +12,7 @@ MCP 서버 설치본까지 들고 있어 수백 MB 입니다. 그 런타임은 �
         ├── app/                      애플리케이션 소스 (통째로 교체)
         ├── mcp_servers/              포크한 MCP 서버 원본
         ├── mcp_node/memory-scoped.mjs  그 실행 사본 (설치본의 것을 바로 갈아끼움)
-        ├── conf.example.toml         설정 템플릿
+        ├── conf.example.json         설정 템플릿
         ├── .env.example
         ├── requirements.txt
         ├── setup_mcp.py
@@ -53,10 +53,10 @@ SOURCE_DIRS = ["app", "mcp_servers"]
 #
 # 여기 없는 것들: 이 패키지는 **돌아가는 앱을 갱신하는 데 필요한 것만** 담습니다.
 # 테스트·위키·CLAUDE.md 는 개발 저장소에 있고, 패키징 스크립트는 만드는 쪽 도구이며,
-# conf.toml 은 그 망의 실제 엔드포인트가 들어 있어 반입 대상이 아닙니다.
+# conf.json 은 그 망의 실제 엔드포인트가 들어 있어 반입 대상이 아닙니다.
 PACKAGE_FILES: list[tuple[str, str]] = [
     ("requirements.txt", "requirements.txt"),
-    ("conf.example.toml", "conf.example.toml"),
+    ("conf.example.json", "conf.example.json"),
     (".env.example", ".env.example"),
     ("setup_mcp.py", "setup_mcp.py"),
     # 실행 스크립트가 백그라운드로 띄우는 브라우저 대기 스크립트.
@@ -82,7 +82,7 @@ FORBIDDEN_NAMES = {
     ".git", ".venv", "venv", "env", "node_modules",
 }
 
-# 반입 심사 전에 걸러야 할 것들. conf.toml 은 gitignore 대상이라
+# 반입 심사 전에 걸러야 할 것들. conf.json 은 gitignore 대상이라
 # 누군가 실제 키를 적어 두었을 수 있습니다.
 SECRET_PATTERNS = [
     (re.compile(r"sk-[A-Za-z0-9_\-]{20,}"), "OpenAI 계열 API 키"),
@@ -241,7 +241,7 @@ def main() -> None:
     log(f"  원본 크기: {total / 1024:.0f} KB  ->  압축 {zip_path.stat().st_size / 1024:.0f} KB")
     log("")
     log("  런타임(python_runtime, node_runtime, wheels, mcp_sandbox)과")
-    log("  운영 데이터(workspace, multiagent.db, conf.toml)는 들어 있지 않습니다.")
+    log("  운영 데이터(workspace, multiagent.db, conf.json)는 들어 있지 않습니다.")
     log("  대상 장비에서는 압축을 푼 내용을 설치본 위에 덮어쓰세요.")
     log("  app/ 은 파일 단위로 덮지 말고 통째로 교체해야 합니다 —")
     log("  이번 갱신에서 삭제된 모듈이 남아 계속 import 됩니다.")

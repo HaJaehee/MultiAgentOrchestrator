@@ -11,13 +11,13 @@ round, so every strategy excludes it from the speaker list.
 
 ## 1. Where the order comes from
 
-Order and stance live on the agent, not in the strategy. Both are `[agents.<key>]` fields in
-`conf.toml`, both are editable from the roster, and both are frozen into the session snapshot
+Order and stance live on the agent, not in the strategy. Both are `agents.<key>` fields in
+`conf.json`, both are editable from the roster, and both are frozen into the session snapshot
 when a conversation starts.
 
 | Field | Meaning | Edited by |
 |-------|---------|-----------|
-| `debate_priority` | Speaking order inside a round; lower speaks earlier. Ties keep `conf.toml` order. | Dragging agent cards in the roster |
+| `debate_priority` | Speaking order inside a round; lower speaks earlier. Ties keep `conf.json` order. | Dragging agent cards in the roster |
 | `debate_stance` | `proponent` / `critic` / `neutral` — used by the adversarial strategy | The ⋮ menu on an agent card |
 
 > **Why not hardcode the order?** It used to be `{"architect": 0, "coder": 1, "critic": 2}`

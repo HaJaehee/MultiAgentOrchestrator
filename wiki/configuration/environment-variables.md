@@ -1,6 +1,6 @@
 # Environment Variables & Dynamic Resolution
 
-The MADO: Multi-Agent Debate & Orchestration Platform features a dynamic environment variable substitution engine in [app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py#L41-L86). It allows a single [conf.toml](file:///d:/MultiAgentOrchestrator/conf.toml) to be shared seamlessly between local developer workstations, staging servers, and air-gapped production bundles without modification.
+The MADO: Multi-Agent Debate & Orchestration Platform features a dynamic environment variable substitution engine in [app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py#L41-L86). It allows a single [conf.json](file:///d:/MultiAgentOrchestrator/conf.json) to be shared seamlessly between local developer workstations, staging servers, and air-gapped production bundles without modification.
 
 ---
 
@@ -15,7 +15,7 @@ The configuration loader parses all strings recursively, supporting standard she
 | `${A:-${B:-fallback}}` | **Nested Evaluation**: Evaluates variable `A`. If unset, falls back to evaluating variable `B`. If `B` is also unset, uses `fallback`. | `model = "${CODER_MODEL:-${LLM_MODEL:-openai/gpt-4o}}"` |
 
 ### Blank-to-None Conversion & Inheritance Protection
-In standard TOML parsers, an unresolved variable like `${CODER_API_BASE}` resolves to an empty string `""`. If treated as a string, this empty value would overwrite the global `[llm].api_base` setting with blank credentials.
+After substitution, an unresolved variable like `${CODER_API_BASE}` is left as an empty string `""`. If treated as a string, this empty value would overwrite the global ``llm.api_base`` setting with blank credentials.
 
 To prevent this, [app/config.py](file:///d:/MultiAgentOrchestrator/app/config.py#L255-L261) uses a Pydantic `before` validator (`_blank_to_none`):
 ```python
@@ -26,7 +26,7 @@ def _blank_to_none(cls, v: Any) -> Any:
         return None
     return v
 ```
-Any variable that resolves to empty or whitespace is converted to `None`, allowing the agent to inherit the global `[llm]` value cleanly.
+Any variable that resolves to empty or whitespace is converted to `None`, allowing the agent to inherit the global `llm` value cleanly.
 
 ---
 
@@ -41,7 +41,7 @@ if not os.environ.get("PYTHON_BIN"):
 ```
 
 ### Why this is critical:
-If `conf.toml` defaulted to PATH `python`, launching MCP servers inside a virtual environment (`.venv`) or a portable air-gapped bundle would invoke the system's global Python interpreter instead. The server would immediately crash with `ModuleNotFoundError: No module named 'mcp_server_git'`.
+If `conf.json` defaulted to PATH `python`, launching MCP servers inside a virtual environment (`.venv`) or a portable air-gapped bundle would invoke the system's global Python interpreter instead. The server would immediately crash with `ModuleNotFoundError: No module named 'mcp_server_git'`.
 
 By defaulting `PYTHON_BIN` to `sys.executable`, the child MCP process inherits the virtualenv, installed packages, and standard libraries of the host application automatically.
 
@@ -51,14 +51,14 @@ By defaulting `PYTHON_BIN` to `sys.executable`, the child MCP process inherits t
 
 ### 3.1. Application & Network
 
-| Environment Variable | Default in conf.toml | Purpose |
+| Environment Variable | Default in conf.json | Purpose |
 | :--- | :--- | :--- |
 | `APP_HOST` (or `HOST`) | `127.0.0.1` | Network interface to bind Uvicorn server to (`${APP_HOST:-${HOST:-127.0.0.1}}`). |
 | `APP_PORT` (or `PORT`) | `8000` | Port for the web interface and REST API (`${APP_PORT:-${PORT:-8000}}`). |
 
 ### 3.2. Global LLM Gateway & Provider Defaults
 
-| Environment Variable | Default in conf.toml | Purpose |
+| Environment Variable | Default in conf.json | Purpose |
 | :--- | :--- | :--- |
 | `LLM_MODEL` | `openai/gpt-4o` | Default model identifier for all agents. |
 | `LLM_API_BASE` | `""` (Inherits provider default) | URL of OpenAI-compatible proxy, vLLM, Ollama, or LM Studio. |
@@ -107,7 +107,7 @@ By defaulting `PYTHON_BIN` to `sys.executable`, the child MCP process inherits t
 
 ## 4. Setting Up Local `.env` & Override Order
 
-Create a `.env` file in the project root to configure local endpoints without modifying `conf.toml`:
+Create a `.env` file in the project root to configure local endpoints without modifying `conf.json`:
 
 ```bash
 # Example .env for local network or gateway setup
@@ -121,7 +121,7 @@ LLM_API_KEY=sk-dummy-key
 ### Precedence Rule
 Settings are resolved according to the following order:
 ```text
-.env (Environment) ──> conf.toml (File Configuration) ──> CLI Command Parameters
+.env (Environment) ──> conf.json (File Configuration) ──> CLI Command Parameters
 ```
-If `.env` specifies `APP_HOST` and `APP_PORT`, `conf.toml` interpolates those values. However, passing explicit CLI flags (e.g. `python -m app.main --host 192.168.1.10 --port 9000`) takes the highest precedence and overrides both `.env` and `conf.toml`.
+If `.env` specifies `APP_HOST` and `APP_PORT`, `conf.json` interpolates those values. However, passing explicit CLI flags (e.g. `python -m app.main --host 192.168.1.10 --port 9000`) takes the highest precedence and overrides both `.env` and `conf.json`.
 

@@ -4,7 +4,7 @@
 
     MultiAgentOrchestrator_bundle/
     ├── app/                 애플리케이션 소스
-    ├── conf.toml            설정 (없으면 conf.example.toml 에서 복사)
+    ├── conf.json            설정 (없으면 conf.example.json 에서 복사)
     ├── wheels/              오프라인 pip wheel (앱 + MCP 서버 + 샌드박스 서버)
     ├── python_runtime/      포터블 CPython
     ├── node_runtime/        node.exe (MCP 공식 Node 서버 구동용, npm 미포함)
@@ -119,14 +119,14 @@ def stage_sources() -> None:
         if src.exists():
             shutil.copy2(src, STAGING_DIR / fname)
 
-    # conf.toml 은 gitignore 대상이라 신규 클론에는 없습니다. 템플릿으로 대체합니다.
-    conf_src = ROOT_DIR / "conf.toml"
+    # conf.json 은 gitignore 대상이라 신규 클론에는 없습니다. 템플릿으로 대체합니다.
+    conf_src = ROOT_DIR / "conf.json"
     if not conf_src.exists():
-        conf_src = ROOT_DIR / "conf.example.toml"
-        print("      conf.toml 이 없어 conf.example.toml 을 번들 설정으로 사용합니다.")
+        conf_src = ROOT_DIR / "conf.example.json"
+        print("      conf.json 이 없어 conf.example.json 을 번들 설정으로 사용합니다.")
     if not conf_src.exists():
-        raise FileNotFoundError("conf.toml / conf.example.toml 을 찾을 수 없습니다.")
-    shutil.copy2(conf_src, STAGING_DIR / "conf.toml")
+        raise FileNotFoundError("conf.json / conf.example.json 을 찾을 수 없습니다.")
+    shutil.copy2(conf_src, STAGING_DIR / "conf.json")
 
     # 에이전트 공용 작업 공간 (filesystem / git / sandbox MCP 가 공유)
     workspace = STAGING_DIR / "workspace"
@@ -493,7 +493,7 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "set \"PATH=%~dp0python_runtime;%~dp0python_runtime\\Scripts;%~dp0node_runtime;%PATH%\"\r\n"
         "set \"PYTHONIOENCODING=utf-8\"\r\n"
         "set \"PYTHONUTF8=1\"\r\n\r\n"
-        "rem --- MCP 서버 실행 경로 (conf.toml 의 ${VAR:-기본값} 치환에 사용) ---\r\n"
+        "rem --- MCP 서버 실행 경로 (conf.json 의 ${VAR:-기본값} 치환에 사용) ---\r\n"
         "set \"PYTHON_BIN=%~dp0python_runtime\\python.exe\"\r\n"
         "set \"NODE_BIN=%~dp0node_runtime\\node.exe\"\r\n"
         "set \"MCP_NODE_HOME=%~dp0mcp_node\"\r\n"
@@ -502,10 +502,10 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "if not defined SANDBOX_KERNEL_PYTHON set \"SANDBOX_KERNEL_PYTHON=%PYTHON_BIN%\"\r\n\r\n"
         "if not exist \"%NODE_BIN%\" echo [!] node_runtime\\node.exe 가 없습니다. "
         "filesystem / memory MCP 가 비활성화됩니다.\r\n\r\n"
-        "rem --- 접속 주소는 conf.toml 의 [app] 값을 그대로 읽습니다 (하드코딩 금지) ---\r\n"
+        "rem --- 접속 주소는 conf.json 의 app 값을 그대로 읽습니다 (하드코딩 금지) ---\r\n"
         "set \"APP_URL=\"\r\n"
         "for /f \"usebackq delims=\" %%i in (`\"%PYTHON_BIN%\" -c \"from app.config import get_config;c=get_config().app;print(f'http://{c.host}:{c.port}')\"`) do set \"APP_URL=%%i\"\r\n"
-        "if not defined APP_URL set \"APP_URL=conf.toml 의 [app] 참조\"\r\n\r\n"
+        "if not defined APP_URL set \"APP_URL=conf.json 의 app 참조\"\r\n\r\n"
         "rem --- 서버가 응답하면 브라우저를 엽니다. 서버는 콘솔을 붙잡고 있으므로\r\n"
         "rem     기다리는 일은 별도 프로세스가 합니다 (MAO_NO_BROWSER=1 이면 건너뜁니다).\r\n"
         "rem     같은 인자를 그대로 넘겨야 --port 로 포트를 바꿔도 맞는 주소를 엽니다.\r\n"
@@ -536,7 +536,7 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "$env:PATH = \"$(Join-Path $RootDir 'python_runtime');$(Join-Path $RootDir 'python_runtime\\Scripts');$(Join-Path $RootDir 'node_runtime');\" + $env:PATH\r\n"
         "$env:PYTHONIOENCODING = \"utf-8\"\r\n"
         "$env:PYTHONUTF8 = \"1\"\r\n\r\n"
-        "# --- MCP 서버 실행 경로 (conf.toml 의 ${VAR:-기본값} 치환에 사용) ---\r\n"
+        "# --- MCP 서버 실행 경로 (conf.json 의 ${VAR:-기본값} 치환에 사용) ---\r\n"
         "$env:PYTHON_BIN = Join-Path $RootDir \"python_runtime\\python.exe\"\r\n"
         "$env:NODE_BIN = Join-Path $RootDir \"node_runtime\\node.exe\"\r\n"
         "$env:MCP_NODE_HOME = Join-Path $RootDir \"mcp_node\"\r\n"
@@ -546,10 +546,10 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "if (-not (Test-Path $env:NODE_BIN)) {\r\n"
         "    Write-Warning \"node_runtime\\node.exe 가 없습니다. filesystem / memory MCP 가 비활성화됩니다.\"\r\n"
         "}\r\n\r\n"
-        "# 접속 주소는 conf.toml 의 [app] 값을 그대로 읽습니다 (하드코딩 금지)\r\n"
+        "# 접속 주소는 conf.json 의 app 값을 그대로 읽습니다 (하드코딩 금지)\r\n"
         "$AppUrl = try {\r\n"
         "    & $env:PYTHON_BIN -c \"from app.config import get_config;c=get_config().app;print(f'http://{c.host}:{c.port}')\"\r\n"
-        "} catch { \"conf.toml 의 [app] 참조\" }\r\n\r\n"
+        "} catch { \"conf.json 의 app 참조\" }\r\n\r\n"
         "# 서버가 응답하면 브라우저를 엽니다. 서버는 이 콘솔을 붙잡고 있으므로 기다리는\r\n"
         "# 일은 별도 프로세스가 합니다 (MAO_NO_BROWSER=1 이면 건너뜁니다). 같은 인자를\r\n"
         "# 그대로 넘겨야 --port 로 포트를 바꿔도 맞는 주소를 엽니다.\r\n"
@@ -593,7 +593,7 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "jupyter_client, ipykernel; print('  전부 정상')\"\r\n"
         "if errorlevel 1 echo [!] 위에 표시된 모듈이 빠져 있습니다. 해당 MCP 서버가 동작하지 않습니다.\r\n"
         "echo.\r\n"
-        "echo [!] 이 방식으로 실행할 때는 conf.toml 이 참조하는 아래 환경변수를 직접 지정하거나\r\n"
+        "echo [!] 이 방식으로 실행할 때는 conf.json 이 참조하는 아래 환경변수를 직접 지정하거나\r\n"
         "echo     PATH 에 node 를 등록해야 filesystem / memory MCP 가 동작합니다.\r\n"
         "echo       NODE_BIN / PYTHON_BIN / MCP_NODE_HOME / MCP_SANDBOX_HOME / WORKSPACE_DIR\r\n"
         "pause\r\n"
@@ -625,7 +625,7 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "  .\\run_offline.ps1\r\n"
         "  ```\r\n"
         "- 서버가 뜨면 **기본 브라우저가 자동으로 열립니다.** 열리지 않으면 콘솔에 표시되는 "
-        "주소로 접속하세요. 주소는 `conf.toml` 의 `[app] host/port` "
+        "주소로 접속하세요. 주소는 `conf.json` 의 `app.host` / `app.port` "
         "(또는 `.env` 의 `APP_HOST` / `APP_PORT`) 를 그대로 따릅니다.\r\n"
         "- 브라우저를 띄우고 싶지 않으면 `MAO_NO_BROWSER=1` 을 설정한 뒤 실행하세요. "
         "서버를 기다리는 시간은 기본 90초이고 `MAO_BROWSER_TIMEOUT` 으로 바꿉니다.\r\n\r\n"
@@ -653,7 +653,7 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "패키지를 설치하고, 끝에 필수 모듈 import 를 검증합니다.\r\n\r\n"
         "> `mcp` 는 반드시 1.x 여야 합니다. 2.x 는 `mcp.server.fastmcp` 를 제거해(MCPServer 로 개명) "
         "샌드박스 서버가 기동하지 못합니다.\r\n\r\n"
-        "MCP 서버는 `conf.toml` 의 `[mcp_servers.*]` 에서 `enabled = false` 로 개별 비활성화할 수 있습니다.\r\n"
+        "MCP 서버는 `conf.json` 의 `mcp_servers` 에서 `\"enabled\": false` 로 개별 비활성화할 수 있습니다.\r\n"
         "모든 서버는 `node`/`python` 진입점을 **직접** 실행합니다. `npx` 는 패키지가 로컬에 없으면 "
         "npm 레지스트리에 접속하므로 폐쇄망에서 사용하지 않습니다.\r\n\r\n"
         "### 코드 실행 샌드박스 커널\r\n"
@@ -662,7 +662,7 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "`SANDBOX_KERNEL_PYTHON` 환경변수로 지정하세요.\r\n\r\n"
         "---\r\n\r\n"
         "## ⚙️ 설정 커스텀\r\n"
-        "- `conf.toml`: 에이전트 목록, 프롬프트, 라운드 수, MCP 서버 설정.\r\n"
+        "- `conf.json`: 에이전트 목록, 프롬프트, 라운드 수, MCP 서버 설정.\r\n"
         "- `.env`: LLM API 키(폐쇄망 로컬 LLM / Ollama / vLLM 주소 등) 설정.\r\n"
         "- `workspace/`: 에이전트가 파일을 읽고 쓰는 공용 작업 공간. filesystem · git · sandbox MCP 가 "
         "이 디렉터리를 공유합니다.\r\n"
@@ -754,7 +754,7 @@ def main() -> None:
     print(" [완료] 폐쇄망 패키징이 성공적으로 생성되었습니다!")
     print(f"  - 아카이브 경로: {ZIP_FILE}")
     print(f"  - 파일 크기: {zip_size_mb} MB")
-    print("  - 포함 구성: 소스코드, conf.toml, 포터블 Python 런타임, 오프라인 Wheels,")
+    print("  - 포함 구성: 소스코드, conf.json, 포터블 Python 런타임, 오프라인 Wheels,")
     print(f"               Node 런타임 + Node MCP 서버({'포함' if has_node else '미포함'}),")
     print(f"               코드 실행 샌드박스({'포함' if sandbox_source is not None else '미포함'}),")
     print("               실행 스크립트")

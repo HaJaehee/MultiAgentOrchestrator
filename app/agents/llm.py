@@ -85,7 +85,7 @@ def fit_context_window(agent: Agent, messages: List[Dict[str, Any]]) -> List[Dic
 
     라운드가 쌓이면 전사(transcript)가 그대로 길어져 컨텍스트 한도를 넘고,
     엔드포인트는 400 ("maximum context length ... however you requested ...") 을
-    돌려줍니다. 지금까지 이 설정은 conf.toml 에 선언만 되어 있고 아무데서도
+    돌려줍니다. 지금까지 이 설정은 conf.json 에 선언만 되어 있고 아무데서도
     읽히지 않았습니다.
 
     맨 앞(목표)과 맨 뒤(이번 차례 지시)는 남깁니다. 그 사이를 오래된 것부터
@@ -192,8 +192,8 @@ class LLMCaller:
         if not agent.is_live:
             raise LLMUnavailableError(
                 agent,
-                "api_base 도 api_key 도 설정되어 있지 않습니다. conf.toml 의 [llm] 또는 "
-                f"[agents.{agent.key}] 에 엔드포인트를 지정하세요.",
+                "api_base 도 api_key 도 설정되어 있지 않습니다. conf.json 의 llm 또는 "
+                f"agents.{agent.key} 에 엔드포인트를 지정하세요.",
             )
 
         try:

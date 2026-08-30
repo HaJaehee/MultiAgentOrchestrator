@@ -1,0 +1,374 @@
+{
+  "//": [
+    "멀티 에이전트 오케스트레이터 설정 (conf.json).",
+    "",
+    "JSON 이지만 주석을 쓸 수 있습니다 — 키가 '//' 로 시작하면 설명으로 보고",
+    "설정을 읽을 때 걷어냅니다. 값은 문자열 하나 또는 문자열 배열(여러 줄)입니다.",
+    "화면에서 설정을 고쳐도 이 설명들은 그대로 남습니다.",
+    "",
+    "여러 줄 글(system_prompt 등)은 문자열 배열로 적을 수 있습니다. 한 줄이 한",
+    "항목이고, 읽을 때 줄바꿈으로 이어 붙입니다.",
+    "",
+    "모든 문자열 값은 ${ENV_VAR} 또는 ${ENV_VAR:-기본값} 형태의 환경변수 치환을",
+    "지원합니다."
+  ],
+
+  "// app": [
+    "서버 기동 설정.",
+    "실행 스크립트가 이 값을 그대로 읽어 쓰므로, 포트를 바꾸려면 여기(또는 .env 의",
+    "APP_PORT)만 고치면 됩니다."
+  ],
+  "app": {
+    "host": "${APP_HOST:-${HOST:-127.0.0.1}}",
+    "port": "${APP_PORT:-${PORT:-8000}}",
+    "db_url": "${APP_DB_URL:-sqlite+aiosqlite:///./multiagent.db}",
+    "debug": true
+  },
+
+  "// llm": [
+    "전역 LLM 기본값.",
+    "여기에 적은 값은 아래 agents 의 각 에이전트가 같은 키를 직접 지정하지 않는 한",
+    "모두에게 그대로 상속됩니다. (에이전트 개별 설정이 항상 우선)"
+  ],
+  "llm": {
+    "// model": "모델 명 (LiteLLM 형식: \"<provider>/<model>\")",
+    "model": "${LLM_MODEL:-openai/gpt-4o}",
+
+    "// api_base": [
+      "LLM API URL (엔드포인트). api_url / base_url 로 적어도 동일하게 동작합니다.",
+      "사내 게이트웨이·프록시·로컬 서버 등 OpenAI 호환 엔드포인트를 여기에 지정하세요.",
+      "  - OpenAI 호환 게이트웨이 : \"https://my-gateway.company.com/v1\"",
+      "  - vLLM / LM Studio       : \"http://localhost:1234/v1\"",
+      "  - Ollama                 : \"http://localhost:11434\"",
+      "  - Azure OpenAI           : \"https://<resource>.openai.azure.com\""
+    ],
+    "api_base": "${LLM_API_BASE}",
+
+    "// api_key": "로컬 모델처럼 키가 필요 없으면 비워두세요. api_base 만 있어도 실제 호출을 시도합니다",
+    "api_key": "${LLM_API_KEY:-${OPENAI_API_KEY}}",
+
+    "// api_version": "Azure OpenAI 를 쓸 때만 필요 (예: \"2024-10-21\")",
+    "api_version": "${LLM_API_VERSION}",
+
+    "// provider": [
+      "모델 명에 provider 접두어를 붙이기 곤란할 때 강제 지정",
+      "(\"openai\" | \"azure\" | \"ollama\" | \"openrouter\" | \"vertex_ai\" | \"bedrock\" ...)"
+    ],
+    "provider": "${LLM_PROVIDER}",
+
+    "// 샘플링": "공통 샘플링/한도 값. top_p 는 필요할 때만 추가하세요 (예: 0.95)",
+    "temperature": 0.4,
+    "max_tokens": 4096,
+    "max_context_window": 128000,
+
+    "// 안정성": [
+      "timeout             : 요청 타임아웃(초)",
+      "num_retries         : 실패 시 재시도 횟수",
+      "drop_params         : 엔드포인트가 지원하지 않는 파라미터는 조용히 제거 (로컬 모델 호환성↑)",
+      "max_tool_iterations : 한 턴에서 허용하는 MCP 도구 호출 루프 횟수"
+    ],
+    "timeout": 120,
+    "num_retries": 2,
+    "drop_params": true,
+    "max_tool_iterations": 30,
+
+    "// 커스텀 헤더/바디": [
+      "사내 게이트웨이 인증 헤더, 라우팅 태그 등. 필요하면 아래처럼 추가하세요.",
+      "\"extra_headers\": { \"X-Org-Id\": \"${MY_ORG_ID}\", \"X-Project\": \"multiagent\" },",
+      "\"extra_body\": { \"user\": \"multiagent-orchestrator\" }"
+    ],
+
+    "// sequential_thinking": [
+      "단계적 사고 전역 기본값.",
+      "  mode = \"prompt\" : 시스템 프롬프트에 단계적 사고 프로토콜을 주입 (모든 모델 호환)",
+      "  mode = \"native\" : 모델 자체 추론 파라미터 사용 (reasoning_effort / thinking budget)",
+      "  mode = \"mcp\"    : sequential-thinking MCP 서버의 도구를 강제로 사용"
+    ],
+    "sequential_thinking": {
+      "enabled": true,
+      "mode": "prompt",
+      "max_steps": 5,
+      "// show_steps": "false 면 최종 결론만 피드에 노출하고 사고 과정은 접어둡니다",
+      "show_steps": true,
+      "// native 모드 추가 항목": [
+        "\"reasoning_effort\": \"medium\",        \"minimal\" | \"low\" | \"medium\" | \"high\"",
+        "\"thinking_budget_tokens\": 4096       Anthropic 계열 확장 사고 토큰 예산"
+      ],
+      "// mcp 모드 추가 항목": "\"mcp_server\": \"sequential_thinking\"  — 사용할 MCP 서버 키",
+      "// prompt_template": "직접 작성한 단계적 사고 지침. {max_steps} 치환자를 쓸 수 있습니다 (문자열 배열 가능)"
+    }
+  },
+
+  "// mcp_servers": [
+    "MCP 서버 연동 설정 (\"enabled\": false 로 개별 비활성화 가능).",
+    "",
+    "경로/실행기는 모두 환경변수 치환을 지원하므로, 개발 PC와 폐쇄망 배포 번들이",
+    "이 파일 하나를 그대로 공유합니다.",
+    "  NODE_BIN         : Node 실행기      (기본 \"node\"  / 번들에서는 node_runtime\\node.exe)",
+    "  PYTHON_BIN       : Python 실행기    (기본 \"python\" / 번들에서는 python_runtime\\python.exe)",
+    "  MCP_NODE_HOME    : Node MCP 서버 설치 위치 (기본 \"./mcp_node\")",
+    "  MCP_SANDBOX_HOME : Python 샌드박스 위치    (기본 \"./mcp_sandbox\")",
+    "  WORKSPACE_DIR    : 에이전트 공용 작업 공간 (기본: 프로젝트 루트의 workspace)",
+    "                     앱이 기동할 때 **절대 경로로 정규화**합니다. filesystem·git·",
+    "                     memory·sandbox MCP 가 모두 이 폴더 하나를 봅니다.",
+    "                     대화마다 다른 폴더를 쓰려면 UI 의 \"작업 공간\" 칸을 쓰세요.",
+    "                     그 값은 세션에 저장되며 이 파일을 바꾸지 않습니다.",
+    "run_offline.bat / run_offline.ps1 이 위 값을 자동으로 채웁니다.",
+    "",
+    "개발 PC에서 Node 서버를 준비하려면 (인터넷 필요, 최초 1회):",
+    "  npm install --omit=dev --prefix ./mcp_node \\",
+    "    @modelcontextprotocol/server-filesystem \\",
+    "    @modelcontextprotocol/server-memory \\",
+    "    @modelcontextprotocol/server-sequential-thinking",
+    "",
+    "주의: `npx` 는 패키지가 로컬에 없으면 npm 레지스트리에 접속하므로 폐쇄망에서",
+    "동작하지 않습니다. 아래처럼 진입점(dist/index.js)을 node 로 직접 실행하세요."
+  ],
+  "mcp_servers": {
+    "// filesystem": [
+      "공용 작업 공간 파일 I/O (공식 서버, 툴 14종).",
+      "read_text_file / write_file / edit_file / directory_tree / search_files ...",
+      "지정한 디렉터리 밖 경로는 서버가 자체적으로 차단합니다."
+    ],
+    "filesystem": {
+      "command": "${NODE_BIN:-node}",
+      "args": [
+        "${MCP_NODE_HOME:-./mcp_node}/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
+        "${WORKSPACE_DIR:-./workspace}"
+      ],
+      "enabled": true
+    },
+
+    "// memory": [
+      "토론 중 합의된 사실을 지식 그래프로 축적 (툴 9종).",
+      "create_entities / create_relations / add_observations / search_nodes ...",
+      "라운드가 길어져 컨텍스트가 잘려도 결정 사항이 보존됩니다.",
+      "",
+      "공식 서버가 아니라 `mcp_servers/memory_scoped/` 의 포크를 씁니다. 공식 서버는",
+      "프로세스 하나에 그래프 파일 하나여서, 서버를 공유하는 다음 대화가 이전 대화의",
+      "기억을 그대로 읽습니다. 포크는 그래프를 대화별 파일로 나누고, 어느 그래프를",
+      "열지는 앱이 매 호출의 요청 메타데이터로 알려줍니다.",
+      "",
+      "실행 사본(memory-scoped.mjs)은 앱이 기동할 때 아래 경로에 자동으로 놓습니다.",
+      "@modelcontextprotocol/sdk 와 zod 를 찾아야 하므로 node_modules 옆이어야 합니다."
+    ],
+    "memory": {
+      "command": "${NODE_BIN:-node}",
+      "args": ["${MCP_NODE_HOME:-./mcp_node}/memory-scoped.mjs"],
+      "env": { "MEMORY_GRAPH_DIR": "${WORKSPACE_DIR:-./workspace}/.memory-graphs" },
+      "enabled": true
+    },
+
+    "// git": [
+      "산출물 버전 관리 (공식 서버, 툴 12종).",
+      "git_status / git_diff / git_commit / git_log ... 라운드별 변화를 diff 로 추적.",
+      "pip 로 설치됩니다: pip install mcp-server-git"
+    ],
+    "git": {
+      "command": "${PYTHON_BIN:-python}",
+      "args": ["-m", "mcp_server_git", "--repository", "${WORKSPACE_DIR:-./workspace}"],
+      "enabled": true
+    },
+
+    "// sandbox": [
+      "상태 유지형 Python 코드 실행 샌드박스.",
+      "https://github.com/HaJaehee/AirgappedPySandbox",
+      "execute_python_code / run_python_file / write_workspace_file /",
+      "list_workspace_files / reset_kernel_state",
+      "에이전트의 \"이 코드는 동작합니다\" 주장을 실제 실행으로 판정하게 해줍니다.",
+      "SANDBOX_KERNEL_PYTHON 에 데이터사이언스 스택이 포함된 포터블 파이썬을 지정하면",
+      "pandas/numpy/matplotlib 를 쓰는 코드까지 검증할 수 있습니다.",
+      "",
+      "커널 네임스페이스는 **대화 × 발언자** 단위로 갈립니다. 커널 안의 변수는 어디에도",
+      "기록되지 않아서(다음 발언자의 컨텍스트에는 앞 발언의 본문만 들어갑니다) 에이전트",
+      "사이에 넘기면 아무도 검증할 수 없는 상태가 생기기 때문입니다. 인계는 작업 공간",
+      "파일로 합니다. 그래서 필요한 커널 수는 \"동시 토론 수 × 샌드박스를 쓰는 에이전트",
+      "수\" 입니다. 기본 구성은 coder·critic 둘이므로 16 이면 동시 토론 8건까지 버팁니다.",
+      "넘으면 가장 오래 안 쓴 커널부터 조용히 정리되어 그 변수들이 사라집니다."
+    ],
+    "sandbox": {
+      "command": "${PYTHON_BIN:-python}",
+      "args": ["${MCP_SANDBOX_HOME:-./mcp_sandbox}/server.py"],
+      "env": {
+        "SANDBOX_WORKSPACE": "${WORKSPACE_DIR:-./workspace}",
+        "SANDBOX_KERNEL_PYTHON": "${SANDBOX_KERNEL_PYTHON:-${PYTHON_BIN:-python}}",
+        "SANDBOX_EXEC_TIMEOUT": "${SANDBOX_EXEC_TIMEOUT:-60}",
+        "SANDBOX_MAX_NAMESPACES": "${SANDBOX_MAX_NAMESPACES:-16}",
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1"
+      },
+      "enabled": true
+    },
+
+    "// sequential_thinking": [
+      "llm.sequential_thinking.mode 가 \"mcp\" 일 때만 켜세요.",
+      "\"prompt\" / \"native\" 모드에서는 불필요합니다."
+    ],
+    "sequential_thinking": {
+      "command": "${NODE_BIN:-node}",
+      "args": ["${MCP_NODE_HOME:-./mcp_node}/node_modules/@modelcontextprotocol/server-sequential-thinking/dist/index.js"],
+      "enabled": false
+    },
+
+    "// fetch": [
+      "외부 네트워크가 열린 환경에서만 사용 (폐쇄망에서는 켜지 마세요).",
+      "URL 을 마크다운으로 변환해 가져옵니다. 에이전트가 근거로 제시한 링크를",
+      "실제로 열어 검증할 때 씁니다. pip install mcp-server-fetch"
+    ],
+    "fetch": {
+      "command": "${PYTHON_BIN:-python}",
+      "args": ["-m", "mcp_server_fetch"],
+      "enabled": false
+    },
+
+    "// web_search (예시)": [
+      "웹 검색은 선택입니다. @modelcontextprotocol/server-brave-search 는 공식 레포에서",
+      "servers-archived 로 이관되어 더 이상 유지보수되지 않으므로 기본 구성에서",
+      "제외했습니다. 검색이 필요하면 아래 중 하나를 이 객체에 추가하세요.",
+      "",
+      "① DuckDuckGo (API 키 불필요, pip install duckduckgo-mcp-server)",
+      "  \"web_search\": {",
+      "    \"command\": \"${PYTHON_BIN:-python}\",",
+      "    \"args\": [\"-m\", \"duckduckgo_mcp_server\"],",
+      "    \"enabled\": false",
+      "  }",
+      "",
+      "② 사내 SearXNG 등 자체 호스팅 검색 엔진을 감싼 서버",
+      "  \"web_search\": {",
+      "    \"command\": \"${PYTHON_BIN:-python}\",",
+      "    \"args\": [\"-m\", \"my_searxng_mcp\"],",
+      "    \"env\": { \"SEARXNG_URL\": \"${SEARXNG_URL}\" },",
+      "    \"enabled\": false",
+      "  }"
+    ]
+  },
+
+  "// agents": [
+    "에이전트 정의.",
+    "각 에이전트는 llm 값을 상속하며, 필요한 항목만 덮어쓰면 됩니다.",
+    "  model / api_base(api_url) / api_key / api_version / provider",
+    "  temperature / top_p / max_tokens / max_context_window",
+    "  timeout / num_retries / drop_params / max_tool_iterations",
+    "  allowed_mcp_servers / system_prompt / enabled",
+    "  debate_priority (발언 순서, 낮을수록 먼저) / debate_stance (proponent|critic|neutral)",
+    "  sequential_thinking (하위 객체)"
+  ],
+  "agents": {
+    "// orchestrator": "1. 필수 오케스트레이터 에이전트 (지우거나 끌 수 없습니다)",
+    "orchestrator": {
+      "name": "Master Orchestrator",
+      "role": "Moderator & Synthesizer",
+      "model": "${ORCHESTRATOR_MODEL:-${LLM_MODEL:-openai/gpt-4o}}",
+      "// api_base": "비우면 llm.api_base 를 그대로 사용",
+      "api_base": "${ORCHESTRATOR_API_BASE}",
+      "// api_key": "비우면 llm.api_key 를 그대로 사용",
+      "api_key": "${OPENAI_API_KEY}",
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "// debate_priority": [
+        "토론에서의 자리: 낮은 debate_priority 가 먼저 발언합니다.",
+        "(오케스트레이터는 라운드 밖에서 계획·합성을 맡으므로 순서에 쓰이지 않습니다.)"
+      ],
+      "debate_priority": 10,
+      "allowed_mcp_servers": ["filesystem", "memory"],
+      "system_prompt": [
+        "당신은 멀티 에이전트 토론을 이끄는 수석 오케스트레이터입니다.",
+        "유저의 요구사항을 체계적으로 분해하고, 시스템 아키텍트, 시니어 엔지니어, 보안/품질 리뷰어 등 전문 에이전트에게 적절한 시점에 발언권을 부여하세요.",
+        "토론이 충분히 진행되고 합의점에 도달하면 모든 논의와 도구 실행 결과를 종합하여 최종 고품질 아티팩트(마크다운 문서, Mermaid 다이어그램, 완전한 실행 가능 코드 등)를 작성하세요."
+      ],
+      "sequential_thinking": {
+        "enabled": true,
+        "mode": "prompt",
+        "max_steps": 6
+      }
+    },
+
+    "// architect": "2. 소프트웨어 아키텍트 에이전트",
+    "architect": {
+      "name": "System Architect",
+      "role": "High-Level Architecture & Tech Stack",
+      "model": "${ARCHITECT_MODEL:-${LLM_MODEL:-anthropic/claude-3-5-sonnet-20241022}}",
+      "api_base": "${ARCHITECT_API_BASE}",
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "temperature": 0.5,
+      "debate_priority": 20,
+      "// debate_stance": "디베이트 전략에서의 진영 (proponent | critic | neutral)",
+      "debate_stance": "proponent",
+      "allowed_mcp_servers": ["filesystem", "memory", "fetch"],
+      "system_prompt": [
+        "당신은 수석 소프트웨어 아키텍트입니다.",
+        "시스템 아키텍처 설계, 모듈 분리, 기술 스택 선정, 데이터 흐름 정의 및 Mermaid 다이어그램 작성을 전담합니다.",
+        "확장성, 유지보수성, 표준 디자인 패턴을 고려하여 구조를 제안하고 다른 엔지니어들과 논의하세요."
+      ]
+    },
+
+    "// coder": "3. 시니어 코더 에이전트",
+    "coder": {
+      "name": "Senior Python Engineer",
+      "role": "Implementation & Code Refinement",
+      "model": "${CODER_MODEL:-${LLM_MODEL:-openai/gpt-4o}}",
+      "api_base": "${CODER_API_BASE}",
+      "api_key": "${OPENAI_API_KEY}",
+      "temperature": 0.1,
+      "debate_priority": 30,
+      "debate_stance": "proponent",
+      "allowed_mcp_servers": ["filesystem", "sandbox", "git"],
+      "system_prompt": [
+        "당신은 시니어 풀스택/백엔드 파이썬 엔지니어입니다.",
+        "아키텍트의 설계를 바탕으로 구체적인 소스코드 작성, 클린 코드 원칙 준수, 실제 파일 I/O 및 실행 가능한 스켈레톤 프로젝트 생성을 전담합니다.",
+        "모든 코드는 타입 힌팅과 에러 핸들링이 완비되어야 합니다."
+      ]
+    },
+
+    "// critic": "4. 크리티컬 리뷰어 에이전트",
+    "critic": {
+      "name": "Security & Quality Critic",
+      "role": "Code Review & Edge Case Analysis",
+      "model": "${CRITIC_MODEL:-${LLM_MODEL:-google/gemini-1.5-pro}}",
+      "api_base": "${CRITIC_API_BASE}",
+      "api_key": "${GEMINI_API_KEY}",
+      "temperature": 0.3,
+      "debate_priority": 40,
+      "debate_stance": "critic",
+      "allowed_mcp_servers": ["filesystem", "sandbox", "git", "memory"],
+      "system_prompt": [
+        "당신은 보안 및 소프트웨어 품질 전문 리뷰어입니다.",
+        "제안된 설계와 구현 코드의 보안 취약점(OWASP Top 10), 성능 병목, 동시성 이슈, 엣지 케이스를 비판적이고 날카롭게 검토하고 구체적인 개선 대안을 제시합니다."
+      ]
+    }
+  },
+
+  "// 로컬 / 사내 엔드포인트 설정 예시": [
+    "필요한 항목을 위 agents 의 해당 에이전트에 넣어 쓰세요.",
+    "",
+    "① OpenAI 호환 사내 게이트웨이 (LiteLLM Proxy, One-API, FastChat 등)",
+    "  \"model\": \"openai/qwen2.5-coder-32b\",",
+    "  \"api_base\": \"https://llm-gateway.mycorp.com/v1\",",
+    "  \"api_key\": \"${CORP_LLM_TOKEN}\",",
+    "  \"extra_headers\": { \"X-Team\": \"platform\" }",
+    "",
+    "② Ollama (로컬, API 키 불필요)",
+    "  \"model\": \"ollama_chat/qwen2.5-coder:14b\",",
+    "  \"api_base\": \"http://localhost:11434\",",
+    "  \"api_key\": \"\"",
+    "",
+    "③ LM Studio / vLLM (OpenAI 호환 서버)",
+    "  \"model\": \"openai/local-model\",",
+    "  \"api_base\": \"http://localhost:1234/v1\",",
+    "  \"api_key\": \"lm-studio\"",
+    "",
+    "④ Azure OpenAI",
+    "  \"model\": \"azure/my-gpt4o-deployment\",",
+    "  \"api_base\": \"https://my-resource.openai.azure.com\",",
+    "  \"api_version\": \"2024-10-21\",",
+    "  \"api_key\": \"${AZURE_OPENAI_API_KEY}\"",
+    "",
+    "⑤ 모델 자체 추론 기능(Native Reasoning)을 쓰는 단계적 사고",
+    "  \"sequential_thinking\": {",
+    "    \"enabled\": true,",
+    "    \"mode\": \"native\",",
+    "    \"reasoning_effort\": \"high\",",
+    "    \"thinking_budget_tokens\": 8192",
+    "  }"
+  ]
+}

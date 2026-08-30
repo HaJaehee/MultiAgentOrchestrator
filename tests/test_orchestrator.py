@@ -63,7 +63,7 @@ def test_a_newly_added_agent_can_speak_first():
     assert speakers[0].key == "data_analyst"
 
 
-def test_agents_without_an_explicit_priority_keep_the_conf_toml_order():
+def test_agents_without_an_explicit_priority_keep_the_conf_file_order():
     """아무도 순서를 지정하지 않은 설정에서는 파일에 적힌 순서가 그대로 나옵니다."""
     state = DebateState(session_id="test-1", user_prompt="Build App")
     agents = [

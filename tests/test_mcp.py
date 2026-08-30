@@ -438,7 +438,7 @@ async def test_agents_in_one_debate_share_one_memory_graph():
 
 
 def test_stale_conf_pointing_at_the_official_memory_server_is_reported(caplog):
-    """소스만 갱신한 설치본은 conf.toml 이 그대로라 공식 서버를 계속 띄웁니다.
+    """소스만 갱신한 설치본은 conf.json 이 그대로라 공식 서버를 계속 띄웁니다.
 
     그러면 격리 없이 동작하는데, 조용하면 아무도 모릅니다.
     """

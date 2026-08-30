@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from nicegui import app as nicegui_app, ui
 import uvicorn
 from app.agents.pool import get_agent_pool
-from app.config import get_config
+from app.config import DEFAULT_CONFIG_PATH, get_config
 from app.database.session import init_db
 from app.mcp.manager import get_mcp_manager
 from app.orchestration.runner import get_debate_runner
@@ -126,7 +126,7 @@ async def session_personas(session_id: str):
 
 @server.get("/api/mcp")
 async def mcp_status():
-    """MCP 서버별 연결 상태. conf.toml 에서 비활성화한 서버도 함께 보고합니다."""
+    """MCP 서버별 연결 상태. conf.json 에서 비활성화한 서버도 함께 보고합니다."""
     cfg = get_config()
     status = get_mcp_manager().connection_status()
     return [
@@ -159,9 +159,9 @@ ui.run_with(
 def start():
     import argparse
     parser = argparse.ArgumentParser(description="MADO: Multi-Agent Debate & Orchestration Platform")
-    parser.add_argument("--host", type=str, default=None, help="Host to bind (overrides conf.toml and .env)")
-    parser.add_argument("--port", type=int, default=None, help="Port to bind (overrides conf.toml and .env)")
-    parser.add_argument("--config", type=str, default="conf.toml", help="Path to config file")
+    parser.add_argument("--host", type=str, default=None, help="Host to bind (overrides conf.json and .env)")
+    parser.add_argument("--port", type=int, default=None, help="Port to bind (overrides conf.json and .env)")
+    parser.add_argument("--config", type=str, default=DEFAULT_CONFIG_PATH, help="Path to config file")
     parser.add_argument("--reload", action="store_true", default=None, help="Enable auto-reload")
     parser.add_argument("--no-reload", action="store_true", default=False, help="Disable auto-reload")
     args, _ = parser.parse_known_args()

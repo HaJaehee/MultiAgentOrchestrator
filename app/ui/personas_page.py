@@ -50,7 +50,7 @@ def create_personas_page() -> None:
                 return
 
             personas = await effective_personas(db, session_id, pool)
-            # 잠긴 대화는 잠글 때 굳은 에이전트를 보여줍니다. 그 사이 conf.toml 에서
+            # 잠긴 대화는 잠글 때 굳은 에이전트를 보여줍니다. 그 사이 conf.json 에서
             # 지워진 에이전트도 이 대화에서는 계속 발언하므로 카드가 있어야 합니다.
             agents = await session_roster_agents(db, session_model, pool)
             locked = session_model.personas_locked
@@ -132,13 +132,13 @@ def create_personas_page() -> None:
                                 "text-sm font-bold text-slate-100"
                             )
                             ui.label(
-                                "저장한 값은 conf.toml 및 이 세션에 즉시 반영됩니다. "
+                                "저장한 값은 conf.json 및 이 세션에 즉시 반영됩니다. "
                                 "토론을 시작하면 이 시점의 값이 DB 에 기록되어 세션을 다시 열어도 그대로 사용됩니다."
                             ).classes("text-[11px] text-slate-400 leading-relaxed")
 
             # ---------------- 에이전트 카드 ----------------
             for agent in agents:
-                # 이 대화에만 남은 에이전트는 conf.toml 기본값이 없습니다.
+                # 이 대화에만 남은 에이전트는 conf.json 기본값이 없습니다.
                 # 그때는 이 대화가 굳혀 둔 값이 곧 기본값입니다.
                 fallback = persona_from_agent(agent)
                 persona = personas.get(agent.key) or fallback
@@ -187,11 +187,11 @@ def create_personas_page() -> None:
                 update_agent_persona_in_conf_file(agent_key, name, role, prompt)
                 pool.reload()
             except Exception as exc:
-                logger.warning(f"conf.toml 업데이트 실패: {exc}")
+                logger.warning(f"conf.json 업데이트 실패: {exc}")
 
             fields["badge"].set_text("기본값과 다름")
             fields["badge"].set_visibility(True)
-            ui.notify(f"'{name}' 페르소나를 저장하고 conf.toml 에 반영했습니다.", type="positive", position="bottom-right")
+            ui.notify(f"'{name}' 페르소나를 저장하고 conf.json 에 반영했습니다.", type="positive", position="bottom-right")
 
         async def _handle_reset(agent_key: str) -> None:
             async with session_factory() as db:
@@ -214,7 +214,7 @@ def create_personas_page() -> None:
             fields["role"].value = base.role
             fields["system_prompt"].value = base.system_prompt
             fields["badge"].set_visibility(False)
-            ui.notify("conf.toml 기본값으로 되돌렸습니다.", type="info", position="bottom-right")
+            ui.notify("conf.json 기본값으로 되돌렸습니다.", type="info", position="bottom-right")
 
 
 def _build_agent_card(
@@ -241,7 +241,7 @@ def _build_agent_card(
                     ui.label(model_label).classes("text-[10px] text-slate-500 truncate")
             with ui.row().classes("items-center gap-1.5"):
                 badge = ui.badge("기본값과 다름", color="indigo-7").props("dense")
-                badge.tooltip("conf.toml 의 전역 기본값과 다른 값이 이 세션에 적용됩니다")
+                badge.tooltip("conf.json 의 전역 기본값과 다른 값이 이 세션에 적용됩니다")
                 badge.set_visibility(persona.is_customized)
                 fields["badge"] = badge
                 if agent_key == "orchestrator":
@@ -274,7 +274,7 @@ def _build_agent_card(
                     ui.button("기본값으로", icon="restart_alt", on_click=on_reset).props(
                         "flat dense color=slate-4"
                     ).classes("text-xs").tooltip(
-                        f"conf.toml 값으로 되돌립니다 ({default_persona.name})"
+                        f"conf.json 값으로 되돌립니다 ({default_persona.name})"
                     )
                     ui.button("저장", icon="save", on_click=on_save).props(
                         "unelevated dense color=indigo-6"
