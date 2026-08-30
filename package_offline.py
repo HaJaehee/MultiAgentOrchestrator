@@ -11,6 +11,7 @@
     ├── mcp_node/            filesystem / memory / sequential-thinking MCP 서버
     ├── mcp_servers/         포크한 MCP 서버 원본 (memory: 대화별 지식 그래프)
     ├── mcp_sandbox/         AirgappedPySandbox (Python 코드 실행 MCP 서버)
+    ├── docs/                사용 설명서 (마크다운 원본 + 렌더링된 HTML)
     ├── workspace/           에이전트 공용 작업 공간
     └── run_offline.bat|ps1  실행 스크립트 (MCP 경로 환경변수 자동 주입)
 
@@ -139,6 +140,8 @@ def stage_sources() -> None:
         raise FileNotFoundError("conf.json / conf.example.json 을 찾을 수 없습니다.")
     shutil.copy2(conf_src, STAGING_DIR / "conf.json")
 
+    stage_docs()
+
     # 에이전트 공용 작업 공간 (filesystem / git / sandbox MCP 가 공유)
     workspace = STAGING_DIR / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -158,6 +161,48 @@ def stage_sources() -> None:
             print("      workspace 를 git 저장소로 초기화 완료.")
     except Exception as exc:
         print(f"      [경고] workspace git 초기화 실패: {exc}")
+
+
+def stage_docs() -> None:
+    """사용 설명서를 담고, HTML 로 미리 렌더링해 둡니다.
+
+    폐쇄망에서는 저장소도 위키도 열 수 없습니다. 설명서가 설치본과 같이 다녀야
+    하고, 받는 쪽이 아무것도 실행하지 않아도 읽을 수 있어야 합니다. 그래서
+    마크다운 원본과 함께 `docs/user_manual_html/index.html` 을 미리 만들어
+    둡니다 (원본이 있으므로 대상에서 다시 렌더링할 수도 있습니다).
+
+    렌더링에 실패해도 번들 생성을 막지 않습니다. 설명서는 앱이 도는 데 필요한
+    것이 아니고, 원본 마크다운은 이미 담겼습니다.
+    """
+    src_docs = ROOT_DIR / "docs"
+    if not (src_docs / "user_manual").is_dir():
+        print("      docs/user_manual 이 없어 설명서를 건너뜁니다.")
+        return
+
+    target = STAGING_DIR / "docs"
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+
+    shutil.copytree(src_docs / "user_manual", target / "user_manual",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    renderer = src_docs / "render_user_manual.py"
+    if renderer.is_file():
+        shutil.copy2(renderer, target / renderer.name)
+
+    if not renderer.is_file():
+        return
+    try:
+        subprocess.run(
+            [sys.executable, str(renderer),
+             "--src", str(target / "user_manual"),
+             "--out", str(target / "user_manual_html"), "--clean"],
+            check=True, capture_output=True,
+        )
+        print("      사용 설명서를 HTML 로 렌더링했습니다: docs/user_manual_html/index.html")
+    except (subprocess.CalledProcessError, OSError) as exc:
+        # 설명서는 앱 구동에 필요하지 않습니다. 원본은 이미 담겼습니다.
+        print(f"      [경고] 설명서 HTML 렌더링 실패 (원본은 담았습니다): {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -674,6 +719,14 @@ def write_launchers(has_node: bool, has_sandbox: bool, target_dir: Optional[Path
         "---\r\n\r\n"
         "## ⚙️ 설정 커스텀\r\n"
         "- `conf.json`: 에이전트 목록, 프롬프트, 라운드 수, MCP 서버 설정.\r\n"
+        "\r\n"
+        "## 📖 사용 설명서\r\n\r\n"
+        "`docs/user_manual_html/index.html` 을 브라우저로 열면 됩니다 (인터넷 불필요). "
+        "기술 스택, 핵심 기술, 워크플로우, 레퍼런스가 정리되어 있습니다.\r\n\r\n"
+        "마크다운 원본은 `docs/user_manual/` 에 있고, 고친 뒤 아래로 다시 렌더링할 수 있습니다.\r\n"
+        "```\r\n"
+        "python docs\\render_user_manual.py\r\n"
+        "```\r\n"
         "- `.env`: LLM API 키(폐쇄망 로컬 LLM / Ollama / vLLM 주소 등) 설정.\r\n"
         "- `workspace/`: 에이전트가 파일을 읽고 쓰는 공용 작업 공간. filesystem · git · sandbox MCP 가 "
         "이 디렉터리를 공유합니다.\r\n"

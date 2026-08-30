@@ -15,7 +15,7 @@
 | :--- | :--- | :--- |
 | 언제 | 최초 반입, 런타임 버전 업 | 코드만 고쳤을 때 |
 | 크기 | 수백 MB | 수백 KB |
-| 포함 | 런타임 전부 + 소스 | 소스만 |
+| 포함 | 런타임 전부 + 소스 + 설명서 | 소스 + 설명서 |
 | 심사 | 전체를 처음부터 | 바뀐 것만 |
 
 런타임은 한 번 반입하면 버전을 올릴 때까지 그대로 씁니다. 코드만 고쳤을 때
@@ -45,6 +45,7 @@ MultiAgentOrchestrator_bundle/
 ├── mcp_node/               filesystem / memory / sequential-thinking
 ├── mcp_servers/            포크한 MCP 서버 원본
 ├── mcp_sandbox/            AirgappedPySandbox
+├── docs/                   사용 설명서 (마크다운 + 렌더링된 HTML)
 ├── workspace/              작업 공간 (git 초기화됨)
 └── run_offline.bat|ps1     실행 스크립트
 ```
@@ -104,6 +105,7 @@ MultiAgentOrchestrator_source/
 ├── app/                          애플리케이션 소스 (통째로 교체)
 ├── mcp_servers/                  포크한 MCP 서버 원본
 ├── mcp_node/memory-scoped.mjs    그 실행 사본
+├── docs/                         사용 설명서 (마크다운 원본 + 렌더러)
 ├── conf.example.json             설정 템플릿
 ├── .env.example
 ├── requirements.txt
@@ -112,6 +114,32 @@ MultiAgentOrchestrator_source/
 ├── README.md
 └── MANIFEST.txt                  파일별 SHA-256
 ```
+
+### 설명서는 어떻게 담기는가
+
+두 패키지 모두 `docs/` 를 담습니다. 폐쇄망에서는 저장소도 위키도 열 수 없으므로
+설명서가 설치본과 같이 다녀야 합니다.
+
+| | 마크다운 원본 | 렌더링된 HTML |
+| :--- | :--- | :--- |
+| 전체 번들 | 담김 | **미리 렌더링해서 담김** |
+| 소스 갱신 패키지 | 담김 | 담기지 않음 (대상에서 렌더러 실행) |
+
+전체 번들은 받는 쪽이 아무것도 실행하지 않아도 읽을 수 있어야 하므로
+`docs/user_manual_html/index.html` 을 패키징 시점에 만들어 둡니다. 소스 갱신
+패키지에는 원본만 담고, 필요하면 대상에서 한 번 돌립니다.
+
+```bash
+python docs/render_user_manual.py
+```
+
+**렌더링에 실패해도 번들 생성을 막지 않습니다.** 설명서는 앱이 도는 데 필요한
+것이 아니고, 원본 마크다운은 이미 담겼습니다.
+
+렌더러는 표준 라이브러리만 쓰고 산출물에 외부 요청이 하나도 없습니다 — 문서를
+보려고 의존성을 들이거나 CDN 을 부를 수 없는 환경이 이 프로젝트의 전제입니다.
+
+---
 
 ### 허용 목록으로 짜는 이유
 

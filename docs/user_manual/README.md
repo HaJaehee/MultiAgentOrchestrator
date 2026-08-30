@@ -90,6 +90,10 @@ python docs/render_user_manual.py
 
 ## 관련 문서
 
-- [README.md](../../README.md) — 저장소 최상위 안내 (설치, 기능 요약)
-- [wiki/](../../wiki/README.md) — 영문 기술 위키 (설계 배경과 세부 구현)
-- [CLAUDE.md](../../CLAUDE.md) — 프로젝트 명세서
+- [README.md](../../README.md) — 저장소 최상위 안내 (설치, 기능 요약).
+  배포 패키지에도 함께 담깁니다.
+- `wiki/` — 영문 기술 위키 (설계 배경과 세부 구현). **개발 저장소에만** 있습니다.
+- `CLAUDE.md` — 프로젝트 명세서. **개발 저장소에만** 있습니다.
+
+이 설명서는 배포 패키지에 함께 담기므로, 폐쇄망 설치본에서도 그대로 읽을 수
+있습니다. → [폐쇄망 배포](04-workflows/05-airgap-deployment.md)

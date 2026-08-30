@@ -676,6 +676,7 @@ python package_source.py   # dist/MultiAgentOrchestrator_source_YYYYMMDD.zip (�
 | `app/`, `mcp_servers/` | `python_runtime/`, `node_runtime/`, `wheels/`, `mcp_sandbox/` |
 | `mcp_node/memory-scoped.mjs` (포크한 서버의 실행 사본) | `workspace/`, `multiagent.db`, `conf.json` |
 | `conf.example.json`, `.env.example`, `requirements.txt` | `tests/`, `wiki/`, `CLAUDE.md` |
+| `docs/` (사용 설명서 마크다운 + 렌더러) | `docs/user_manual_html/` (렌더링 산출물) |
 | `setup_mcp.py`, `open_browser.py`, `README.md` | 패키징 스크립트 (`package_*.py|ps1`) |
 
 포함 목록은 제외 목록이 아니라 **허용 목록**입니다. 제외 목록으로 짜면 나중에 생긴 디렉터리가

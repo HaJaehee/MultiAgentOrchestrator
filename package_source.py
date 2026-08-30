@@ -12,6 +12,7 @@ MCP 서버 설치본까지 들고 있어 수백 MB 입니다. 그 런타임은 �
         ├── app/                      애플리케이션 소스 (통째로 교체)
         ├── mcp_servers/              포크한 MCP 서버 원본
         ├── mcp_node/memory-scoped.mjs  그 실행 사본 (설치본의 것을 바로 갈아끼움)
+        ├── docs/                     사용 설명서 (마크다운 원본 + HTML 렌더러)
         ├── conf.example.json         설정 템플릿
         ├── .env.example
         ├── requirements.txt
@@ -57,12 +58,17 @@ PACKAGE_NAME = "MultiAgentOrchestrator_source"
 # --- 무엇을 담는가 (허용 목록) -------------------------------------------------
 
 # mcp_servers/ 는 포크한 MCP 서버 원본입니다 (실행 사본은 앱이 mcp_node 에 놓습니다).
-SOURCE_DIRS = ["app", "mcp_servers"]
+#
+# docs/ 는 사용 설명서입니다. 마크다운 원본과 렌더러만 담고 HTML 산출물
+# (docs/user_manual_html/)은 뺍니다 — 생성물이고, 대상에서 렌더러를 한 번 돌리면
+# 나옵니다. 폐쇄망에서는 위키나 저장소를 열 수 없으므로 설명서가 설치본과 같이
+# 다녀야 합니다.
+SOURCE_DIRS = ["app", "mcp_servers", "docs"]
 
 # (원본 경로, 패키지 안에서의 경로). 대부분 루트 파일이지만, 설치본의 같은
 # 자리에 바로 놓여야 하는 파일은 하위 경로로 넣습니다.
 #
-# 여기 없는 것들: 이 패키지는 **돌아가는 앱을 갱신하는 데 필요한 것만** 담습니다.
+# 여기 없는 것들: 이 패키지는 **돌아가는 앱을 갱신하고 쓰는 데 필요한 것만** 담습니다.
 # 테스트·위키·CLAUDE.md 는 개발 저장소에 있고, 패키징 스크립트는 만드는 쪽 도구이며,
 # conf.json 은 그 망의 실제 엔드포인트가 들어 있어 반입 대상이 아닙니다.
 PACKAGE_FILES: list[tuple[str, str]] = [
@@ -91,6 +97,9 @@ FORBIDDEN_NAMES = {
     "python_runtime", "node_runtime", "wheels", "wheelhouse", "vendor",
     "mcp_node", "mcp_sandbox", "workspace", "dist", "build",
     ".git", ".venv", "venv", "env", "node_modules",
+    # 설명서 HTML 은 렌더러가 만드는 산출물입니다. 원본과 함께 담으면 같은 내용을
+    # 두 번 반입 심사받게 되고, 둘이 어긋나면 어느 쪽이 정본인지 알 수 없습니다.
+    "user_manual_html",
 }
 
 # 반입 심사 전에 걸러야 할 것들. conf.json 은 gitignore 대상이라
