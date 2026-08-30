@@ -82,6 +82,10 @@ MultiAgentOrchestrator/
 ├── .env.example              # 환경 변수 템플릿
 ├── requirements.txt          # 파이썬 의존성 패키지
 ├── README.md                 # 프로젝트 문서
+├── docs/                     # 사용 설명서 (한국어)
+│   ├── user_manual/          # 마크다운 원본 (기술 스택 · 핵심 기술 · 워크플로우)
+│   ├── user_manual_html/     # HTML 렌더링 산출물 (.gitignore 대상)
+│   └── render_user_manual.py # 마크다운 → 정적 HTML 렌더러 (표준 라이브러리만)
 ├── mcp_node/                 # 공식 Node MCP 서버 (npm install 로 생성, .gitignore 대상)
 ├── mcp_sandbox/              # AirgappedPySandbox (git clone 으로 생성, .gitignore 대상)
 ├── workspace/                # 에이전트 공용 작업 공간 (.gitignore 대상)
@@ -187,6 +191,26 @@ python -m app.main
 ```bash
 pytest -v tests/
 ```
+
+---
+
+## 📚 문서 (Documentation)
+
+| 위치 | 언어 | 내용 |
+|------|------|------|
+| [`docs/user_manual/`](docs/user_manual/README.md) | 한국어 | **사용 설명서** — 기술 스택, 핵심 기술(모듈별 원리), 워크플로우, 레퍼런스 |
+| [`wiki/`](wiki/README.md) | 영어 | 기술 위키 — 설계 배경과 세부 구현 |
+| `CLAUDE.md` | 한국어 | 프로젝트 명세서 |
+
+사용 설명서를 HTML 로 보려면:
+
+```bash
+python docs/render_user_manual.py
+```
+
+`docs/user_manual_html/index.html` 이 생성됩니다. 사이드바에 문서 트리가 붙고,
+문서 사이의 링크가 그대로 이어집니다. 렌더러는 **표준 라이브러리만** 쓰고
+산출물에 외부 요청이 하나도 없어, 폐쇄망으로 폴더째 옮겨도 그대로 열립니다.
 
 ---
 

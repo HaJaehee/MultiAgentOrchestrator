@@ -11,6 +11,8 @@ conf.toml.bak
 
 # --- Build & packaging output ---
 dist/
+# 사용 설명서 HTML (docs/render_user_manual.py 가 생성)
+docs/user_manual_html/
 build/
 *.egg-info/
 *.spec

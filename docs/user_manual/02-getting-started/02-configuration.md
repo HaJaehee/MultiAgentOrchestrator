@@ -1,0 +1,291 @@
+# conf.json 설정
+
+> 상위: [시작하기](README.md) · 이전: [설치와 첫 실행](01-installation.md)
+
+`conf.json` 은 이 시스템의 **배포 설정 정본**입니다. 에이전트, 모델, 엔드포인트,
+자격증명, 도구 권한, 발언 순서, MCP 서버가 전부 여기 있습니다.
+
+구현 원리는 [설정 레이어](../03-core/01-config-layer.md)를 보세요. 이 문서는
+"무엇을 어떻게 적는가" 입니다.
+
+---
+
+## 전체 구조
+
+```json
+{
+  "app":         { },
+  "llm":         { "sequential_thinking": { } },
+  "mcp_servers": { "<서버이름>": { } },
+  "agents":      { "<에이전트키>": { "sequential_thinking": { } } }
+}
+```
+
+---
+
+## JSON 에 없는 두 가지 규칙
+
+### 주석 — `//` 로 시작하는 키
+
+JSON 에는 주석 문법이 없습니다. 이 프로젝트는 **키가 `//` 로 시작하면 설명으로
+보고 읽을 때 걷어냅니다.** 값은 문자열 하나 또는 문자열 배열(여러 줄)입니다.
+
+```json
+"// filesystem": [
+  "공용 작업 공간 파일 I/O (공식 서버, 툴 14종).",
+  "지정한 디렉터리 밖 경로는 서버가 자체적으로 차단합니다."
+],
+"filesystem": { "command": "${NODE_BIN:-node}", "enabled": true }
+```
+
+설명이 데이터의 일부이므로, 화면에서 에이전트를 추가·삭제해도 그대로 남습니다.
+
+### 여러 줄 글 — 문자열 배열
+
+`system_prompt` 와 `prompt_template` 은 문자열 배열로 적을 수 있고, 읽을 때
+줄바꿈으로 이어 붙입니다. `\n` 이스케이프 한 줄로 뭉개지면 사람이 못 읽습니다.
+
+```json
+"system_prompt": [
+  "당신은 수석 소프트웨어 아키텍트입니다.",
+  "확장성과 유지보수성을 고려하여 구조를 제안하세요."
+]
+```
+
+---
+
+## `app` — 서버 기동
+
+```json
+"app": {
+  "host": "${APP_HOST:-${HOST:-127.0.0.1}}",
+  "port": "${APP_PORT:-${PORT:-8000}}",
+  "db_url": "${APP_DB_URL:-sqlite+aiosqlite:///./multiagent.db}",
+  "debug": true
+}
+```
+
+| 키 | 타입 | 기본값 | 설명 |
+| :--- | :--- | :--- | :--- |
+| `host` | str | `127.0.0.1` | Uvicorn 바인딩 주소 |
+| `port` | int | `8000` | HTTP 포트 (문자열로 적어도 정수로 변환) |
+| `db_url` | str | `sqlite+aiosqlite:///./multiagent.db` | 비동기 SQLAlchemy URL |
+| `debug` | bool | `true` | 자동 재시작 + 상세 DB 로깅 |
+
+---
+
+## `llm` — 전역 LLM 기본값
+
+여기 적은 값은 각 에이전트가 같은 키를 **직접 지정하지 않는 한** 전부에게
+상속됩니다. 사내 게이트웨이나 로컬 서버를 쓸 때는 이 한 곳만 고치면 됩니다.
+
+| 키 | 타입 | 기본값 | 설명 |
+| :--- | :--- | :--- | :--- |
+| `model` | str | `openai/gpt-4o` | LiteLLM 형식 `<provider>/<model>` |
+| `api_base` | str | – | 엔드포인트 URL. `api_url` / `base_url` 로 적어도 동일 |
+| `api_key` | str | – | 로컬 모델이면 비워도 됩니다 |
+| `api_version` | str | – | Azure OpenAI 전용 |
+| `provider` | str | – | LiteLLM provider 강제 지정 |
+| `temperature` | float | `0.4` | 0.0 ~ 2.0 |
+| `top_p` | float | – | 뉴클리어스 샘플링 |
+| `max_tokens` | int | `4096` | 응답 토큰 상한 |
+| `max_context_window` | int | `128000` | **엔드포인트의 실제 한도로 맞추세요** |
+| `timeout` | float | `120` | 요청 타임아웃(초) |
+| `num_retries` | int | `2` | 재시도 횟수 |
+| `drop_params` | bool | `true` | 엔드포인트가 모르는 파라미터 자동 제거 |
+| `max_tool_iterations` | int | `30` | 한 턴의 MCP 도구 루프 상한 (1~50) |
+| `extra_headers` | dict | `{}` | 커스텀 HTTP 헤더 |
+| `extra_body` | dict | `{}` | 커스텀 JSON 바디 필드 |
+
+> **`max_context_window` 주의.** 전사(대화 기록)가 이 값에 맞춰 잘립니다.
+> 실제보다 크게 잡으면 잘리지 않은 채 나가 엔드포인트가 400 을 돌려줍니다.
+
+### 상속 규칙
+
+- 에이전트가 값을 비워 두거나(`${VAR}` 가 빈 문자열로 풀린 경우) 아예 적지 않으면 `llm` 에서 상속합니다
+- 별칭 그룹 중 하나만 적어도 그룹 전체를 덮어씁니다: `api_base`/`api_url`/`base_url`, `provider`/`custom_llm_provider`
+
+---
+
+## `llm.sequential_thinking` — 단계적 사고
+
+```json
+"sequential_thinking": {
+  "enabled": true,
+  "mode": "prompt",
+  "max_steps": 5,
+  "show_steps": true
+}
+```
+
+| mode | 동작 | 적용 대상 |
+| :--- | :--- | :--- |
+| `prompt` | 단계적 사고 프로토콜을 시스템 프롬프트에 주입 | 모든 모델 (로컬 포함) |
+| `native` | `reasoning_effort` / `thinking` 파라미터를 실제 요청에 전달 | 추론 지원 모델 |
+| `mcp` | sequential-thinking MCP 서버 도구를 강제 사용 | 해당 서버 활성화 필요 |
+
+`show_steps: false` 면 최종 결론만 피드에 노출하고 사고 과정은 접어둡니다.
+`native` 모드 추가 항목은 `reasoning_effort`(`minimal`|`low`|`medium`|`high`)와
+`thinking_budget_tokens` 입니다.
+
+에이전트의 `sequential_thinking` 은 전역 값과 **키 단위로 병합**되므로, 바꾸고
+싶은 항목만 적으면 됩니다.
+
+---
+
+## `mcp_servers` — 도구 서버
+
+```json
+"filesystem": {
+  "command": "${NODE_BIN:-node}",
+  "args": [
+    "${MCP_NODE_HOME:-./mcp_node}/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
+    "${WORKSPACE_DIR:-./workspace}"
+  ],
+  "enabled": true
+}
+```
+
+| 키 | 타입 | 기본값 | 설명 |
+| :--- | :--- | :--- | :--- |
+| `command` | str | 필수 | 실행 명령 (`node`, `python` 등) |
+| `args` | list[str] | `[]` | 인자 |
+| `env` | dict[str,str] | `{}` | 자식 프로세스 환경변수 |
+| `enabled` | bool | `true` | `false` 면 기동하지 않습니다 |
+
+기본 구성에 들어 있는 서버는 [MCP 호스트](../03-core/04-mcp-host.md#기본-구성-서버)를 보세요.
+
+---
+
+## `agents` — 에이전트 정의
+
+```json
+"architect": {
+  "name": "System Architect",
+  "role": "High-Level Architecture & Tech Stack",
+  "model": "${ARCHITECT_MODEL:-${LLM_MODEL:-anthropic/claude-3-5-sonnet-20241022}}",
+  "api_base": "${ARCHITECT_API_BASE}",
+  "api_key": "${ANTHROPIC_API_KEY}",
+  "temperature": 0.5,
+  "debate_priority": 20,
+  "debate_stance": "proponent",
+  "allowed_mcp_servers": ["filesystem", "memory", "fetch"],
+  "system_prompt": [
+    "당신은 수석 소프트웨어 아키텍트입니다.",
+    "시스템 아키텍처 설계, 모듈 분리, 기술 스택 선정을 전담합니다."
+  ]
+}
+```
+
+| 키 | 타입 | 기본값 | 설명 |
+| :--- | :--- | :--- | :--- |
+| `name` | str | 필수 | 화면에 뜨는 이름 |
+| `role` | str | 필수 | 역할 |
+| `enabled` | bool | `true` | `false` 면 풀에 등록되지 않습니다 |
+| `allowed_mcp_servers` | list[str] | `[]` | 이 에이전트가 호출할 수 있는 MCP 서버 |
+| `debate_priority` | int | `100` | 라운드 안의 발언 순서. 낮을수록 먼저. 같으면 파일 순서 |
+| `debate_stance` | str | `neutral` | `proponent` / `critic` / `neutral`. 디베이트 전략에서만 사용 |
+| `system_prompt` | str \| list[str] | `""` | 기본 페르소나 |
+| 그 외 LLM 항목 | – | `llm` 상속 | `model`, `api_base`, `temperature` … |
+
+**`orchestrator` 키는 필수입니다.** 없으면 설정 검증에서 거부되고, 끄거나 지울
+수도 없습니다 — 토론 진행과 최종 합성을 맡기 때문입니다.
+
+---
+
+## 환경변수 치환
+
+모든 문자열 값에 적용됩니다.
+
+| 문법 | 동작 |
+| :--- | :--- |
+| `${VAR}` | 없으면 빈 문자열 → "미설정" 으로 간주되어 상속 |
+| `${VAR:-기본값}` | 없으면 기본값 |
+| `${A:-${B:-기본값}}` | 중첩 가능 |
+
+특별 취급되는 변수:
+
+| 변수 | 용도 |
+| :--- | :--- |
+| `PYTHON_BIN` | 파이썬 MCP 서버 실행기. 미지정 시 **앱과 같은 인터프리터**(`sys.executable`)로 자동 설정 |
+| `NODE_BIN` | Node 실행기 (기본 `node`) |
+| `MCP_NODE_HOME` | Node MCP 서버 위치 (기본 `./mcp_node`) |
+| `MCP_SANDBOX_HOME` | 샌드박스 위치 (기본 `./mcp_sandbox`) |
+| `WORKSPACE_DIR` | 공용 작업 공간. **기동 시 절대 경로로 정규화**됩니다 |
+
+`WORKSPACE_DIR` 을 절대 경로로 고정하는 이유: filesystem(node)과 sandbox(python)는
+서로 다른 프로세스이고 각자의 cwd 로 상대 경로를 풉니다. 그대로 두면 "같은
+`./workspace` 를 줬는데 두 서버가 다른 폴더를 본다" 가 됩니다.
+
+---
+
+## 엔드포인트 설정 예시
+
+### 사내 OpenAI 호환 게이트웨이
+
+```json
+"llm": {
+  "model": "openai/qwen2.5-coder-32b",
+  "api_base": "https://llm-gateway.mycorp.com/v1",
+  "api_key": "${CORP_LLM_TOKEN}",
+  "extra_headers": { "X-Team": "platform" }
+}
+```
+
+### Ollama (API 키 불필요)
+
+```json
+"model": "ollama_chat/qwen2.5-coder:14b",
+"api_base": "http://localhost:11434"
+```
+
+### LM Studio / vLLM
+
+```json
+"model": "openai/local-model",
+"api_base": "http://localhost:1234/v1",
+"api_key": "lm-studio"
+```
+
+### Azure OpenAI
+
+```json
+"model": "azure/my-gpt4o-deployment",
+"api_base": "https://my-resource.openai.azure.com",
+"api_version": "2024-10-21",
+"api_key": "${AZURE_OPENAI_API_KEY}"
+```
+
+---
+
+## 호출 모드 판정
+
+에이전트가 실제 LLM 을 부르는지(`is_live`)는 이렇게 정해집니다.
+
+1. `api_base` 가 있으면 → live
+2. `api_key` 가 있으면 → live
+3. 모델이 `ollama/`, `ollama_chat/`, `lm_studio/` 로 시작하면 → live
+4. 그 외 → **unconfigured**. 발언 차례에 실패하고 기록에 남습니다
+
+---
+
+## 편집 시 주의
+
+- 화면(로스터 패널)에서 고친 값도 이 파일에 기록됩니다. 앱이 도는 중에 편집기로
+  직접 고쳤다면 **conf.json 다시 읽기** 버튼을 누르세요
+- 진행 중인 토론이 있으면 화면에서의 편집이 잠깁니다
+- 문법 오류는 **줄 번호와 칸**이 찍힌 메시지로 보고됩니다
+- 첫 화면 편집 시 템플릿의 빈 줄이 정규화되어 사라집니다 (값과 설명은 그대로)
+
+---
+
+## 관련 문서
+
+- [설정 레이어](../03-core/01-config-layer.md) — 로더/기록기 구현 원리
+- [로스터 편집](../04-workflows/03-roster-editing.md) — 화면에서 설정 고치기
+- [LLM 통합](../03-core/03-llm-integration.md) — 이 값들이 실제 호출에 쓰이는 방식
+- [MCP 호스트](../03-core/04-mcp-host.md) — MCP 서버 구성
+
+---
+
+> 다음 섹션: [핵심 기술 개관](../03-core/README.md)

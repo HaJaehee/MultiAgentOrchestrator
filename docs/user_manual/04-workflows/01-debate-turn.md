@@ -1,0 +1,227 @@
+# 토론 한 턴의 생애주기
+
+> 상위: [워크플로우 개관](README.md) · 다음: [세션 생애주기](02-session-lifecycle.md)
+>
+> 구현 원리는 [오케스트레이션 엔진](../03-core/05-orchestration-engine.md)
+
+사용자가 메시지를 보내고 산출물이 나오기까지, 시간 순서대로.
+
+---
+
+## 전체 그림
+
+```text
+ 사용자 입력
+     │
+ ┌───▼────────────────────────────────────────────────┐
+ │ 0. 준비                                             │
+ │    세션 로드 · 작업 공간 적용 · 페르소나 잠금 · 기록 로드│
+ └───┬────────────────────────────────────────────────┘
+     │
+ ┌───▼──────────────┐
+ │ 1. 계획 (round 0) │  오케스트레이터가 목표를 분해
+ └───┬──────────────┘
+     │
+ ┌───▼──────────────────────────────────────┐
+ │ 2. 라운드 루프 (1 .. max_rounds)          │
+ │      발언자 결정 → 각자 발언 (도구 사용)   │
+ │      매 발언 사이에 정지·개입 확인          │
+ └───┬──────────────────────────────────────┘
+     │
+ ┌───▼──────────────┐
+ │ 3. 합성           │  전체를 종합 → 코드 블록을 아티팩트로
+ └───┬──────────────┘
+     │
+ ┌───▼──────────────┐
+ │ 4. 완료 판정       │  is_consensus_reached
+ └──────────────────┘
+```
+
+---
+
+## 0. 준비
+
+```text
+DebateRunner.start(session_id, prompt)
+   │
+   ├─ 다른 작업 공간에서 토론 중인가? ──▶ WorkspaceConflictError (시작 거부)
+   │
+   ├─ asyncio.Task 생성 (브라우저와 무관하게 계속 돎)
+   │
+   └─ engine.run_turn()
+        ├─ 세션 로드         전략, max_rounds, active_agents, 커스텀 지침
+        ├─ 전략 이름 정규화   옛 이름(free_debate 등)을 지금 이름으로
+        ├─ 작업 공간 적용     경로가 다르면 MCP 서버 재기동
+        ├─ prepare_agents_for_turn()   ◀── 첫 턴이면 여기서 페르소나·구성 잠금
+        └─ 이전 대화 기록 로드 (맥락 보존)
+```
+
+사용자 메시지가 DB 에 기록되는 순간 `personas_locked = True` 가 됩니다.
+→ [세션 생애주기](02-session-lifecycle.md)
+
+---
+
+## 1. 계획 (round 0)
+
+오케스트레이터가 목표를 분해하고 각 전문가에게 줄 지침을 씁니다.
+
+**이전 대화가 있으면** 최근 6개 발언을 250자씩 요약해 함께 넘깁니다.
+
+```text
+[이전 대화 맥락]:
+System Architect(High-Level Architecture): 이벤트 소싱 대신 CRUD 로 시작하고...
+Senior Python Engineer(Implementation): FastAPI 라우터를 도메인별로 나누되...
+
+[신규 User Request]:
+인증을 JWT 로 바꿔 주세요
+
+위의 이전 세션 논의 맥락과 새로운 사용자 요청을 종합 분석하여
+이번 토론의 핵심 목표, 접근 방향, 각 에이전트에게 부여할 발언 지침을 작성하세요.
+```
+
+에러로 기록된 발언(`msg_type == "error"`)은 맥락에서 제외합니다 — 연결 실패
+알림은 토론 내용이 아닙니다.
+
+계획 발언과 첫 라운드 사이도 **개입이 반영되는 지점**입니다.
+
+---
+
+## 2. 라운드 루프
+
+```text
+for round_num in 1..max_rounds:
+    │
+    ├─ 정지 요청? ──▶ 루프 탈출 (stopped_early = True)
+    │
+    ├─ 발언자 결정
+    │    · 보통: 전략이 결정적으로 (debate_priority 순 / 진영 교대)
+    │    · orchestrator_led: 오케스트레이터에게 물어봄
+    │         실패하면 우선순위 순서로 물러서고 그 사실을 피드에 기록
+    │
+    └─ for index, agent in speakers:
+         │
+         ├─ 정지 요청? ──▶ 탈출
+         ├─ 개입 메모? ──▶ 사용자 발언으로 맥락에 삽입
+         │
+         ├─ 맥락 조립
+         │    시스템 프롬프트 (페르소나 + 사고 프로토콜 + 세션 지침)
+         │    + 지금까지의 전사
+         │    + 전략 지침 (turn_instruction)
+         │
+         ├─ LLM 호출 (스트리밍)
+         │    └─ 도구 루프: tool_calls 있으면 MCP 실행 → 결과를 맥락에 추가
+         │                  최대 max_tool_iterations (기본 30)
+         │
+         ├─ 성공 → 발언 저장 · 이벤트 발행 (화면에 실시간 표시)
+         │  실패 → 연결 끊김 알림을 발언 자리에 기록
+         │          failed_agent_keys 에 추가
+         │
+         └─ 도구 실행 기록을 DB 에 저장 (message_id 로 연결)
+```
+
+### 발언 하나에 붙는 지침 (순차 토론 예시)
+
+```text
+[순차 토론] 바로 앞 순서인 System Architect(High-Level Architecture)의 발언을
+입력으로 받아 이어가세요. 새 주제를 여는 대신, 그 결론이 옳은지 당신의 전문
+영역에서 검증하고 필요한 부분을 보강하거나 반증하세요.
+```
+
+이 지침이 없으면 라운드가 독백 세 개가 됩니다.
+→ [토론 전략](../03-core/06-debate-strategies.md)
+
+---
+
+## 3. 합성
+
+```text
+_build_synthesis_prompt(state, orchestrator)
+   │
+   │  전체 전사
+   │  + 도구 실행 결과
+   │  + 발언하지 못한 에이전트 목록      ← "없는 의견"을 지어내지 않도록
+   │  + 조기 중단 여부                   ← "덜 논의된 상태"를 알고 쓰도록
+   │
+   │  컨텍스트 한도에 맞춰 자르되, 산출물 형식 지시문은 반드시 남김
+   ▼
+오케스트레이터 호출
+   ▼
+_extract_artifacts_from_synthesis()
+   │  ``` 로 감싼 코드 블록을 파싱
+   │  language 로 종류 판정
+   ▼
+ArtifactModel 로 DB 저장
+```
+
+| language | artifact_type |
+| :--- | :--- |
+| `mermaid` | `mermaid` |
+| `python`, `py`, `typescript`, `javascript`, `bash`, `shell`, `json`, `toml`, `sql` | `code` |
+| 그 외 / 없음 | `markdown` |
+
+합성 자체가 실패하면(오케스트레이터도 엔드포인트에 못 닿음) 아티팩트를 만들지
+않고 실패를 기록합니다.
+
+---
+
+## 4. 완료 판정
+
+```python
+state.is_consensus_reached = not state.failed_agent_keys and not state.stopped_early
+```
+
+**실패한 에이전트가 없고, 사용자가 도중에 끊지도 않았을 때만** 합의로 칩니다.
+세 명 중 두 명이 침묵했는데 "합의 도달" 로 표시되면 기록을 믿을 수 없습니다.
+
+```python
+if state.failed_agent_keys:
+    state.error_message = ("다음 에이전트가 LLM 엔드포인트에 닿지 못했습니다: "
+                           + ", ".join(state.failed_agent_keys))
+```
+
+### 합성 후에 도착한 개입
+
+합성이 시작된 뒤 도착한 개입 메모는 이번 턴에 실을 자리가 없습니다. 그대로
+버리면 화면은 "다음 발언 차례에 반영됩니다" 라고 알린 채 턴이 끝나 버립니다.
+**기록에 남겨 두면 다음 턴이 맥락으로 읽어 갑니다** (`interjections_deferred`).
+
+---
+
+## 화면에 도달하는 이벤트
+
+| 이벤트 | 시점 |
+| :--- | :--- |
+| `status_changed` | planning / debating / synthesizing 전환 |
+| `message_started` / `message_chunk` / `message_completed` | 발언 스트리밍 |
+| `tool_call` | MCP 도구 실행 |
+| `interjections_deferred` | 개입이 다음 턴으로 미뤄짐 |
+| `artifacts_synthesized` | 산출물 생성 |
+| `turn_completed` | 턴 종료 (실패 목록·라운드 수 포함) |
+
+이벤트는 `TurnRun` 이 두 갈래로 보냅니다: **정본 스냅샷**(새로 붙는 화면이
+그대로 그림)과 **구독 큐**(화면당 하나, 죽으면 큐만 버림).
+
+---
+
+## 도중에 끼어들기
+
+| 조작 | 결과 |
+| :--- | :--- |
+| **정지** | 진행 중인 발언은 끝까지 받고, 남은 라운드를 건너뛰어 **합성으로 넘어감**. 산출물이 나옴 |
+| **개입 메모** | 다음 발언자의 맥락에 사용자 발언으로 삽입 |
+| **취소** (`cancel`) | 태스크를 죽임. 합성이 돌지 않아 산출물이 나오지 않음 |
+
+정지가 취소보다 나은 이유입니다.
+
+---
+
+## 관련 문서
+
+- [오케스트레이션 엔진](../03-core/05-orchestration-engine.md) — 구현 원리
+- [토론 전략](../03-core/06-debate-strategies.md) — 발언 순서 규칙
+- [LLM 통합](../03-core/03-llm-integration.md) — 도구 루프와 컨텍스트 관리
+- [산출물 생성과 내보내기](04-artifact-and-export.md) — 합성 이후
+
+---
+
+> 다음: [세션 생애주기](02-session-lifecycle.md)
