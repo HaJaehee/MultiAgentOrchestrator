@@ -126,7 +126,7 @@
   ],
   "mcp_servers": {
     "// filesystem": [
-      "공용 작업 공간 파일 I/O (공식 서버, 툴 14종).",
+      "공용 작업 공간 파일 I/O (공식 서버, 도구 14종).",
       "read_text_file / write_file / edit_file / directory_tree / search_files ...",
       "지정한 디렉터리 밖 경로는 서버가 자체적으로 차단합니다."
     ],
@@ -140,7 +140,7 @@
     },
 
     "// memory": [
-      "토론 중 합의된 사실을 지식 그래프로 축적 (툴 9종).",
+      "토론 중 합의된 사실을 지식 그래프로 축적 (도구 9종).",
       "create_entities / create_relations / add_observations / search_nodes ...",
       "라운드가 길어져 컨텍스트가 잘려도 결정 사항이 보존됩니다.",
       "",
@@ -160,7 +160,7 @@
     },
 
     "// git": [
-      "산출물 버전 관리 (공식 서버, 툴 12종).",
+      "산출물 버전 관리 (공식 서버, 도구 12종).",
       "git_status / git_diff / git_commit / git_log ... 라운드별 변화를 diff 로 추적.",
       "pip 로 설치됩니다: pip install mcp-server-git"
     ],
