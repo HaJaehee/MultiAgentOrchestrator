@@ -300,6 +300,18 @@ def _is_blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+# 한 턴에서 허용하는 MCP 도구 루프의 하드 상한.
+#
+# 실제 횟수는 에이전트마다 `max_tool_iterations` 로 정합니다 (기본 30). 이 값은
+# 그 설정이 넘어설 수 없는 선입니다 — 루프 한 번이 LLM 호출 한 번이라, 오타로
+# 큰 수가 들어가면 한 발언이 그만큼의 요금과 시간을 씁니다.
+#
+# 50 이었는데, 파일을 훑거나 저장소를 뒤지는 작업은 그 안에 못 끝내고
+# `max_tool_iterations` 소진으로 발언이 통째로 실패하는 일이 있었습니다
+# (그때까지 실행된 도구와 관측은 남지만 답변은 나오지 않습니다). 100 이면
+# 그런 작업이 들어가고, 폭주를 막는 선으로서의 역할도 그대로입니다.
+TOOL_ITERATION_CEILING = 100
+
 # 순서를 지정하지 않은 에이전트의 발언 우선순위. 전부 같은 값이라 정렬이 안정적으로
 # 유지되어 conf.json 에 적힌 순서가 그대로 나옵니다. 화면에서 순서를 바꾸면 그때
 # 10, 20, 30... 이 실제로 적힙니다 (사이에 끼워 넣을 자리를 남겨 둡니다).
@@ -337,7 +349,7 @@ class LLMConfig(BaseModel):
     )
     extra_headers: Optional[Dict[str, str]] = Field(default=None, description="Extra HTTP headers")
     extra_body: Optional[Dict[str, Any]] = Field(default=None, description="Extra JSON body fields")
-    max_tool_iterations: Optional[int] = Field(default=None, ge=1, le=50)
+    max_tool_iterations: Optional[int] = Field(default=None, ge=1, le=TOOL_ITERATION_CEILING)
     sequential_thinking: SequentialThinkingConfig = Field(default_factory=SequentialThinkingConfig)
 
 class AgentConfig(BaseModel):
@@ -370,7 +382,10 @@ class AgentConfig(BaseModel):
     )
     extra_headers: Dict[str, str] = Field(default_factory=dict, description="Extra HTTP headers")
     extra_body: Dict[str, Any] = Field(default_factory=dict, description="Extra JSON body fields")
-    max_tool_iterations: int = Field(default=30, ge=1, le=50, description="Max MCP tool-loop iterations per turn")
+    max_tool_iterations: int = Field(
+        default=30, ge=1, le=TOOL_ITERATION_CEILING,
+        description="Max MCP tool-loop iterations per turn",
+    )
     allowed_mcp_servers: List[str] = Field(
         default_factory=list, description="List of MCP server keys this agent can access"
     )

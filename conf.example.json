@@ -65,7 +65,7 @@
       "timeout             : 요청 타임아웃(초)",
       "num_retries         : 실패 시 재시도 횟수",
       "drop_params         : 엔드포인트가 지원하지 않는 파라미터는 조용히 제거 (로컬 모델 호환성↑)",
-      "max_tool_iterations : 한 턴에서 허용하는 MCP 도구 호출 루프 횟수"
+      "max_tool_iterations : 한 턴에서 허용하는 MCP 도구 호출 루프 횟수 (1~100)"
     ],
     "timeout": 120,
     "num_retries": 2,

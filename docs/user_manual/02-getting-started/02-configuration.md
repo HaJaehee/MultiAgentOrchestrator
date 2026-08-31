@@ -93,7 +93,7 @@ JSON 에는 주석 문법이 없습니다. 이 프로젝트는 **키가 `//` 로
 | `timeout` | float | `120` | 요청 타임아웃(초) |
 | `num_retries` | int | `2` | 재시도 횟수 |
 | `drop_params` | bool | `true` | 엔드포인트가 모르는 파라미터 자동 제거 |
-| `max_tool_iterations` | int | `30` | 한 턴의 MCP 도구 루프 상한 (1~50) |
+| `max_tool_iterations` | int | `30` | 한 턴의 MCP 도구 루프 상한 (1~100) |
 | `extra_headers` | dict | `{}` | 커스텀 HTTP 헤더 |
 | `extra_body` | dict | `{}` | 커스텀 JSON 바디 필드 |
 

@@ -389,6 +389,37 @@ def test_tool_iteration_default_is_consistent_everywhere():
         assert llm.get("max_tool_iterations") == 30, f"{name} 의 값이 코드 기본값과 다릅니다"
 
 
+def test_tool_iteration_ceiling_admits_long_tool_runs():
+    """설정이 올라갈 수 있는 상한.
+
+    루프 한 번이 LLM 호출 한 번이라 상한 자체는 있어야 합니다 (오타로 큰 수가
+    들어가면 발언 하나가 그만큼의 요금과 시간을 씁니다). 다만 50 은 파일을
+    훑거나 저장소를 뒤지는 작업에 모자라서, 그런 발언이 답변을 내놓지 못하고
+    한도 소진으로 실패했습니다. 두 모델(`llm` 기본값과 에이전트별 설정)이 같은
+    선을 봐야 합니다 — 한쪽만 올리면 conf.json 이 조용히 거절당합니다.
+    """
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    from app.config import TOOL_ITERATION_CEILING, AgentConfig, LLMConfig
+
+    assert TOOL_ITERATION_CEILING == 100
+
+    assert AgentConfig(
+        name="n", role="r", max_tool_iterations=TOOL_ITERATION_CEILING
+    ).max_tool_iterations == TOOL_ITERATION_CEILING
+    assert LLMConfig(
+        max_tool_iterations=TOOL_ITERATION_CEILING
+    ).max_tool_iterations == TOOL_ITERATION_CEILING
+
+    for model in (AgentConfig, LLMConfig):
+        with _pytest.raises(ValidationError):
+            kwargs = {"max_tool_iterations": TOOL_ITERATION_CEILING + 1}
+            if model is AgentConfig:
+                kwargs |= {"name": "n", "role": "r"}
+            model(**kwargs)
+
+
 @pytest.mark.asyncio
 async def test_tool_loop_runs_to_the_limit_then_fails_honestly():
     """한도를 다 쓰면 자리표시자 답변이 아니라 실패를 올려야 합니다."""

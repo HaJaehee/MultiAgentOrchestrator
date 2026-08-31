@@ -104,7 +104,7 @@ Defines system-wide defaults. Any agent that does not explicitly set an attribut
 | `timeout` | `float` | `120.0` | HTTP request timeout in seconds. |
 | `num_retries` | `int` | `2` | Number of automatic retries on network/rate-limit failure. |
 | `drop_params` | `bool` | `true` | Silently drops unsupported parameters for local model compatibility. |
-| `max_tool_iterations`| `int` | `30` | Maximum number of consecutive tool-call loops per agent turn. Exhausting it raises `LLMUnavailableError` rather than returning a placeholder answer. |
+| `max_tool_iterations`| `int` | `30` | Maximum number of consecutive tool-call loops per agent turn (1-100). Exhausting it raises `LLMUnavailableError` rather than returning a placeholder answer. |
 | `extra_headers` | `dict` | `{}` | Custom HTTP headers sent with every LLM request (e.g. gateway auth). |
 | `extra_body` | `dict` | `{}` | Custom JSON body fields sent with requests. |
 
