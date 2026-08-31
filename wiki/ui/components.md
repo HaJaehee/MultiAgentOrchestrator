@@ -89,15 +89,30 @@ The web application workspace is organized into four primary UI components in [a
   lives *outside* the scroll area: inside it, it would scroll out of view the moment a card is
   expanded, which is when it is needed most. Each phase restarts the counter, so it reads "how
   long has this speaker been going", not "how long since the turn started".
-- **Auto-scroll while streaming**: the feed follows new output only while **every** card is
-  collapsed (`ChatFeed.following`). Expanding a card is how a reader says "I am reading this",
-  and chunks keep arriving from other agents meanwhile; scrolling to the bottom on every chunk
-  would drag them off their place and undo any attempt to scroll back. Cards drawn open by the
-  renderer — a speech being streamed — do not count: only `_toggle_card()` (a real click)
-  records into `_user_expanded`, otherwise following would be off for the whole debate. While
-  paused, an amber `맨 아래로 (N개 펼침)` button in the status bar states the reason and offers a
-  one-shot jump; it never collapses the reader's cards. Collapsing the last one resumes
-  following, and finalising a stream leaves a user-expanded card open.
+- **Auto-scroll while streaming**: the feed follows new output only while `ChatFeed.following`
+  holds, which two things can revoke.
+  - **An expanded card.** Expanding is how a reader says "I am reading this", and chunks keep
+    arriving from other agents meanwhile. Cards drawn open by the renderer — a speech being
+    streamed — do not count: only `_toggle_card()` (a real click) records into
+    `_user_expanded`, otherwise following would be off for the whole debate. Finalising a
+    stream leaves a user-expanded card open, and the jump button never collapses one.
+  - **A wheel or touch gesture** on the scroll area (`_handle_manual_scroll`, bound with
+    `throttle=0.3`). Direction is deliberately ignored: judging it would re-attach every time
+    the reader nudged downward near the bottom. Watching the scroll *position* instead would
+    not work at all — our own auto-scroll moves it, so the feed would detach from itself on
+    every chunk. Without this, collapsing the last card re-armed auto-scroll and there was no
+    way to look back through output that was still pouring in.
+  While paused, an amber button in the status bar names the reason — `맨 아래로 (N개 펼침)` or
+  `맨 아래로 · 따라가기 재개` — and clicking it clears what it can: a manual scroll, never the
+  reader's open cards.
+- **Reaching the actual bottom**: scrolling uses `scroll_to(pixels=SCROLL_TO_BOTTOM_PX)` — a
+  number larger than any transcript, which the browser clamps — and never `percent=1.0`.
+  Quasar converts a percentage using its own *cached* content height, which does not yet
+  include the text that just arrived, so percent-scrolling landed a card's height short (over
+  200px, measured) and stayed there after the turn ended. The command still executes before Vue
+  patches the DOM, so a second pass runs shortly after: `_scroll_to_bottom()` raises a flag and
+  a 0.2s timer created in `build_ui()` acts on it. The timer must be created there — one made
+  inside the streaming consumer task never runs at all (verified: its callback never fired).
 - **Input Bar**: Auto-expanding message textarea with submit shortcuts (`Enter` / `Ctrl+Enter`).
 - **Failure Cards**: A message with `msg_type="error"` — an agent whose endpoint never answered — renders on a rose background with an `응답 없음` badge. `finalize_streaming_message()` restyles the card in place when a turn that had started streaming ends in failure.
 - **Reattachment**: `render_all(messages, streaming_ids=…)` rebuilds the whole feed from a

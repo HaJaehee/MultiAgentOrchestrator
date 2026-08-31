@@ -3,7 +3,7 @@
 > 상위: [레퍼런스 개관](README.md) · 이전: [프로젝트 구조](02-project-layout.md)
 
 ```bash
-pytest -q               # 전체 (277개, 약 26초)
+pytest -q               # 전체 (285개, 약 25초)
 pytest -v tests/test_config.py
 pytest -k "snapshot"
 ```

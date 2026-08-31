@@ -9,6 +9,8 @@
 글에 버튼이 하나 더 붙는 것이고, 그건 눈에 거슬리는 정도입니다.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.ui.components.chat_feed import (
@@ -151,6 +153,107 @@ def test_switching_sessions_forgets_the_expanded_cards():
     feed = _feed()
     feed._toggle_card(_card("m1"))
     assert feed.following is False
+
+    feed.clear()
+
+    assert feed.following is True
+
+
+# --------------------------------------------------------------- 직접 스크롤
+#
+# 펼침만 보던 때는, 카드를 접는 순간 스크롤이 다시 실시간 출력에 묶였습니다. 그
+# 상태에서는 쏟아지는 글을 거슬러 올라갈 방법이 아예 없습니다 (올라가도 다음
+# 청크에 곧바로 끌려 내려옵니다). 그래서 휠·터치 자체를 신호로 봅니다.
+
+
+def test_moving_the_wheel_detaches_the_feed():
+    feed = _feed()
+
+    feed._handle_manual_scroll()
+
+    assert feed.following is False
+
+
+def test_the_direction_of_the_wheel_does_not_matter():
+    """아래로 굴린 것도 '내가 볼 곳은 내가 정한다' 입니다. 방향을 따져 아래쪽만
+    다시 붙이면 맨 아래 근처에서 붙었다 떨어졌다 합니다."""
+    feed = _feed()
+
+    feed._handle_manual_scroll({"deltaY": -120})
+    feed._handle_manual_scroll({"deltaY": 120})
+
+    assert feed.following is False
+
+
+def test_the_jump_button_resumes_following_after_a_manual_scroll():
+    feed = _feed()
+    feed._handle_manual_scroll()
+
+    feed._handle_follow()
+
+    assert feed.following is True
+
+
+def test_the_jump_button_does_not_unfold_what_the_reader_opened():
+    """펼친 카드까지 풀어 버리면, 읽으려던 글이 그대로 흘러가 버립니다."""
+    feed = _feed()
+    feed._toggle_card(_card("m1"))
+    feed._handle_manual_scroll()
+
+    feed._handle_follow()
+
+    assert feed.following is False, "카드가 아직 펼쳐져 있습니다"
+
+
+def test_collapsing_a_card_does_not_undo_a_manual_scroll():
+    """카드를 접었다고 해서, 사람이 올려 둔 화면을 끌어내리지 않습니다."""
+    feed = _feed()
+    card = _card("m1")
+    feed._toggle_card(card)
+    feed._handle_manual_scroll()
+
+    feed._toggle_card(card)
+
+    assert feed.following is False
+
+
+@pytest.mark.asyncio
+async def test_sending_something_means_watching_the_result():
+    """보낸다는 것은 그 결과를 보겠다는 뜻이므로 따라가기를 되살립니다."""
+    sent = []
+
+    async def record(text):
+        sent.append(text)
+
+    feed = ChatFeed(record, on_interject=record, on_stop=record)
+    # 화면 없이 입력칸만 흉내 냅니다 (`alive` 가 False 라 나머지는 그냥 지나갑니다).
+    feed.input_field = SimpleNamespace(value="다음 라운드도 부탁합니다")
+    feed._handle_manual_scroll()
+
+    await feed._handle_send()
+
+    assert sent == ["다음 라운드도 부탁합니다"]
+    assert feed.following is True
+
+
+@pytest.mark.asyncio
+async def test_sending_does_not_close_the_card_being_read():
+    """스크롤만 놓아 줍니다. 펼쳐 둔 카드는 사람이 접기 전까지 읽는 중입니다."""
+    async def noop(*_args):
+        pass
+
+    feed = ChatFeed(noop, on_interject=noop, on_stop=noop)
+    feed.input_field = SimpleNamespace(value="계속 진행하세요")
+    feed._toggle_card(_card("m1"))
+
+    await feed._handle_send()
+
+    assert feed.following is False
+
+
+def test_switching_sessions_also_forgets_a_manual_scroll():
+    feed = _feed()
+    feed._handle_manual_scroll()
 
     feed.clear()
 

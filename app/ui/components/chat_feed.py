@@ -48,6 +48,14 @@ CLAMP_LINES = 3
 CLAMP_MIN_CHARS = 200
 CLAMP_MIN_NEWLINES = 3
 
+# 맨 아래로 보낼 때 쓰는 픽셀 값. 실제 높이보다 크기만 하면 되고, 브라우저가
+# 알아서 바닥으로 잘라 줍니다.
+#
+# `percent=1.0` 을 쓰면 안 됩니다. Quasar 는 퍼센트를 **자기가 캐시해 둔** 내용
+# 높이로 환산하는데, 스트리밍으로 방금 늘어난 만큼은 아직 그 값에 반영되지
+# 않아 늘 한 발 뒤에 섭니다 (측정해 보면 카드 하나 높이만큼, 200px 넘게).
+SCROLL_TO_BOTTOM_PX = 10_000_000
+
 
 def is_clampable(content: str) -> bool:
     """세 줄을 넘길 만한 글인지 (펼치기 버튼을 달지 결정)."""
@@ -110,6 +118,14 @@ class ChatFeed:
         # 사람이 편 것이 아니라 기본 상태이고, 그것까지 세면 토론이 도는 동안
         # 자동 스크롤이 영영 꺼집니다.
         self._user_expanded: Set[str] = set()
+        # 사람이 직접 스크롤을 움직였는지. 카드를 접고 나서도 쏟아지는 출력을
+        # 거슬러 올라가려면 이것이 필요합니다 — 펼침 여부와 무관하게, 휠을
+        # 굴리는 것 자체가 "내가 볼 곳은 내가 정한다" 는 뜻입니다.
+        self._scroll_detached: bool = False
+        # 바닥 재조정이 예약돼 있는지, 그리고 그것이 사람이 요청한 것인지
+        # (`_scroll_to_bottom` 주석 참고).
+        self._scroll_settle_pending: bool = False
+        self._scroll_settle_forced: bool = False
         self.follow_button: Optional[ui.button] = None
 
     # ------------------------------------------------------------------ 수명
@@ -150,8 +166,9 @@ class ChatFeed:
                                       on_click=self._handle_follow)
                             .props("flat dense no-caps color=amber-4 size=sm")
                             .tooltip(
-                                "펼쳐 둔 카드가 있어 자동 스크롤을 멈춘 상태입니다. "
-                                "카드를 다시 접으면 새 발언을 따라 내려갑니다."
+                                "새 발언을 따라 내려가지 않는 상태입니다. 직접 스크롤을 "
+                                "움직여서라면 이 버튼이 따라가기를 되살리고, 카드를 펼쳐 "
+                                "두어서라면 그 카드를 접으면 다시 따라갑니다."
                             )
                         )
                         self.follow_button.set_visibility(False)
@@ -177,6 +194,18 @@ class ChatFeed:
                 with self.message_container:
                     self._render_empty_placeholder()
 
+            # 사람이 스크롤을 잡는 순간 따라가기를 놓습니다.
+            #
+            # 스크롤 위치가 아니라 **휠·터치 자체**를 봅니다. 위치로 판단하면
+            # 우리가 부른 자동 스크롤과 사람이 굴린 것을 구분할 수 없어, 매
+            # 청크마다 스스로 떼었다 붙였다 하게 됩니다.
+            #
+            # throttle 은 이벤트 수를 줄이려는 것입니다 (휠 한 번에 수십 개가
+            # 옵니다). `leading_events` 가 기본값이라 첫 틱은 그대로 도착하므로
+            # 반응이 늦지 않습니다.
+            for event in ("wheel", "touchmove"):
+                self.scroll_area.on(event, self._handle_manual_scroll, throttle=0.3)
+
             # 2-b. 생성 중 줄. 타임라인 **밖**, 대화가 흘러나오는 바로 그 자리에
             #      둡니다. 안에 두면 카드 하나를 펼쳐 자동 스크롤이 멈춘 순간
             #      화면 밖으로 밀려나, 정작 필요한 때 보이지 않습니다.
@@ -195,6 +224,8 @@ class ChatFeed:
             # 경과 시간은 이벤트가 아니라 시계가 갱신합니다. 도구가 30초씩 걸리는
             # 동안에는 서버에서 아무 이벤트도 오지 않기 때문입니다.
             ui.timer(1.0, self._tick_elapsed)
+            # 바닥 재조정. 예약이 없으면 아무것도 하지 않습니다.
+            ui.timer(0.2, self._settle_scroll)
 
             # 3. Input Bar
             with ui.row().classes("w-full items-center gap-2 p-2 bg-slate-900 border border-slate-800 rounded-xl shadow-lg flex-shrink-0"):
@@ -229,6 +260,12 @@ class ChatFeed:
         text = (self.input_field.value or "").strip()
         if not text:
             return
+
+        # 무언가를 보냈다는 것은 그 결과를 보겠다는 뜻입니다. 앞서 스크롤을 잡아
+        # 두었더라도 여기서 놓아 줍니다 (펼쳐 둔 카드는 그대로 둡니다 — 그건
+        # 사람이 접기 전까지 계속 읽고 있는 글입니다).
+        self._scroll_detached = False
+        self._refresh_follow_button()
 
         if self.is_busy:
             if self.on_interject is None:
@@ -371,6 +408,7 @@ class ChatFeed:
         # 카드가 사라지므로 펼침 기억도 함께 버립니다. 남겨 두면 다음 대화가
         # 있지도 않은 카드 때문에 자동 스크롤이 꺼진 채로 시작합니다.
         self._user_expanded.clear()
+        self._scroll_detached = False
         self._refresh_follow_button()
         if not self.alive:
             return
@@ -394,6 +432,7 @@ class ChatFeed:
         streaming: Set[str] = set(streaming_ids or ())
         self._active_streams.clear()
         self._user_expanded.clear()
+        self._scroll_detached = False
         self._refresh_follow_button()
         self._placeholder = None
         self.message_container.clear()
@@ -507,40 +546,91 @@ class ChatFeed:
 
     @property
     def following(self) -> bool:
-        """새 발언을 따라 아래로 내려갈지.
+        """새 발언을 따라 아래로 내려갈지. 둘 중 하나라도 걸리면 따라가지 않습니다.
 
-        펼쳐 둔 카드가 하나라도 있으면 따라가지 않습니다. 카드를 편 이유는 그것을
-        읽기 위해서인데, 그동안에도 다른 에이전트의 글자는 계속 도착합니다. 매
-        청크마다 맨 아래로 끌려가면 읽던 자리를 잃고, 다시 올라가면 곧바로 또
-        끌려 내려갑니다. 전부 접혀 있을 때는 볼 것이 흐름뿐이므로 따라갑니다.
+        **펼쳐 둔 카드** — 카드를 편 이유는 그것을 읽기 위해서인데, 그동안에도 다른
+        에이전트의 글자는 계속 도착합니다. 매 청크마다 맨 아래로 끌려가면 읽던
+        자리를 잃습니다.
+
+        **직접 움직인 스크롤** — 카드를 다 접은 뒤에도 지나간 발언을 거슬러 올라가
+        볼 수 있어야 합니다. 펼침만 보던 때는 카드를 접는 순간 스크롤이 다시
+        묶여서, 출력이 쏟아지는 동안에는 위로 올라갈 방법이 아예 없었습니다.
+
+        둘 다 아니면 볼 것이 흐름뿐이므로 따라갑니다.
         """
-        return not self._user_expanded
+        return not self._user_expanded and not self._scroll_detached
+
+    def _handle_manual_scroll(self, _event=None) -> None:
+        """휠이나 터치로 스크롤을 움직였습니다. 방향은 보지 않습니다.
+
+        아래로 굴린 것도 "내가 볼 곳은 내가 정한다" 입니다. 여기서 방향을 따져
+        아래쪽만 다시 붙이면, 맨 아래 근처에서 조금씩 굴릴 때마다 붙었다 떨어졌다
+        합니다.
+        """
+        if self._scroll_detached:
+            return
+        self._scroll_detached = True
+        self._refresh_follow_button()
 
     def _scroll_to_bottom(self, force: bool = False) -> None:
-        """맨 아래로. `force` 는 사람이 직접 요청했거나 화면을 새로 그린 경우입니다."""
+        """맨 아래로. `force` 는 사람이 직접 요청했거나 화면을 새로 그린 경우입니다.
+
+        두 번 부릅니다. 브라우저는 이번 갱신에서 늘어난 내용을 **아직 배치하기
+        전에** 스크롤 명령을 실행하므로, 한 번만 부르면 늘 방금 도착한 만큼 뒤에
+        섭니다. 청크가 계속 오는 동안에는 그 차이가 카드 하나 높이까지 벌어지고,
+        마지막 발언이 끝난 뒤에도 그대로 남아 새 카드가 화면 밖에 있습니다.
+        """
         if not force and not self.following:
             return
-        if self.scroll_area is not None and not self.scroll_area.is_deleted:
-            self.scroll_area.scroll_to(percent=1.0)
+        if self.scroll_area is None or self.scroll_area.is_deleted:
+            return
+        self.scroll_area.scroll_to(pixels=SCROLL_TO_BOTTOM_PX)
+        # 배치가 끝난 뒤 한 번 더 — 실행은 `build_ui()` 가 만든 시계가 합니다.
+        # 여기서 `ui.timer(..., once=True)` 를 만들면 **돌지 않습니다**: 이 코드는
+        # 스트리밍 이벤트를 흘리는 백그라운드 태스크에서 불리고, 거기서 만든
+        # 타이머는 조용히 사라집니다. 예약은 깃발 하나로 남기는 편이 안전합니다.
+        self._scroll_settle_pending = True
+        self._scroll_settle_forced = self._scroll_settle_forced or force
+
+    def _settle_scroll(self) -> None:
+        """늘어난 내용까지 반영해 바닥을 다시 맞춥니다 (화면의 시계가 부릅니다)."""
+        if not self._scroll_settle_pending:
+            return
+        forced = self._scroll_settle_forced
+        self._scroll_settle_pending = False
+        self._scroll_settle_forced = False
+        if not self.alive or self.scroll_area is None or self.scroll_area.is_deleted:
+            return
+        # 예약해 둔 사이에 사람이 스크롤을 잡았거나 카드를 펼쳤다면 그 손을 이깁니다.
+        if not forced and not self.following:
+            return
+        self.scroll_area.scroll_to(pixels=SCROLL_TO_BOTTOM_PX)
 
     def _refresh_follow_button(self) -> None:
         """자동 스크롤이 멈춰 있다는 사실과 되돌아갈 방법을 함께 보여줍니다.
 
-        말없이 멈추면 이번에는 "스크롤이 고장 났다" 가 됩니다.
+        말없이 멈추면 이번에는 "스크롤이 고장 났다" 가 됩니다. 멈춘 이유를 문구에
+        적는 것도 그래서입니다 — 펼친 카드 때문이라면 접으면 풀리고, 스크롤을
+        움직여서라면 이 버튼이 풀어 줍니다.
         """
         if self.follow_button is None or self.follow_button.is_deleted:
             return
-        paused = bool(self._user_expanded)
-        self.follow_button.set_visibility(paused)
-        if paused:
-            self.follow_button.set_text(f"맨 아래로 ({len(self._user_expanded)}개 펼침)")
+        expanded = len(self._user_expanded)
+        self.follow_button.set_visibility(not self.following)
+        if expanded:
+            self.follow_button.set_text(f"맨 아래로 ({expanded}개 펼침)")
+        elif self._scroll_detached:
+            self.follow_button.set_text("맨 아래로 · 따라가기 재개")
 
     def _handle_follow(self) -> None:
-        """멈춰 있는 동안에도 한 번은 맨 아래를 볼 수 있어야 합니다.
+        """맨 아래로 내려가고, 풀 수 있는 만큼 따라가기를 되살립니다.
 
-        카드를 대신 접지는 않습니다. 사람이 편 것을 화면이 마음대로 접으면,
-        읽으려던 글이 사라집니다.
+        직접 움직인 스크롤은 여기서 풉니다. 펼쳐 둔 카드는 풀지 않습니다 — 사람이
+        편 것을 화면이 마음대로 접으면 읽으려던 글이 사라지므로, 그때 이 버튼은
+        한 번 내려보내는 것까지만 합니다.
         """
+        self._scroll_detached = False
+        self._refresh_follow_button()
         self._scroll_to_bottom(force=True)
 
     def _render_card(self, msg: Dict[str, Any], streaming: bool = False) -> Dict[str, Any]:
