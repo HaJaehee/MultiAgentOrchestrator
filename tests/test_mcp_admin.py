@@ -35,7 +35,7 @@ SAMPLE = {
     "app": {"port": 8000},
     "mcp_servers": {
         "// filesystem": [
-            "파일 읽기/쓰기 (툴 11종).",
+            "파일 읽기/쓰기 (도구 11종).",
             "이 주석은 filesystem 서버를 설명합니다.",
         ],
         "filesystem": {

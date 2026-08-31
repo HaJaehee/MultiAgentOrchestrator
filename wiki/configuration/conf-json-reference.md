@@ -44,7 +44,7 @@ the roster panel.
 
 ```json
 "// filesystem": [
-  "공용 작업 공간 파일 I/O (공식 서버, 툴 14종).",
+  "공용 작업 공간 파일 I/O (공식 서버, 도구 14종).",
   "지정한 디렉터리 밖 경로는 서버가 자체적으로 차단합니다."
 ],
 "filesystem": { "command": "${NODE_BIN:-node}", "args": ["..."], "enabled": true }

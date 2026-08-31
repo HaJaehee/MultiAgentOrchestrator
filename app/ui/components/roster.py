@@ -637,11 +637,11 @@ class AgentRosterControl:
                 elif info["connected"]:
                     connected_count += 1
                     icon, icon_cls, color = "check_circle", "text-emerald-400", "green-8"
-                    detail = f"툴 {info['tool_count']}"
+                    detail = f"도구 {info['tool_count']}"
                     where = "url" if info.get("remote") else "command"
                     tip = (f"{name}: 연결됨 ({info.get('transport', 'stdio')})\r\n"
                            f"{where}: {info.get('endpoint') or info['command']}\r\n"
-                           f"등록된 툴: {info['tool_count']}개")
+                           f"등록된 도구: {info['tool_count']}개")
                 elif info["available"]:
                     icon, icon_cls, color, detail = "sync_problem", "text-amber-400", "amber-9", "연결 끊김"
                     tip = f"{name}: 세션이 끊겼습니다. 다음 도구 호출 시 자동 재연결을 시도합니다."
@@ -1681,7 +1681,7 @@ class AgentRosterControl:
                                 "text-[10px] text-slate-500 truncate"
                             )
                         elif info and info["connected"]:
-                            ui.badge(f"툴 {info['tool_count']}", color="green-8").props("dense text-[9px]")
+                            ui.badge(f"도구 {info['tool_count']}", color="green-8").props("dense text-[9px]")
                         else:
                             ui.badge("연결 안 됨", color="red-9").props("dense text-[9px]")
 

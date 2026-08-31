@@ -71,7 +71,7 @@ The system exposes connection states via [`MCPManager.connection_status()`](file
 
 | Status Chip | Visual Indicator | Meaning & Health State |
 | :--- | :--- | :--- |
-| 🟢 `filesystem 툴 14` | Green Chip | Connected and healthy; shows registered tool count. |
+| 🟢 `filesystem 도구 14` | Green Chip | Connected and healthy; shows registered tool count. |
 | 🟠 `연결 끊김` | Orange Chip | Subprocess terminated; will auto-reconnect on next call. |
 | 🔴 `연결 실패` | Red Chip | Process startup failed; hover displays stderr diagnostic trace. |
 | ⚪ `비활성` | Grey Chip | Server explicitly disabled (`"enabled": false` in `conf.json`). |
