@@ -574,7 +574,12 @@ class ChatFeed:
             self.append_message(msg)
             return
 
-        final_content = msg.get("content", info["content"])
+        # 확정본이 비어 있으면 흘려보낸 것을 그대로 둡니다. `.get(key, default)` 는
+        # 키가 있고 값이 "" 일 때 기본값을 쓰지 않으므로, 예전에는 빈 확정본 하나가
+        # 사람이 읽고 있던 카드를 백지로 만들었습니다 — 게다가 그 카드는 짧아진
+        # 탓에 `is_clampable` 을 통과하지 못해 펼치기 버튼도 달리지 않아, 접힌
+        # 것인지 사라진 것인지 구분할 단서조차 없었습니다.
+        final_content = msg.get("content") or info["content"]
         info["markdown"].set_content(final_content)
         info["content"] = final_content
 

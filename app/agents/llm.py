@@ -313,6 +313,17 @@ class LLMCaller:
         current_messages = list(messages)
         iterations = max_tool_iterations or agent.max_tool_iterations
 
+        # 이터레이션마다 나온 본문을 모읍니다.
+        #
+        # 도구를 부르는 판의 텍스트("먼저 파일을 확인하겠습니다…", 도구 결과에 대한
+        # 관측과 판단)도 엄연히 그 에이전트의 발언입니다. 화면에는 `on_chunk` 으로
+        # 이미 흘러가 있고요. 그런데 예전에는 마지막 판(도구를 부르지 않은 판)의
+        # content 만 돌려주었습니다. 그 값이 화면 카드를 통째로 덮어쓰고 DB 에도
+        # 그대로 들어가므로, 도구를 많이 부른 긴 발언일수록 사람이 읽고 있던 글이
+        # 발언이 끝나는 순간 사라졌습니다 (짧은 답변은 이터레이션이 한 번이라
+        # 마지막 판 == 전체였고, 그래서 이 손실이 오래 눈에 띄지 않았습니다).
+        segments: List[str] = []
+
         for iteration in range(iterations):
             kwargs = self.build_completion_kwargs(agent, current_messages, tools)
             streamed_any = False
@@ -354,10 +365,14 @@ class LLMCaller:
                     else:
                         on_chunk(message.content)
 
+            segment = self._compose_content(agent, message)
+            if segment.strip():
+                segments.append(segment.strip())
+
             # Check for tool calls
             tool_calls = getattr(message, "tool_calls", None)
             if not tool_calls:
-                return self._compose_content(agent, message), tool_logs
+                return "\n\n".join(segments), tool_logs
 
             # Append assistant message with tool calls to context
             current_messages.append(message.model_dump() if hasattr(message, "model_dump") else dict(message))

@@ -231,6 +231,13 @@ class OrchestratorEngine:
                 on_tool_call=_on_tool_call, on_chunk=_on_chunk,
                 session_id=state.session_id,
             )
+            # 확정본이 비었는데 화면에는 글이 흘러갔다면 그 글을 남깁니다.
+            # 여기서 정하는 `content` 가 DB 에 들어가는 값이라, 비워 둔 채로
+            # 넘어가면 사람이 방금 읽던 발언이 새로고침 뒤에도 돌아오지 않습니다
+            # (프로바이더가 텍스트를 reasoning 쪽으로만 주거나, 스트림 재조립이
+            # 본문을 놓친 경우에 실제로 그렇게 됩니다).
+            if not content.strip():
+                content = "".join(streamed)
             final_type = msg_type
         except LLMUnavailableError as exc:
             logger.warning(f"Agent '{agent.key}' produced no response: {exc}")
