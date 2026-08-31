@@ -348,6 +348,39 @@ class DebateRunner:
         run = self._runs.get(session_id)
         return run.request_stop() if run is not None else False
 
+    async def abort(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """토론을 즉시 끊고, 이 턴이 남긴 것의 목록을 돌려줍니다.
+
+        `request_stop()` 과 정반대입니다. 정지는 "여기까지의 논의로 결론을
+        내라" 는 뜻이라 진행 중인 발언을 끝까지 받고 합성까지 갑니다. 여기서는
+        요청 **자체가 틀렸을** 때를 다룹니다 — 그 답을 기다릴 이유가 없으므로
+        발언 도중이라도 끊고, 지운 자리를 사람이 다시 쓰게 합니다.
+
+        지우는 일은 하지 않습니다. 무엇을 지워야 하는지만 알려 줍니다 (기록은
+        DB 를 아는 쪽의 몫입니다). 돌려주는 값:
+
+            {"prompt": 사람이 보냈던 글, "message_ids": [...], "artifact_ids": [...]}
+
+        진행 중인 토론이 없으면 None.
+        """
+        run = self._runs.get(session_id)
+        if run is None or run.status != "running":
+            return None
+
+        # 태스크를 죽이기 전에 목록을 뜹니다. 취소 뒤에도 스냅샷은 남지만,
+        # 순서를 지켜야 "무엇이 있었는지" 를 놓치지 않습니다.
+        produced = {
+            "prompt": run.user_prompt,
+            "message_ids": [m.get("id") for m in run.messages if m.get("id")],
+            "artifact_ids": [a.get("id") for a in run.artifacts if a.get("id")],
+        }
+        await self.cancel(session_id)
+        logger.info(
+            f"Debate for session {session_id} was aborted by the user; "
+            f"{len(produced['message_ids'])} message(s) will be discarded."
+        )
+        return produced
+
     def interject(self, session_id: str, text: str) -> bool:
         """진행 중인 토론에 사용자 메시지를 끼워 넣습니다."""
         run = self._runs.get(session_id)

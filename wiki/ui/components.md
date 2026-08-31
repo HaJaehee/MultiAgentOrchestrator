@@ -113,7 +113,20 @@ The web application workspace is organized into four primary UI components in [a
   patches the DOM, so a second pass runs shortly after: `_scroll_to_bottom()` raises a flag and
   a 0.2s timer created in `build_ui()` acts on it. The timer must be created there — one made
   inside the streaming consumer task never runs at all (verified: its callback never fired).
-- **Input Bar**: Auto-expanding message textarea with submit shortcuts (`Enter` / `Ctrl+Enter`).
+- **Input Bar**: an auto-growing textarea. **Enter sends, Shift+Enter breaks the line** — bound
+  as `keydown.enter.exact.prevent` (`SUBMIT_KEY_EVENT`). `.exact` makes Vue skip the handler
+  entirely while a system modifier is held, so Shift+Enter reaches the browser's default and
+  inserts a newline; `.prevent` then stops plain Enter from leaving a stray newline behind in
+  the box it is about to clear. The order matters: `.prevent.exact` would call preventDefault
+  before the modifier is checked, killing the line break it is supposed to allow.
+- **Abort & edit** (`긴급 종료`): sits next to `정지` while a turn runs, and does the opposite —
+  `정지` asks for a conclusion from what has been said, while this one is for a request that was
+  wrong to begin with (a typo, the wrong paste, a prompt meant for another conversation).
+  Confirmed through a dialog, it kills the task mid-speech, deletes that turn's messages, tool
+  records and artifacts, and puts the submitted text back in the input box to be corrected. If
+  nothing is left in the conversation it also unlocks the personas — the debate never happened,
+  so the roster should be editable again. `DebateRunner.abort()` reports what to delete;
+  `app.session_ops.discard_turn()` does the deleting.
 - **Failure Cards**: A message with `msg_type="error"` — an agent whose endpoint never answered — renders on a rose background with an `응답 없음` badge. `finalize_streaming_message()` restyles the card in place when a turn that had started streaming ends in failure.
 - **Reattachment**: `render_all(messages, streaming_ids=…)` rebuilds the whole feed from a
   snapshot and re-registers any still-streaming card, so a page opened mid-debate keeps receiving

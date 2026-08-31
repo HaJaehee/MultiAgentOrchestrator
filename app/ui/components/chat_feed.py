@@ -33,8 +33,20 @@ def clip_tool_output(text: str, limit: int = MAX_RELOADED_TOOL_OUTPUT) -> str:
 # 입력창 문구. 토론이 도는 중에는 같은 칸이 "새 요청" 이 아니라 "개입" 으로
 # 동작하므로, 무엇이 될지 문구로 먼저 알려 줍니다. props 로 넘어가는 값이라
 # 큰따옴표는 쓰지 않습니다.
-IDLE_PLACEHOLDER = "멀티 에이전트에게 토론 및 설계를 요청할 목표/질문을 입력하세요..."
-INTERJECT_PLACEHOLDER = "토론 진행 중 — 지금 보내면 다음 발언 차례에 개입으로 전달됩니다"
+IDLE_PLACEHOLDER = "멀티 에이전트에게 토론 및 설계를 요청할 목표/질문을 입력하세요... (Shift+Enter 줄바꿈)"
+INTERJECT_PLACEHOLDER = "토론 진행 중 — 지금 보내면 다음 발언 차례에 개입으로 전달됩니다 (Shift+Enter 줄바꿈)"
+
+# 입력칸에서 무엇이 '보내기' 인가.
+#
+# `.exact` 는 Ctrl·Shift·Alt·Meta 가 하나라도 눌려 있으면 핸들러를 아예 건너뜁니다.
+# 그래서 Shift+Enter 는 여기 걸리지 않고 브라우저의 기본 동작(줄바꿈)으로 갑니다 —
+# 입력칸이 autogrow 라 실제로 여러 줄을 쓸 수 있는데, 예전에는 `keydown.enter` 가
+# 조합 키를 가리지 않아 줄을 바꾸려는 손이 매번 요청을 보내 버렸습니다.
+#
+# `.prevent` 는 그 다음에 옵니다. 순서가 중요합니다: Vue 는 적힌 순서대로
+# 수식어를 적용하므로 `.prevent.exact` 로 쓰면 Shift+Enter 에서도 기본 동작이
+# 막혀 줄바꿈이 사라집니다.
+SUBMIT_KEY_EVENT = "keydown.enter.exact.prevent"
 
 
 # 접힌 카드가 보여주는 줄 수. 값 자체는 theme.py 의 `.chat-body-clamped` 가
@@ -82,12 +94,15 @@ class ChatFeed:
         on_send_message: Callable[[str], Coroutine[None, None, None]],
         on_interject: Optional[Callable[[str], Coroutine[None, None, None]]] = None,
         on_stop: Optional[Callable[[], Coroutine[None, None, None]]] = None,
+        on_abort: Optional[Callable[[], Coroutine[None, None, None]]] = None,
     ):
         self.on_send_message = on_send_message
         # 토론이 도는 중에 들어온 입력과 정지 버튼의 행선지. 주어지지 않으면
         # 예전처럼 토론 중에는 입력을 잠그고 정지 버튼도 숨깁니다.
         self.on_interject = on_interject
         self.on_stop = on_stop
+        # 요청 자체가 틀렸을 때. 정지와 달리 결과를 남기지 않고 되돌립니다.
+        self.on_abort = on_abort
         self.scroll_area: Optional[ui.scroll_area] = None
         self.message_container: Optional[ui.column] = None
         self.status_bar: Optional[ui.row] = None
@@ -96,6 +111,8 @@ class ChatFeed:
         self.input_field: Optional[ui.input] = None
         self.send_button: Optional[ui.button] = None
         self.stop_button: Optional[ui.button] = None
+        self.abort_button: Optional[ui.button] = None
+        self.abort_dialog: Optional[ui.dialog] = None
         self.round_badge: Optional[ui.badge] = None
         self.is_busy: bool = False
         self._stop_pending: bool = False
@@ -181,6 +198,16 @@ class ChatFeed:
                             )
                         )
                         self.stop_button.set_visibility(False)
+                        self.abort_button = (
+                            ui.button("긴급 종료", icon="cancel", on_click=self._handle_abort)
+                            .props("flat dense no-caps color=red-5 size=sm")
+                            .tooltip(
+                                "요청을 잘못 보냈을 때. 진행 중인 발언을 즉시 끊고 이번 "
+                                "요청과 그에 딸린 발언을 기록에서 지운 뒤, 보낸 글을 "
+                                "입력창으로 되돌립니다."
+                            )
+                        )
+                        self.abort_button.set_visibility(False)
                         self.round_badge = ui.badge("Ready", color="slate-700").props("dense")
 
                 # 쓸려 가는 막대. 글자가 한동안 오지 않아도 무언가 돌고 있다는
@@ -227,11 +254,35 @@ class ChatFeed:
             # 바닥 재조정. 예약이 없으면 아무것도 하지 않습니다.
             ui.timer(0.2, self._settle_scroll)
 
+            # 되돌릴 수 없는 삭제라 한 번 묻습니다. 정지(합성까지 진행)와 헷갈리기
+            # 쉬운 자리에 나란히 있으므로, 차이를 문장으로 적어 둡니다.
+            with ui.dialog() as self.abort_dialog, ui.card().classes(
+                "bg-slate-900 border border-red-800 text-slate-200 max-w-md"
+            ):
+                ui.label("긴급 종료하고 요청을 수정할까요?").classes(
+                    "text-base font-bold text-red-300"
+                )
+                ui.label(
+                    "진행 중인 발언을 즉시 끊고, 이번 요청과 지금까지 나온 발언을 "
+                    "기록에서 지웁니다. 보낸 글은 입력창으로 돌아옵니다."
+                ).classes("text-xs text-slate-300")
+                ui.label(
+                    "지금까지의 토론으로 결론만 받고 싶다면 '정지' 를 쓰세요. "
+                    "이 작업은 되돌릴 수 없습니다."
+                ).classes("text-[11px] text-slate-400")
+                with ui.row().classes("w-full justify-end gap-2 mt-2"):
+                    ui.button("취소", on_click=self.abort_dialog.close).props(
+                        "flat dense no-caps color=grey-4"
+                    )
+                    ui.button("긴급 종료", icon="cancel", on_click=self._confirm_abort).props(
+                        "unelevated dense no-caps color=red-6"
+                    )
+
             # 3. Input Bar
             with ui.row().classes("w-full items-center gap-2 p-2 bg-slate-900 border border-slate-800 rounded-xl shadow-lg flex-shrink-0"):
                 self.input_field = ui.input(
                     placeholder=IDLE_PLACEHOLDER,
-                ).props("outlined dark dense autogrow").classes("flex-grow text-sm").on("keydown.enter", self._handle_enter)
+                ).props("outlined dark dense autogrow").classes("flex-grow text-sm").on(SUBMIT_KEY_EVENT, self._handle_enter)
 
                 self.send_button = ui.button(
                     icon="send",
@@ -289,6 +340,20 @@ class ChatFeed:
     async def _handle_enter(self, e) -> None:
         await self._handle_send()
 
+    def _handle_abort(self) -> None:
+        """확인 창을 엽니다. 실제 삭제는 확인을 받은 뒤에."""
+        if not self.is_busy or self.on_abort is None:
+            return
+        if self.abort_dialog is not None:
+            self.abort_dialog.open()
+
+    async def _confirm_abort(self) -> None:
+        if self.abort_dialog is not None:
+            self.abort_dialog.close()
+        if self.on_abort is None:
+            return
+        await self.on_abort()
+
     def set_busy(self, busy: bool, status_text: str = "", round_info: str = "") -> None:
         if not self.alive:
             return
@@ -318,6 +383,8 @@ class ChatFeed:
             )
         if self.stop_button:
             self.stop_button.set_visibility(busy and self.on_stop is not None)
+        if self.abort_button:
+            self.abort_button.set_visibility(busy and self.on_abort is not None)
         if not busy:
             self.set_stop_pending(False)
         if self.status_spinner:
@@ -379,18 +446,22 @@ class ChatFeed:
             if label is not None and not label.is_deleted:
                 label.set_text(text)
 
-    def restore_input(self, text: str) -> None:
-        """보내지 못한 입력을 입력칸에 되돌려 놓습니다.
+    def restore_input(self, text: str) -> bool:
+        """보내지 못한 입력을 입력칸에 되돌려 놓습니다. 실제로 넣었으면 True.
 
         개입을 전달하려는 순간 토론이 막 끝나 있으면 글이 갈 곳을 잃습니다.
         사용자가 쓴 것을 삼키지 않도록 되돌립니다 (그 사이에 새로 쓴 글이 있으면
-        건드리지 않습니다).
+        건드리지 않습니다 — 그쪽이 더 최근의 뜻입니다).
+
+        돌려주는 값이 필요한 곳은 긴급 종료입니다. 되돌리지 못했다면 "고쳐서 다시
+        보내세요" 라고 안내할 수 없습니다. 입력칸에는 다른 글이 들어 있으니까요.
         """
         if not self.alive or self.input_field is None:
-            return
+            return False
         if (self.input_field.value or "").strip():
-            return
+            return False
         self.input_field.value = text
+        return True
 
     def set_stop_pending(self, pending: bool) -> None:
         """정지 요청이 접수돼 마지막 발언과 합성을 기다리는 중임을 표시합니다."""

@@ -96,6 +96,12 @@ prepare_agents_for_turn(db, session_model, pool, active_keys)
 
 이 순간부터 **이 대화는 `conf.json` 을 읽지 않습니다.**
 
+> 잠금이 풀리는 경우가 하나 있습니다. 첫 요청을 **긴급 종료**로 되돌려 대화에 남은
+> 발언이 하나도 없게 되면, 이 대화는 아직 시작하지 않은 것이 되어 잠금이 풀립니다
+> (`discard_turn`). 굳혀 둔 `session_agents` 는 남고, 다음 첫 메시지에서 그때의
+> `conf.json` 으로 다시 굳습니다.
+> → [토론 한 턴의 생애주기](01-debate-turn.md#정지와-긴급-종료)
+
 ### 잠긴 뒤 전역 설정을 바꾸면
 
 | `conf.json` 에 한 일 | 이 대화 | 아직 시작 안 한 대화 |

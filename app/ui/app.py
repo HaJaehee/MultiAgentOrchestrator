@@ -23,6 +23,7 @@ from app.database.models import ArtifactModel, MessageModel, SessionModel
 from app.database.session import get_session_factory
 from app.orchestration.runner import TurnRun, WorkspaceConflictError, get_debate_runner
 from app.orchestration.strategies import resolve_strategy_name
+from app.session_ops import discard_turn
 from app.ui.components.artifact_viewer import ArtifactViewer
 from app.ui.components.chat_feed import ChatFeed, clip_tool_output
 from app.ui.components.roster import AgentRosterControl
@@ -345,6 +346,55 @@ def create_ui() -> None:
                     position="bottom-right",
                 )
 
+        async def on_abort() -> None:
+            """요청을 잘못 보냈을 때. 토론을 끊고 그 요청을 없던 일로 되돌립니다.
+
+            정지(`on_stop`)와 하는 일이 정반대입니다. 정지는 지금까지의 논의로
+            결론을 받는 것이고, 여기서는 그 논의 자체가 틀린 전제 위에 서 있으므로
+            남기지 않습니다. 지운 자리에 사람이 보냈던 글을 입력창으로 돌려주어
+            고쳐 쓰게 합니다.
+            """
+            if not current_session_id:
+                return
+            produced = await runner.abort(current_session_id)
+            if produced is None:
+                chat_feed.set_busy(False, "진행 중인 토론이 없습니다", "Ready")
+                ui.notify(
+                    "이미 끝난 토론입니다. 기록은 그대로 두었습니다.",
+                    type="warning", position="bottom-right",
+                )
+                return
+
+            detach_from_run()
+            async with session_factory() as db:
+                started_over = await discard_turn(
+                    db,
+                    current_session_id,
+                    produced["message_ids"],
+                    produced["artifact_ids"],
+                )
+
+            # 기록이 바뀌었으므로 화면을 DB 기준으로 다시 세웁니다. 취소된 실행의
+            # 스냅샷은 여기서 쓰이지 않습니다 (`load_session_state` 는 돌고 있는
+            # 토론만 얹습니다).
+            await load_session_state(current_session_id)
+            restored = chat_feed.restore_input(produced["prompt"])
+            chat_feed.set_busy(
+                False,
+                "요청을 되돌렸습니다 — 고쳐서 다시 보내세요" if restored
+                else "요청을 되돌렸습니다 (입력창에 쓰던 글이 있어 그대로 두었습니다)",
+                "Ready",
+            )
+            await sidebar.refresh_list()
+            ui.notify(
+                ("토론을 중단하고 그 요청을 기록에서 지웠습니다. 입력창의 글을 고쳐 다시 보내세요."
+                 if restored else
+                 "토론을 중단하고 그 요청을 기록에서 지웠습니다. 입력창에 쓰던 글이 있어 "
+                 "보냈던 글을 되돌리지 않았습니다.")
+                + (" 아직 시작 전이므로 에이전트 구성도 다시 바꿀 수 있습니다." if started_over else ""),
+                type="info", position="bottom-right",
+            )
+
         async def on_stop() -> None:
             """남은 라운드를 접고 지금까지의 토론으로 마무리하도록 요청합니다."""
             if not current_session_id or not runner.request_stop(current_session_id):
@@ -359,7 +409,9 @@ def create_ui() -> None:
         drawer = sidebar.build_ui()
 
         roster_control = AgentRosterControl(on_config_changed, on_resync_agents)
-        chat_feed = ChatFeed(on_send_message, on_interject=on_interject, on_stop=on_stop)
+        chat_feed = ChatFeed(
+            on_send_message, on_interject=on_interject, on_stop=on_stop, on_abort=on_abort
+        )
         artifact_viewer = ArtifactViewer()
 
         # ------------------------------------------------------------ 정보 창

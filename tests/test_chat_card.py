@@ -16,6 +16,7 @@ import pytest
 from app.ui.components.chat_feed import (
     CLAMP_MIN_CHARS,
     CLAMP_MIN_NEWLINES,
+    SUBMIT_KEY_EVENT,
     ChatFeed,
     is_clampable,
 )
@@ -258,3 +259,49 @@ def test_switching_sessions_also_forgets_a_manual_scroll():
     feed.clear()
 
     assert feed.following is True
+
+
+# --------------------------------------------------------------- 보내기 / 줄바꿈
+#
+# 입력칸은 autogrow 라 여러 줄을 쓸 수 있는데, 예전에는 `keydown.enter` 가 조합
+# 키를 가리지 않아 줄을 바꾸려는 손이 매번 요청을 보내 버렸습니다.
+#
+# 판정은 브라우저에서 일어나므로 여기서는 **무엇을 등록했는지**를 봅니다.
+# NiceGUI 자신의 해석기로 풀어서, 그 문자열이 실제로 어떤 규칙이 되는지 확인합니다.
+
+
+def _key_spec(event_type: str) -> dict:
+    from nicegui.event_listener import EventListener
+
+    return EventListener(
+        element_id=1, type=event_type, args=None, handler=lambda: None,
+        js_handler=None, throttle=0.0, leading_events=True, trailing_events=True,
+        request=None,
+    ).to_dict()
+
+
+def test_plain_enter_submits():
+    spec = _key_spec(SUBMIT_KEY_EVENT)
+
+    assert spec["type"] == "keydown"
+    assert spec["keys"] == ["enter"]
+    # 보낼 때는 브라우저가 줄바꿈을 넣지 않도록 막습니다.
+    assert "prevent" in spec["modifiers"]
+
+
+def test_shift_enter_is_left_to_the_browser():
+    """`exact` 가 있으면 Shift 가 눌린 Enter 는 핸들러에 오지 않습니다 (= 줄바꿈)."""
+    spec = _key_spec(SUBMIT_KEY_EVENT)
+
+    assert "exact" in spec["modifiers"]
+
+
+def test_exact_comes_before_prevent():
+    """순서가 뒤바뀌면 Shift+Enter 에서도 기본 동작이 막혀 줄바꿈이 사라집니다.
+
+    Vue 는 적힌 순서대로 수식어를 적용합니다. `prevent` 가 먼저면 조합 키를
+    가리기 전에 preventDefault 가 호출됩니다.
+    """
+    modifiers = _key_spec(SUBMIT_KEY_EVENT)["modifiers"]
+
+    assert modifiers.index("exact") < modifiers.index("prevent")

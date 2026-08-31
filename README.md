@@ -134,6 +134,7 @@ MultiAgentOrchestrator/
     ├── test_session_snapshot.py # 시작한 대화의 구성 스냅샷 (삭제·키 교체에도 자기완결)
     ├── test_speaker_selection.py # 오케스트레이터 지명 전략 (지명·해석·실패 시 물러서기)
     ├── test_parallel_dispatch.py # 병렬 지시 전략 (동시 실행·과업 분배·취합·상한)
+    ├── test_abort_turn.py       # 긴급 종료 (그 턴만 지우기, 시작 전으로 되돌리기)
     ├── test_llm_settings.py   # llm 상속, 엔드포인트/단계적 사고 설정
     ├── test_db.py
     ├── test_mcp.py

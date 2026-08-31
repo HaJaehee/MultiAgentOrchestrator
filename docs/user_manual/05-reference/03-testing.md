@@ -3,7 +3,7 @@
 > 상위: [레퍼런스 개관](README.md) · 이전: [프로젝트 구조](02-project-layout.md)
 
 ```bash
-pytest -q               # 전체 (285개, 약 25초)
+pytest -q               # 전체 (298개, 약 26초)
 pytest -v tests/test_config.py
 pytest -k "snapshot"
 ```
@@ -27,6 +27,7 @@ pytest -k "snapshot"
 | `test_roster_lock.py` | 토론 중 MCP 구성 잠금 |
 | `test_roster_selection.py` | 에이전트 추가 시 기존 대화의 로스터 |
 | `test_interaction.py` | 정지 요청과 개입 메모 |
+| `test_abort_turn.py` | 긴급 종료: 그 턴만 지우기, 시작 전으로 되돌리기 |
 | `test_resilience.py` | 새로고침, 연결 끊김, 컨텍스트 한도, 도구 루프 한도 |
 | `test_tool_records.py` | 도구 실행 기록이 그 발언에 붙는가 |
 | `test_export.py` | 마크다운 내보내기 |
