@@ -69,7 +69,12 @@ The web application workspace is organized into four primary UI components in [a
   single-GPU endpoint.
 - **Custom Instructions Box**: Allows injecting ad-hoc guidelines into all agent prompts for the current session.
 - **Persona Settings Button**: Links directly to `/personas/{session_id}`. Displays a lock icon if debate has commenced.
-- **MCP Server Chips**: Displays real-time connection states (Green/Orange/Red) and opens diagnostic tooltips on hover.
+- **MCP Server Chips**: Displays real-time connection states (Green/Orange/Red) and opens diagnostic tooltips on hover. The tooltip names the transport and shows `command:` for a local server, `url:` for a remote one.
+- **Add server dialog**: one button covers both kinds. A `로컬 프로세스 (stdio)` / `원격 (HTTP)`
+  toggle swaps the field set — command/args/env against url/headers/transport — because the two
+  ask for entirely different things and showing both at once leaves the reader guessing which
+  half matters. There is deliberately no separate "Remote MCP" button: what the user knows first
+  is that they want to attach a server, not that it speaks HTTP.
 - **Workspace Field**: The folder every workspace-bound MCP server (`filesystem`, `git`, `memory`,
   `sandbox`) shares, for *this conversation*. Applying it restarts those servers, since each one
   receives its root at spawn time. The value is stored on the session row — `conf.json` is never

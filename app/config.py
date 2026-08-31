@@ -147,10 +147,76 @@ class AppConfig(BaseModel):
 
 
 class MCPServerConfig(BaseModel):
-    command: str = Field(description="Command to execute MCP server, e.g. npx or python")
-    args: List[str] = Field(default_factory=list, description="CLI arguments")
-    env: Dict[str, str] = Field(default_factory=dict, description="Environment variables for the server")
-    enabled: bool = Field(default=True, description="Whether this MCP server is spawned at startup")
+    """MCP 서버 하나. 로컬 프로세스(stdio)이거나 원격 주소(HTTP)입니다.
+
+    둘은 서로 배타적입니다. `command` 가 있으면 이 앱이 프로세스를 띄워 표준
+    입출력으로 이야기하고, `url` 이 있으면 이미 떠 있는 서버에 HTTP 로 붙습니다.
+    둘 다 적거나 둘 다 비우면 무엇을 하려는 것인지 알 수 없으므로 거절합니다 —
+    조용히 하나를 고르면, 고치려는 사람이 왜 다른 쪽이 무시되는지 알 수 없습니다.
+    """
+
+    command: str = Field(default="", description="Command to execute a local MCP server, e.g. npx or python")
+    args: List[str] = Field(default_factory=list, description="CLI arguments (stdio only)")
+    env: Dict[str, str] = Field(default_factory=dict, description="Environment variables for the server (stdio only)")
+
+    # --- 원격 서버 ---------------------------------------------------------
+    url: str = Field(default="", description="Remote MCP endpoint, e.g. https://host/mcp (http/sse transport)")
+    headers: Dict[str, str] = Field(
+        default_factory=dict,
+        description="HTTP headers sent with every request, e.g. Authorization (remote only)",
+    )
+    transport: Literal["auto", "stdio", "http", "sse"] = Field(
+        default="auto",
+        description=(
+            "auto: command -> stdio, url -> http (falling back to sse) | "
+            "stdio: local process | http: Streamable HTTP | sse: legacy HTTP+SSE"
+        ),
+    )
+    timeout: float = Field(
+        default=30.0, gt=0, description="Remote only: seconds to wait for a single HTTP request"
+    )
+
+    enabled: bool = Field(default=True, description="Whether this MCP server is started at startup")
+
+    @model_validator(mode="after")
+    def _exactly_one_endpoint(self) -> "MCPServerConfig":
+        has_command = bool((self.command or "").strip())
+        has_url = bool((self.url or "").strip())
+        if has_command and has_url:
+            raise ValueError(
+                "MCP 서버에는 command 와 url 중 하나만 적을 수 있습니다 "
+                "(로컬 프로세스인지 원격 주소인지)."
+            )
+        if not has_command and not has_url:
+            raise ValueError("MCP 서버에는 command(로컬) 또는 url(원격) 중 하나가 필요합니다.")
+        if self.transport == "stdio" and not has_command:
+            raise ValueError("transport 가 stdio 이면 command 가 있어야 합니다.")
+        if self.transport in ("http", "sse") and not has_url:
+            raise ValueError(f"transport 가 {self.transport} 이면 url 이 있어야 합니다.")
+        return self
+
+    @property
+    def is_remote(self) -> bool:
+        return bool((self.url or "").strip())
+
+    @property
+    def resolved_transport(self) -> str:
+        """`auto` 를 실제 전송 방식으로 풉니다.
+
+        원격의 기본값이 `http`(Streamable HTTP)인 것은 그것이 지금의 표준이기
+        때문입니다. 옛 SSE 서버는 붙을 때 한 번 물러서서 다시 시도합니다
+        (`MCPClientConnection`). 처음부터 `sse` 로 적어 두면 그 왕복을 건너뜁니다.
+        """
+        if self.transport != "auto":
+            return self.transport
+        return "http" if self.is_remote else "stdio"
+
+    @property
+    def endpoint_label(self) -> str:
+        """화면에 보여줄 한 줄 (어디에 붙는 서버인가)."""
+        if self.is_remote:
+            return self.url
+        return " ".join([self.command, *self.args]).strip()
 
 
 class SequentialThinkingConfig(BaseModel):
@@ -700,34 +766,60 @@ def set_mcp_server_enabled_in_conf_file(
 
 def add_mcp_server_to_conf_file(
     server_name: str,
-    command: str,
+    command: str = "",
     args: Optional[List[str]] = None,
     env: Optional[Dict[str, str]] = None,
     enabled: bool = True,
     config_path: str | Path = DEFAULT_CONFIG_PATH,
+    *,
+    url: str = "",
+    headers: Optional[Dict[str, str]] = None,
+    transport: str = "auto",
 ) -> None:
-    """`mcp_servers` 에 새 서버를 추가합니다."""
+    """`mcp_servers` 에 새 서버를 추가합니다 (로컬 프로세스 또는 원격 주소).
+
+    `command` 와 `url` 중 하나만 받습니다. 검증은 모델과 같은 규칙입니다 —
+    화면에서 들어오든 파일을 직접 고치든 같은 말을 들어야 합니다.
+    """
     name = _require_key(server_name, "MCP 서버 이름")
     path = Path(config_path)
 
     command = (command or "").strip()
-    if not command:
-        raise ValueError("실행 명령(command)은 비워 둘 수 없습니다.")
+    url = (url or "").strip()
+    if command and url:
+        raise ValueError("실행 명령(command)과 주소(url)는 함께 쓸 수 없습니다.")
+    if not command and not url:
+        raise ValueError("실행 명령(command) 또는 주소(url) 중 하나는 있어야 합니다.")
+    if url and not url.lower().startswith(("http://", "https://")):
+        raise ValueError("원격 서버 주소는 http:// 또는 https:// 로 시작해야 합니다.")
 
     args = [a for a in (args or []) if a.strip() != ""]
     env = env or {}
     for key in env:
         if not BARE_KEY_PATTERN.fullmatch(key):
             raise ValueError(f"환경변수 이름 '{key}' 을 쓸 수 없습니다.")
+    headers = headers or {}
+    for key in headers:
+        if not key.strip() or any(c in key for c in " \t\r\n:"):
+            raise ValueError(f"HTTP 헤더 이름 '{key}' 을 쓸 수 없습니다.")
 
     data = read_conf_file(path)
     servers = _section(data, "mcp_servers")
     if name in servers:
         raise ValueError(f"'{name}' 서버가 이미 {path.name} 에 있습니다.")
 
-    block: Dict[str, Any] = {"command": command, "args": list(args)}
-    if env:
-        block["env"] = dict(env)
+    block: Dict[str, Any] = {}
+    if url:
+        block["url"] = url
+        if headers:
+            block["headers"] = dict(headers)
+        if transport and transport != "auto":
+            block["transport"] = transport
+    else:
+        block["command"] = command
+        block["args"] = list(args)
+        if env:
+            block["env"] = dict(env)
     block["enabled"] = bool(enabled)
     servers[name] = block
 

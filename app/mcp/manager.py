@@ -294,6 +294,10 @@ class MCPManager:
             command=cfg.command,
             args=cfg.args,
             env=cfg.env,
+            url=cfg.url,
+            headers=cfg.headers,
+            transport=cfg.transport,
+            timeout=cfg.timeout,
         )
         self.clients[name] = client
         try:
@@ -346,7 +350,12 @@ class MCPManager:
                 "connected": client.is_connected,
                 "available": client.is_available,
                 "tool_count": len(client.tools),
-                "command": client.command,
+                # 화면은 "이 서버가 어디에 있는가" 를 보여줍니다. 로컬이면 실행
+                # 명령, 원격이면 주소입니다.
+                "command": client.endpoint_label,
+                "endpoint": client.endpoint_label,
+                "transport": client.transport,
+                "remote": client.is_remote,
                 "error": client.connect_error,
             }
             for name, client in self.clients.items()

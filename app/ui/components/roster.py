@@ -638,13 +638,18 @@ class AgentRosterControl:
                     connected_count += 1
                     icon, icon_cls, color = "check_circle", "text-emerald-400", "green-8"
                     detail = f"툴 {info['tool_count']}"
-                    tip = f"{name}: 연결됨\r\ncommand: {info['command']}\r\n등록된 툴: {info['tool_count']}개"
+                    where = "url" if info.get("remote") else "command"
+                    tip = (f"{name}: 연결됨 ({info.get('transport', 'stdio')})\r\n"
+                           f"{where}: {info.get('endpoint') or info['command']}\r\n"
+                           f"등록된 툴: {info['tool_count']}개")
                 elif info["available"]:
                     icon, icon_cls, color, detail = "sync_problem", "text-amber-400", "amber-9", "연결 끊김"
                     tip = f"{name}: 세션이 끊겼습니다. 다음 도구 호출 시 자동 재연결을 시도합니다."
                 else:
                     icon, icon_cls, color, detail = "error", "text-rose-400", "red-9", "연결 실패"
-                    tip = (f"{name}: 기동 실패\r\ncommand: {info['command']}\r\n"
+                    where = "url" if info.get("remote") else "command"
+                    tip = (f"{name}: 기동 실패 ({info.get('transport', 'stdio')})\r\n"
+                           f"{where}: {info.get('endpoint') or info['command']}\r\n"
                            f"{info.get('error') or '원인을 확인할 수 없습니다'}\r\n"
                            f"에이전트는 이 서버의 도구 없이 토론을 진행합니다.")
 
@@ -1359,17 +1364,56 @@ class AgentRosterControl:
             name_in = ui.input("서버 이름", placeholder="everything").props(
                 "outlined dense dark"
             ).classes("w-full")
-            command_in = ui.input(
-                "실행 명령 (command)", placeholder="npx / node / ${PYTHON_BIN:-python}"
-            ).props("outlined dense dark").classes("w-full")
-            args_in = ui.textarea(
-                "인자 (args) — 한 줄에 하나",
-                placeholder="-y\r\n@modelcontextprotocol/server-everything",
-            ).props("outlined dense dark rows=3").classes("w-full text-xs")
-            env_in = ui.textarea(
-                "환경변수 (env) — KEY=VALUE, 한 줄에 하나",
-                placeholder="API_KEY=${SOME_API_KEY}",
-            ).props("outlined dense dark rows=2").classes("w-full text-xs")
+
+            # 로컬은 이 앱이 프로세스를 띄우고, 원격은 이미 떠 있는 주소에 붙습니다.
+            # 두 방식이 요구하는 값이 전혀 다르므로 칸을 함께 보여주지 않습니다 —
+            # 무엇을 채워야 하는지 화면이 먼저 말해 주어야 합니다.
+            kind_toggle = ui.toggle(
+                {"stdio": "로컬 프로세스 (stdio)", "remote": "원격 (HTTP)"}, value="stdio",
+            ).props("dense unelevated toggle-color=indigo-6 color=slate-7").classes("text-xs")
+
+            local_box = ui.column().classes("w-full gap-2")
+            with local_box:
+                command_in = ui.input(
+                    "실행 명령 (command)", placeholder="npx / node / ${PYTHON_BIN:-python}"
+                ).props("outlined dense dark").classes("w-full")
+                args_in = ui.textarea(
+                    "인자 (args) — 한 줄에 하나",
+                    placeholder="-y\r\n@modelcontextprotocol/server-everything",
+                ).props("outlined dense dark rows=3").classes("w-full text-xs")
+                env_in = ui.textarea(
+                    "환경변수 (env) — KEY=VALUE, 한 줄에 하나",
+                    placeholder="API_KEY=${SOME_API_KEY}",
+                ).props("outlined dense dark rows=2").classes("w-full text-xs")
+
+            remote_box = ui.column().classes("w-full gap-2")
+            with remote_box:
+                url_in = ui.input(
+                    "주소 (url)", placeholder="https://mcp.example.com/mcp"
+                ).props("outlined dense dark").classes("w-full")
+                headers_in = ui.textarea(
+                    "HTTP 헤더 — 이름: 값, 한 줄에 하나",
+                    placeholder="Authorization: Bearer ${REMOTE_MCP_TOKEN}",
+                ).props("outlined dense dark rows=2").classes("w-full text-xs")
+                transport_sel = ui.select(
+                    {"auto": "자동 (Streamable HTTP → 안 되면 SSE)",
+                     "http": "Streamable HTTP 고정",
+                     "sse": "HTTP+SSE 고정 (구형 서버)"},
+                    value="auto", label="전송 방식",
+                ).props("outlined dense dark options-dense").classes("w-full text-xs")
+                ui.label(
+                    "토큰은 값에 직접 쓰지 말고 ${환경변수} 로 적으세요. conf.json 에는 그 "
+                    "표기가 그대로 저장되고, 실제 값은 .env 에서 읽습니다."
+                ).classes("text-[10px] text-amber-400/90 leading-snug")
+
+            def _sync_kind() -> None:
+                remote = kind_toggle.value == "remote"
+                local_box.set_visibility(not remote)
+                remote_box.set_visibility(remote)
+
+            kind_toggle.on_value_change(lambda _e: _sync_kind())
+            _sync_kind()
+
             enabled_cb = ui.checkbox("추가하고 바로 켜기", value=True).props("dense dark color=indigo-4")
 
             ui.label(
@@ -1380,9 +1424,44 @@ class AgentRosterControl:
 
             async def do_add() -> None:
                 name = (name_in.value or "").strip()
+                if not name:
+                    ui.notify("서버 이름은 반드시 입력해야 합니다.",
+                              type="warning", position="bottom-right")
+                    return
+                enabled = bool(enabled_cb.value)
+
+                if kind_toggle.value == "remote":
+                    url = (url_in.value or "").strip()
+                    if not url:
+                        ui.notify("원격 서버는 주소(url)가 필요합니다.",
+                                  type="warning", position="bottom-right")
+                        return
+                    headers: Dict[str, str] = {}
+                    for line in (headers_in.value or "").splitlines():
+                        if not line.strip():
+                            continue
+                        if ":" not in line:
+                            ui.notify(f"헤더 형식이 올바르지 않습니다: '{line.strip()}' "
+                                      f"(이름: 값 으로 적어주세요)",
+                                      type="warning", position="bottom-right")
+                            return
+                        key, _, value = line.partition(":")
+                        headers[key.strip()] = value.strip()
+
+                    transport = transport_sel.value or "auto"
+                    dialog.close()
+                    await self._apply_conf_change(
+                        lambda: add_mcp_server_to_conf_file(
+                            name, enabled=enabled, config_path=self._conf_path(),
+                            url=url, headers=headers, transport=transport,
+                        ),
+                        f"'{name}' 원격 서버를 추가했습니다." + ("" if enabled else " (꺼진 상태)"),
+                    )
+                    return
+
                 command = (command_in.value or "").strip()
-                if not name or not command:
-                    ui.notify("서버 이름과 실행 명령은 반드시 입력해야 합니다.",
+                if not command:
+                    ui.notify("로컬 서버는 실행 명령(command)이 필요합니다.",
                               type="warning", position="bottom-right")
                     return
 
@@ -1398,7 +1477,6 @@ class AgentRosterControl:
                     key, _, value = line.partition("=")
                     env[key.strip()] = value.strip()
 
-                enabled = bool(enabled_cb.value)
                 dialog.close()
                 await self._apply_conf_change(
                     lambda: add_mcp_server_to_conf_file(

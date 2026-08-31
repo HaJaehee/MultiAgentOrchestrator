@@ -3,7 +3,7 @@
 > 상위: [레퍼런스 개관](README.md) · 이전: [프로젝트 구조](02-project-layout.md)
 
 ```bash
-pytest -q               # 전체 (298개, 약 26초)
+pytest -q               # 전체 (318개, 약 26초)
 pytest -v tests/test_config.py
 pytest -k "snapshot"
 ```
@@ -18,6 +18,7 @@ pytest -k "snapshot"
 | `test_agent_admin.py` | 에이전트 추가·비활성화·삭제 시 `conf.json` 편집과 화면 잠금 규칙 |
 | `test_mcp_admin.py` | MCP 서버 추가·삭제·on/off, 주석·`${VAR}` 보존, 실제 서버 반영 |
 | `test_mcp.py` | MCP 클라이언트 연결, 도구 검색, 실행 |
+| `test_remote_mcp.py` | 원격(HTTP) MCP 서버: 설정 규칙, 전송 방식 선택, 토큰 보관 |
 | `test_llm_settings.py` | `llm` 상속, 파라미터 전달, 단계적 사고 모드 |
 | `test_orchestrator.py` | 발언 순서, 전략별 배치 |
 | `test_speaker_selection.py` | 오케스트레이터 지명, 실패 시 물러서기 |

@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import mcp.types as types
 from mcp import ClientSession
+from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.streamable_http import streamablehttp_client
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -205,11 +207,27 @@ class MCPClientConnection:
     요청만 보냅니다 (ClientSession 이 요청/응답 다중화를 처리합니다).
     """
 
-    def __init__(self, server_name: str, command: str, args: List[str], env: Optional[Dict[str, str]] = None):
+    def __init__(
+        self,
+        server_name: str,
+        command: str = "",
+        args: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = None,
+        *,
+        url: str = "",
+        headers: Optional[Dict[str, str]] = None,
+        transport: str = "auto",
+        timeout: float = 30.0,
+    ):
         self.server_name = server_name
         self.command = command
-        self.args = args
+        self.args = args or []
         self.env = env or {}
+        # 원격 서버. 프로세스를 띄우는 대신 이미 떠 있는 주소에 붙습니다.
+        self.url = url
+        self.headers = headers or {}
+        self.timeout = timeout
+        self._configured_transport = transport or "auto"
         self._tools: List[MCPToolDefinition] = []
         self._is_available = False
 
@@ -223,6 +241,36 @@ class MCPClientConnection:
         self._process_pid: Optional[int] = None
         # connect / teardown 직렬화 (도구 호출 자체는 동시 실행 가능)
         self._lock = asyncio.Lock()
+
+    @property
+    def is_remote(self) -> bool:
+        return bool((self.url or "").strip())
+
+    @property
+    def transport(self) -> str:
+        """실제로 쓸 전송 방식. `auto` 는 주소 유무로 갈립니다."""
+        if self._configured_transport != "auto":
+            return self._configured_transport
+        return "http" if self.is_remote else "stdio"
+
+    @property
+    def connect_attempts(self) -> List[str]:
+        """붙어 볼 전송 방식의 순서.
+
+        원격을 `auto` 로 두면 두 번 시도합니다. 두 규격(Streamable HTTP 와 옛
+        HTTP+SSE)이 같은 주소를 쓰는 일이 흔해서, 붙여 보기 전에는 어느 쪽인지
+        알 수 없기 때문입니다. 설정에 못 박아 두면 한 번만 갑니다.
+        """
+        if self.is_remote and self._configured_transport == "auto":
+            return ["http", "sse"]
+        return [self.transport]
+
+    @property
+    def endpoint_label(self) -> str:
+        """이 서버가 어디에 있는지 한 줄로 (연결 실패 로그와 화면 표시용)."""
+        if self.is_remote:
+            return self.url
+        return " ".join([self.command, *self.args]).strip()
 
     @property
     def tools(self) -> List[MCPToolDefinition]:
@@ -263,7 +311,74 @@ class MCPClientConnection:
         """세션을 열고 종료 신호가 올 때까지 살려둡니다.
 
         컨텍스트 진입과 이탈이 모두 이 태스크 안에서 일어나야 합니다.
+
+        원격 서버는 `auto` 일 때 Streamable HTTP 로 먼저 붙고, 실패하면 옛
+        HTTP+SSE 로 한 번 더 시도합니다. 두 규격이 같은 주소를 쓰는 일이 흔해서,
+        붙여 보기 전에는 어느 쪽인지 알 수 없습니다. 설정에 `transport` 를 적어
+        두면 이 왕복을 건너뜁니다.
         """
+        attempts = self.connect_attempts
+
+        for index, transport in enumerate(attempts):
+            try:
+                await self._serve_once(transport)
+                return
+            except (Exception, BaseException) as exc:  # noqa: BLE001 - 기동 실패는 폴백으로 흡수
+                self._connect_error = exc
+                # 이미 한 번 붙었던 세션이 끊긴 것이라면 다른 규격을 시도할 일이
+                # 아닙니다. 그건 서버가 죽은 것이지 규격이 틀린 것이 아닙니다
+                # (`_ready` 는 세션이 열렸을 때만 서 있습니다).
+                already_connected = self._ready is not None and self._ready.is_set()
+                if index + 1 >= len(attempts) or already_connected:
+                    if self._ready is not None:
+                        # 기동에 실패한 경우에도 대기 중인 connect() 를 깨웁니다.
+                        self._ready.set()
+                    return
+                logger.info(
+                    f"MCP server '{self.server_name}' did not answer over {transport}; "
+                    f"trying {attempts[index + 1]} ({_describe_exception(exc)})"
+                )
+
+    async def _serve_once(self, transport: str) -> None:
+        """한 가지 전송 방식으로 세션을 열고 종료까지 유지합니다.
+
+        어느 쪽으로 끝나든 세션 참조를 지웁니다. 이걸 각 전송 방식 안에 두면
+        하나를 더할 때마다 빠뜨리게 되고, 남은 참조는 '살아 있는 세션' 으로
+        읽혀 다음 도구 호출이 닫힌 스트림에 나갑니다.
+        """
+        try:
+            if transport == "stdio":
+                await self._serve_stdio()
+            else:
+                await self._serve_http(transport)
+        finally:
+            self._session = None
+
+    async def _serve_http(self, transport: str) -> None:
+        """원격 서버. 띄울 프로세스도, 볼 stderr 도 없습니다."""
+        headers = dict(self.headers) if self.headers else None
+        if transport == "sse":
+            cm = sse_client(self.url, headers=headers, timeout=self.timeout)
+        else:
+            cm = streamablehttp_client(self.url, headers=headers, timeout=self.timeout)
+
+        async with cm as streams:
+            # streamablehttp_client 는 (read, write, get_session_id) 를 돌려주고
+            # sse_client 는 (read, write) 를 돌려줍니다.
+            read_stream, write_stream = streams[0], streams[1]
+            async with ClientSession(
+                read_stream,
+                write_stream,
+                list_roots_callback=_handle_list_roots,
+            ) as session:
+                await session.initialize()
+                self._session = session
+                self._connect_error = None
+                self._stderr_tail = ""
+                self._ready.set()
+                await self._shutdown.wait()
+
+    async def _serve_stdio(self) -> None:
         tee = _StderrTee()
         connected = False
         try:
@@ -289,17 +404,11 @@ class MCPClientConnection:
                     self._ready.set()
                     # 종료 요청이 올 때까지 프로세스를 유지합니다.
                     await self._shutdown.wait()
-        except (Exception, BaseException) as e:  # noqa: BLE001 - 기동 실패는 모두 폴백으로 흡수
-            self._connect_error = e
         finally:
             # 기동에 실패했을 때만 stderr 를 회수합니다 (정상 종료 경로는 대기 없이 닫음).
             tee.close(drain=not connected)
             if not connected:
                 self._stderr_tail = tee.tail
-            self._session = None
-            if self._ready is not None:
-                # 기동에 실패한 경우에도 대기 중인 connect() 를 깨웁니다.
-                self._ready.set()
 
     async def connect(self) -> bool:
         """세션이 없으면 새로 열고, 사용 가능해졌는지 반환합니다."""
@@ -326,7 +435,8 @@ class MCPClientConnection:
             if self._session is None:
                 logger.warning(
                     f"Could not connect to MCP server '{self.server_name}' "
-                    f"({self.command}): {self.connect_error or _describe_exception(self._connect_error)}"
+                    f"({self.transport}: {self.endpoint_label}): "
+                    f"{self.connect_error or _describe_exception(self._connect_error)}"
                 )
                 await self._teardown_locked()
                 return False
