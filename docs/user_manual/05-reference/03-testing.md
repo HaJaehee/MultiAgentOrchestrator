@@ -3,7 +3,7 @@
 > 상위: [레퍼런스 개관](README.md) · 이전: [프로젝트 구조](02-project-layout.md)
 
 ```bash
-pytest -q               # 전체 (270개, 약 27초)
+pytest -q               # 전체 (277개, 약 26초)
 pytest -v tests/test_config.py
 pytest -k "snapshot"
 ```
@@ -30,8 +30,8 @@ pytest -k "snapshot"
 | `test_resilience.py` | 새로고침, 연결 끊김, 컨텍스트 한도, 도구 루프 한도 |
 | `test_tool_records.py` | 도구 실행 기록이 그 발언에 붙는가 |
 | `test_export.py` | 마크다운 내보내기 |
-| `test_chat_card.py` | 발언 카드 접기 규칙 |
-| `test_sidebar_times.py` | 세션 카드의 시각 표시 |
+| `test_chat_card.py` | 발언 카드 접기 규칙, 펼친 카드와 자동 스크롤 |
+| `test_sidebar_times.py` | 세션 카드의 시각 표시, 목록을 다시 그리는 시점 |
 | `test_db.py` | ORM 스키마, 관계, cascade |
 | `test_open_browser.py` | 브라우저 대기 스크립트의 주소 결정 |
 | `test_new_features.py` | 페르소나 영속화, host/port 우선순위, MCP roots, 맥락 유지 |

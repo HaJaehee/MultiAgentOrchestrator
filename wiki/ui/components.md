@@ -80,6 +80,24 @@ The web application workspace is organized into four primary UI components in [a
 - **Real-Time Token Streaming**: Supports incremental token streaming (`start_streaming_message()`, `append_stream_chunk()`, and `_finalize_streaming_message()`). Agent messages stream directly into reactive markdown cards as LLM completion chunks arrive.
 - **Folding Tool Accordions**: Each MCP tool call (input arguments and execution outputs) renders inside an expandable Quasar accordion, preserving timeline readability.
 - **Status & Progress Banner**: Shows real-time speaker indicators (e.g. `[Senior Python Engineer] 발언 및 분석 중...`) and round counters during execution.
+- **Liveness indicators**: while a turn is running the feed says so in three places at once —
+  the status bar pulses and brightens (`.feed-status-live`), a sweeping bar runs under it
+  (`.feed-progress`), and a strip above the input shows bouncing dots, the current speaker, and
+  an **elapsed seconds** counter. The counter is driven by a 1-second `ui.timer`, not by server
+  events, because the window that reads as "frozen" — waiting for the first token, or a tool
+  call that takes half a minute — is exactly the window in which no event arrives. The strip
+  lives *outside* the scroll area: inside it, it would scroll out of view the moment a card is
+  expanded, which is when it is needed most. Each phase restarts the counter, so it reads "how
+  long has this speaker been going", not "how long since the turn started".
+- **Auto-scroll while streaming**: the feed follows new output only while **every** card is
+  collapsed (`ChatFeed.following`). Expanding a card is how a reader says "I am reading this",
+  and chunks keep arriving from other agents meanwhile; scrolling to the bottom on every chunk
+  would drag them off their place and undo any attempt to scroll back. Cards drawn open by the
+  renderer — a speech being streamed — do not count: only `_toggle_card()` (a real click)
+  records into `_user_expanded`, otherwise following would be off for the whole debate. While
+  paused, an amber `맨 아래로 (N개 펼침)` button in the status bar states the reason and offers a
+  one-shot jump; it never collapses the reader's cards. Collapsing the last one resumes
+  following, and finalising a stream leaves a user-expanded card open.
 - **Input Bar**: Auto-expanding message textarea with submit shortcuts (`Enter` / `Ctrl+Enter`).
 - **Failure Cards**: A message with `msg_type="error"` — an agent whose endpoint never answered — renders on a rose background with an `응답 없음` badge. `finalize_streaming_message()` restyles the card in place when a turn that had started streaming ends in failure.
 - **Reattachment**: `render_all(messages, streaming_ids=…)` rebuilds the whole feed from a

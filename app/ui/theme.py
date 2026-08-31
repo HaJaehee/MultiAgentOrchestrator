@@ -152,6 +152,82 @@ body {
     mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
 }
 
+/* --- 생성 중 표시 ---------------------------------------------------------
+   LLM 이 첫 글자를 내놓기까지, 그리고 도구가 도는 동안 화면에는 아무 일도
+   일어나지 않습니다. 작은 회색 점 세 개와 흐린 글씨만으로는 "멈춘 화면" 과
+   구별되지 않아, 사람이 새로고침을 누르게 됩니다 (그러면 붙어 있던 구독만
+   끊기고 토론은 그대로 돕니다).
+
+   그래서 세 가지를 함께 씁니다: 쓸리는 진행 막대(무언가 돌고 있다), 튀는 점
+   (지금 이 순간에도 움직인다), 경과 시간(얼마나 기다렸는지). 시간이 가장
+   중요합니다 — 초가 올라가는 것을 보면 멈춘 것이 아님을 의심할 여지가 없습니다. */
+
+.feed-progress {
+    position: relative;
+    height: 3px;
+    overflow: hidden;
+    border-radius: 3px;
+    background: rgba(99, 102, 241, 0.15);
+}
+.feed-progress::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 35%;
+    background: linear-gradient(90deg, transparent, #818cf8, transparent);
+    animation: mado-sweep 1.3s linear infinite;
+}
+@keyframes mado-sweep {
+    0%   { transform: translateX(-120%); }
+    100% { transform: translateX(400%); }
+}
+
+/* 튀는 점 세 개. `ui.spinner("dots")` 보다 크고 대비가 높습니다. */
+.live-dots i {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 4px;
+    border-radius: 50%;
+    background: #818cf8;
+    animation: mado-dot 1.2s ease-in-out infinite both;
+}
+.live-dots i:nth-child(2) { animation-delay: 0.16s; }
+.live-dots i:nth-child(3) { animation-delay: 0.32s; }
+@keyframes mado-dot {
+    0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+    40%           { opacity: 1;    transform: translateY(-4px); }
+}
+
+/* 토론이 도는 동안 상태 막대 자체가 살아 있어야 합니다. 테두리 빛이 천천히
+   번지므로, 눈에 띄되 글을 읽는 데 방해가 되지는 않습니다. */
+.feed-status-live {
+    border-color: rgba(129, 140, 248, 0.7) !important;
+    animation: mado-pulse 2.4s ease-in-out infinite;
+}
+@keyframes mado-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.35); }
+    50%      { box-shadow: 0 0 0 5px rgba(99, 102, 241, 0); }
+}
+
+/* 타임라인 맨 아래에 붙는 생성 중 줄. 사람이 보고 있는 곳은 상태 막대가 아니라
+   대화가 흐르는 이 자리입니다. */
+.live-strip {
+    border: 1px dashed rgba(129, 140, 248, 0.55);
+    background: rgba(99, 102, 241, 0.08);
+}
+
+/* 애니메이션을 줄이도록 설정한 환경에서는 움직임을 멈춥니다. 상태는 글자로도
+   전해지므로 (경과 시간·문구) 정보가 사라지지는 않습니다. */
+@media (prefers-reduced-motion: reduce) {
+    .feed-progress::after,
+    .live-dots i,
+    .feed-status-live {
+        animation: none;
+    }
+}
+
 /* Custom Scrollbars */
 ::-webkit-scrollbar {
     width: 6px;

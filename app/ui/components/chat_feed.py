@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from typing import Any, Callable, Coroutine, Dict, Iterable, List, Optional, Set
 from nicegui import ui
 from app.agents.base import style_for_agent
@@ -93,6 +94,24 @@ class ChatFeed:
         self._active_streams: Dict[str, Dict[str, Any]] = {}
         self._placeholder: Optional[ui.column] = None
 
+        # 생성 중 표시. 초가 올라가는 것이 "멈추지 않았다" 는 가장 확실한 신호라,
+        # 상태 문구가 바뀔 때마다(= 발언자나 단계가 바뀔 때마다) 다시 셉니다.
+        self.progress_bar: Optional[ui.element] = None
+        self.elapsed_badge: Optional[ui.badge] = None
+        self.live_strip: Optional[ui.row] = None
+        self.live_label: Optional[ui.label] = None
+        self.live_elapsed: Optional[ui.label] = None
+        self._busy_since: Optional[float] = None
+        self._status_text: str = ""
+
+        # 사용자가 직접 펼쳐 둔 카드의 message id. 하나라도 있으면 자동 스크롤을
+        # 멈춥니다 — 읽는 중에 화면이 밑으로 끌려가면 읽을 수가 없습니다.
+        # 스트리밍 카드는 펼쳐진 채로 그려지지만 여기 들어오지 않습니다. 그건
+        # 사람이 편 것이 아니라 기본 상태이고, 그것까지 세면 토론이 도는 동안
+        # 자동 스크롤이 영영 꺼집니다.
+        self._user_expanded: Set[str] = set()
+        self.follow_button: Optional[ui.button] = None
+
     # ------------------------------------------------------------------ 수명
 
     @property
@@ -113,30 +132,69 @@ class ChatFeed:
             "w-full h-full flex flex-col flex-nowrap justify-between overflow-hidden"
         ) as root:
             # 1. Status Indicator Bar
-            with ui.row().classes(
-                "w-full items-center justify-between px-3 py-1.5 bg-slate-900/90 border border-slate-800 rounded-lg text-xs flex-shrink-0"
-            ) as self.status_bar:
-                with ui.row().classes("items-center gap-2"):
-                    self.status_spinner = ui.spinner("dots", size="sm", color="indigo-4")
-                    self.status_spinner.set_visibility(False)
-                    self.status_label = ui.label("대기 중").classes("font-semibold text-slate-300")
-                with ui.row().classes("items-center gap-2"):
-                    self.stop_button = (
-                        ui.button("정지", icon="stop_circle", on_click=self._handle_stop)
-                        .props("flat dense no-caps color=rose-4 size=sm")
-                        .tooltip(
-                            "남은 라운드를 건너뛰고 지금까지의 토론으로 최종 산출물을 만듭니다. "
-                            "진행 중인 발언은 끝까지 받습니다."
+            with ui.column().classes("w-full gap-1 flex-shrink-0"):
+                with ui.row().classes(
+                    "w-full items-center justify-between px-3 py-1.5 bg-slate-900/90 border border-slate-800 rounded-lg text-xs"
+                ) as self.status_bar:
+                    with ui.row().classes("items-center gap-2 min-w-0"):
+                        self.status_spinner = ui.spinner("dots", size="sm", color="indigo-4")
+                        self.status_spinner.set_visibility(False)
+                        self.status_label = ui.label("대기 중").classes("font-semibold text-slate-300")
+                        # 경과 시간. 상태 막대는 스크롤과 무관하게 늘 보이므로,
+                        # 타임라인이 아무리 길어져도 여기서 초가 올라갑니다.
+                        self.elapsed_badge = ui.badge("", color="indigo-9").props("dense text-[10px]")
+                        self.elapsed_badge.set_visibility(False)
+                    with ui.row().classes("items-center gap-2 flex-shrink-0"):
+                        self.follow_button = (
+                            ui.button("맨 아래로", icon="vertical_align_bottom",
+                                      on_click=self._handle_follow)
+                            .props("flat dense no-caps color=amber-4 size=sm")
+                            .tooltip(
+                                "펼쳐 둔 카드가 있어 자동 스크롤을 멈춘 상태입니다. "
+                                "카드를 다시 접으면 새 발언을 따라 내려갑니다."
+                            )
                         )
-                    )
-                    self.stop_button.set_visibility(False)
-                    self.round_badge = ui.badge("Ready", color="slate-700").props("dense")
+                        self.follow_button.set_visibility(False)
+                        self.stop_button = (
+                            ui.button("정지", icon="stop_circle", on_click=self._handle_stop)
+                            .props("flat dense no-caps color=rose-4 size=sm")
+                            .tooltip(
+                                "남은 라운드를 건너뛰고 지금까지의 토론으로 최종 산출물을 만듭니다. "
+                                "진행 중인 발언은 끝까지 받습니다."
+                            )
+                        )
+                        self.stop_button.set_visibility(False)
+                        self.round_badge = ui.badge("Ready", color="slate-700").props("dense")
+
+                # 쓸려 가는 막대. 글자가 한동안 오지 않아도 무언가 돌고 있다는
+                # 것을 한눈에 보여줍니다.
+                self.progress_bar = ui.element("div").classes("feed-progress w-full")
+                self.progress_bar.set_visibility(False)
 
             # 2. Scrollable Messages Timeline (Fills all remaining vertical space)
             with ui.scroll_area().classes("w-full flex-grow my-2 pr-2 min-h-0") as self.scroll_area:
                 self.message_container = ui.column().classes("w-full gap-3 debate-timeline")
                 with self.message_container:
                     self._render_empty_placeholder()
+
+            # 2-b. 생성 중 줄. 타임라인 **밖**, 대화가 흘러나오는 바로 그 자리에
+            #      둡니다. 안에 두면 카드 하나를 펼쳐 자동 스크롤이 멈춘 순간
+            #      화면 밖으로 밀려나, 정작 필요한 때 보이지 않습니다.
+            with ui.row().classes(
+                "w-full items-center gap-2 px-3 py-1.5 mb-2 rounded-lg live-strip flex-shrink-0"
+            ) as self.live_strip:
+                ui.html('<span class="live-dots"><i></i><i></i><i></i></span>')
+                self.live_label = ui.label("").classes(
+                    "text-xs font-semibold text-indigo-200 truncate min-w-0"
+                )
+                self.live_elapsed = ui.label("").classes(
+                    "text-xs font-mono text-indigo-300 flex-shrink-0 ml-auto"
+                )
+            self.live_strip.set_visibility(False)
+
+            # 경과 시간은 이벤트가 아니라 시계가 갱신합니다. 도구가 30초씩 걸리는
+            # 동안에는 서버에서 아무 이벤트도 오지 않기 때문입니다.
+            ui.timer(1.0, self._tick_elapsed)
 
             # 3. Input Bar
             with ui.row().classes("w-full items-center gap-2 p-2 bg-slate-900 border border-slate-800 rounded-xl shadow-lg flex-shrink-0"):
@@ -197,6 +255,16 @@ class ChatFeed:
     def set_busy(self, busy: bool, status_text: str = "", round_info: str = "") -> None:
         if not self.alive:
             return
+        # 문구가 바뀌었다는 것은 발언자나 단계가 넘어갔다는 뜻입니다. 경과 시간은
+        # 턴 전체가 아니라 **지금 이 단계**에서 얼마나 기다렸는지를 세야, 한
+        # 에이전트가 붙잡고 있는 상황이 눈에 보입니다.
+        if busy and (not self.is_busy or (status_text and status_text != self._status_text)):
+            self._busy_since = time.monotonic()
+        if not busy:
+            self._busy_since = None
+        if status_text:
+            self._status_text = status_text
+
         self.is_busy = busy
         # 개입 통로가 연결돼 있으면 토론 중에도 입력을 열어 둡니다. 그때 보낸 글은
         # 새 턴이 아니라 진행 중인 토론으로 들어갑니다.
@@ -221,6 +289,58 @@ class ChatFeed:
             self.status_label.set_text(status_text)
         if self.round_badge and round_info:
             self.round_badge.set_text(round_info)
+        self._refresh_live_indicator()
+
+    # ------------------------------------------------------------ 생성 중 표시
+
+    def _refresh_live_indicator(self) -> None:
+        """'지금 돌고 있다' 를 화면 세 곳에 반영합니다.
+
+        같은 사실을 세 번 말하는 것은 자리마다 보이는 조건이 다르기 때문입니다.
+        상태 막대는 늘 보이고, 진행 막대는 곁눈으로도 움직임이 잡히고, 아래쪽
+        생성 중 줄은 사람이 실제로 글을 읽고 있는 자리에 붙습니다.
+        """
+        if not self.alive:
+            return
+        busy = self.is_busy
+
+        if self.status_bar is not None and not self.status_bar.is_deleted:
+            if busy:
+                self.status_bar.classes(add="feed-status-live")
+            else:
+                self.status_bar.classes(remove="feed-status-live")
+        if self.status_label is not None and not self.status_label.is_deleted:
+            # 대기 중일 때까지 밝게 두면 정작 도는 중임을 알리지 못합니다.
+            self.status_label.classes(
+                replace="font-semibold truncate min-w-0 "
+                        + ("text-sm text-indigo-100" if busy else "text-xs text-slate-300")
+            )
+        for element in (self.progress_bar, self.live_strip, self.elapsed_badge):
+            if element is not None and not element.is_deleted:
+                element.set_visibility(busy)
+        if self.live_label is not None and not self.live_label.is_deleted:
+            self.live_label.set_text(self._status_text or "응답을 기다리는 중...")
+
+        self._tick_elapsed()
+        self._refresh_follow_button()
+
+    def _tick_elapsed(self) -> None:
+        """경과 시간을 1초마다 갱신합니다.
+
+        서버 이벤트에 기대지 않는 것이 핵심입니다. 도구 하나가 30초를 잡아먹는
+        동안에는 이벤트가 하나도 오지 않고, 그 침묵이 바로 사람이 "멈췄다" 고
+        느끼는 구간입니다. 시계는 그동안에도 움직입니다.
+        """
+        if not self.alive:
+            return
+        if self._busy_since is None:
+            text = ""
+        else:
+            seconds = int(time.monotonic() - self._busy_since)
+            text = f"{seconds}초" if seconds < 60 else f"{seconds // 60}분 {seconds % 60}초"
+        for label in (self.elapsed_badge, self.live_elapsed):
+            if label is not None and not label.is_deleted:
+                label.set_text(text)
 
     def restore_input(self, text: str) -> None:
         """보내지 못한 입력을 입력칸에 되돌려 놓습니다.
@@ -248,6 +368,10 @@ class ChatFeed:
     def clear(self) -> None:
         self._active_streams.clear()
         self._stop_pending = False
+        # 카드가 사라지므로 펼침 기억도 함께 버립니다. 남겨 두면 다음 대화가
+        # 있지도 않은 카드 때문에 자동 스크롤이 꺼진 채로 시작합니다.
+        self._user_expanded.clear()
+        self._refresh_follow_button()
         if not self.alive:
             return
         self._placeholder = None
@@ -269,6 +393,8 @@ class ChatFeed:
             return
         streaming: Set[str] = set(streaming_ids or ())
         self._active_streams.clear()
+        self._user_expanded.clear()
+        self._refresh_follow_button()
         self._placeholder = None
         self.message_container.clear()
 
@@ -285,7 +411,8 @@ class ChatFeed:
                 if is_streaming:
                     self._active_streams[msg_id] = handles
 
-        self._scroll_to_bottom()
+        # 방금 그린 화면입니다. 펼친 카드가 있을 수 없으므로 그냥 맨 아래로.
+        self._scroll_to_bottom(force=True)
 
     def start_streaming_message(self, msg: Dict[str, Any]) -> None:
         """Starts a streaming message card in the feed."""
@@ -360,8 +487,11 @@ class ChatFeed:
                     self._render_tool_accordion(tc)
 
         # 발언이 끝났으므로 접습니다. 여기가 이 기능이 실제로 걸리는 자리입니다 —
-        # 그리는 동안에는 펼쳐 두고, 다 쓰고 나면 세 줄로 줄입니다.
-        self._apply_clamp(info, collapsed=True)
+        # 그리는 동안에는 펼쳐 두고, 다 쓰고 나면 세 줄로 줄입니다. 단, 사람이
+        # 직접 펼쳐 둔 카드는 건드리지 않습니다. 읽고 있는 글을 화면이 접어
+        # 버리면 그것대로 남의 손이 끼어든 것입니다.
+        if (info.get("id") or "") not in self._user_expanded:
+            self._apply_clamp(info, collapsed=True)
         self._scroll_to_bottom()
 
     def _drop_placeholder(self) -> None:
@@ -373,9 +503,45 @@ class ChatFeed:
         self.message_container.remove(placeholder)
         self._placeholder = None
 
-    def _scroll_to_bottom(self) -> None:
+    # ------------------------------------------------------------ 스크롤 따라가기
+
+    @property
+    def following(self) -> bool:
+        """새 발언을 따라 아래로 내려갈지.
+
+        펼쳐 둔 카드가 하나라도 있으면 따라가지 않습니다. 카드를 편 이유는 그것을
+        읽기 위해서인데, 그동안에도 다른 에이전트의 글자는 계속 도착합니다. 매
+        청크마다 맨 아래로 끌려가면 읽던 자리를 잃고, 다시 올라가면 곧바로 또
+        끌려 내려갑니다. 전부 접혀 있을 때는 볼 것이 흐름뿐이므로 따라갑니다.
+        """
+        return not self._user_expanded
+
+    def _scroll_to_bottom(self, force: bool = False) -> None:
+        """맨 아래로. `force` 는 사람이 직접 요청했거나 화면을 새로 그린 경우입니다."""
+        if not force and not self.following:
+            return
         if self.scroll_area is not None and not self.scroll_area.is_deleted:
             self.scroll_area.scroll_to(percent=1.0)
+
+    def _refresh_follow_button(self) -> None:
+        """자동 스크롤이 멈춰 있다는 사실과 되돌아갈 방법을 함께 보여줍니다.
+
+        말없이 멈추면 이번에는 "스크롤이 고장 났다" 가 됩니다.
+        """
+        if self.follow_button is None or self.follow_button.is_deleted:
+            return
+        paused = bool(self._user_expanded)
+        self.follow_button.set_visibility(paused)
+        if paused:
+            self.follow_button.set_text(f"맨 아래로 ({len(self._user_expanded)}개 펼침)")
+
+    def _handle_follow(self) -> None:
+        """멈춰 있는 동안에도 한 번은 맨 아래를 볼 수 있어야 합니다.
+
+        카드를 대신 접지는 않습니다. 사람이 편 것을 화면이 마음대로 접으면,
+        읽으려던 글이 사라집니다.
+        """
+        self._scroll_to_bottom(force=True)
 
     def _render_card(self, msg: Dict[str, Any], streaming: bool = False) -> Dict[str, Any]:
         """발언 카드 하나. 스트리밍 중이든 확정된 것이든 같은 모양입니다.
@@ -443,6 +609,8 @@ class ChatFeed:
                         self._render_tool_accordion(tc)
 
         info.update({
+            # 펼쳐 둔 카드를 세려면 카드마다 이름표가 있어야 합니다.
+            "id": msg.get("id", ""),
             "card": card,
             "markdown": md,
             "content": content,
@@ -493,7 +661,25 @@ class ChatFeed:
         info["collapsed"] = collapsed
 
     def _toggle_card(self, info: Dict[str, Any]) -> None:
-        self._apply_clamp(info, collapsed=not info.get("collapsed", False))
+        """사람이 펼치기/접기를 누른 자리. 자동 스크롤이 켜지고 꺼지는 곳입니다."""
+        collapsed = not info.get("collapsed", False)
+        self._apply_clamp(info, collapsed=collapsed)
+
+        msg_id = info.get("id") or ""
+        # 접을 것이 없는 짧은 발언은 세지 않습니다. 펼침 버튼도 달리지 않으므로
+        # 여기 올 일이 없지만, 온다면 그건 "읽는 중" 이 아니라 빈 토글입니다.
+        if not msg_id or not is_clampable(info.get("content", "")):
+            return
+        if collapsed:
+            self._user_expanded.discard(msg_id)
+        else:
+            self._user_expanded.add(msg_id)
+
+        self._refresh_follow_button()
+        # 마지막 펼침을 접었다면 다시 흐름을 따라가겠다는 뜻입니다. 생성 중일
+        # 때만 곧바로 내려갑니다 — 멈춰 있는 화면을 임의로 움직이지 않습니다.
+        if self.following and self._active_streams:
+            self._scroll_to_bottom()
 
     def _copy_card(self, info: Dict[str, Any]) -> None:
         """이 발언을 클립보드에 넣습니다.
