@@ -310,7 +310,7 @@ def _is_blank(value: Any) -> bool:
 # `max_tool_iterations` 소진으로 발언이 통째로 실패하는 일이 있었습니다
 # (그때까지 실행된 도구와 관측은 남지만 답변은 나오지 않습니다). 100 이면
 # 그런 작업이 들어가고, 폭주를 막는 선으로서의 역할도 그대로입니다.
-TOOL_ITERATION_CEILING = 100
+TOOL_ITERATION_CEILING = 130
 
 # 순서를 지정하지 않은 에이전트의 발언 우선순위. 전부 같은 값이라 정렬이 안정적으로
 # 유지되어 conf.json 에 적힌 순서가 그대로 나옵니다. 화면에서 순서를 바꾸면 그때

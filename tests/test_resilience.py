@@ -403,7 +403,7 @@ def test_tool_iteration_ceiling_admits_long_tool_runs():
 
     from app.config import TOOL_ITERATION_CEILING, AgentConfig, LLMConfig
 
-    assert TOOL_ITERATION_CEILING == 100
+    assert TOOL_ITERATION_CEILING == 130
 
     assert AgentConfig(
         name="n", role="r", max_tool_iterations=TOOL_ITERATION_CEILING
