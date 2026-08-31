@@ -17,8 +17,9 @@ erDiagram
     sessions {
         string id PK "UUID4"
         string title "Session Name"
-        string strategy "sequential_debate | adversarial_debate | orchestrator_led"
+        string strategy "sequential_debate | adversarial_debate | orchestrator_led | parallel_dispatch"
         integer max_rounds "Max debate rounds"
+        integer parallel_limit "Max agents running at once (parallel_dispatch)"
         json active_agents "List of participating agent keys"
         text custom_instructions "Session-specific prompt additions"
         boolean personas_locked "True once first user message sent"
@@ -83,8 +84,9 @@ Represents a single multi-agent collaboration workspace or discussion thread.
 | :--- | :--- | :--- | :--- | :--- |
 | `id` | `VARCHAR(36)` | No | `uuid4()` | Primary key. |
 | `title` | `VARCHAR(255)` | No | `'New Debate Session'` | Session title displayed in the sidebar. Defaults to first prompt snippet. |
-| `strategy` | `VARCHAR(50)` | No | `'sequential_debate'` | Selected debate strategy (`sequential_debate`, `adversarial_debate`, `orchestrator_led`). Rows saved under the retired `free_debate` / `sequential_review` names are mapped to `sequential_debate` on read by `resolve_strategy_name()`. |
+| `strategy` | `VARCHAR(50)` | No | `'sequential_debate'` | Selected debate strategy (`sequential_debate`, `adversarial_debate`, `orchestrator_led`, `parallel_dispatch`). Rows saved under the retired `free_debate` / `sequential_review` names are mapped to `sequential_debate` on read by `resolve_strategy_name()`. |
 | `max_rounds` | `INTEGER` | No | `3` | Maximum specialist debate rounds per user turn. |
+| `parallel_limit` | `INTEGER` | No | `3` | How many agents may run concurrently in one round. Read only by `parallel_dispatch`; assignments beyond it queue on a semaphore rather than being dropped. Added by the lightweight migration in `session.py`, so existing databases get `3`. |
 | `active_agents` | `JSON` | No | `[]` | Array of agent keys participating in this session. |
 | `custom_instructions` | `TEXT` | No | `''` | User-defined custom instructions injected into every agent prompt. |
 | `personas_locked` | `BOOLEAN` | No | `False` | Locks session personas once the first user message is received. |

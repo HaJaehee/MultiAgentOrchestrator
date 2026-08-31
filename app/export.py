@@ -128,6 +128,11 @@ def build_session_markdown(
         ("참여 에이전트", ", ".join(agents) if agents else "-"),
         ("작업 공간", str(session.get("workspace_dir") or "(기본값)")),
     ]
+    # 동시 실행 상한은 병렬 지시 전략에서만 읽히는 값입니다. 순차로 돈 대화에
+    # 적어 두면 문서가 있지도 않은 설정을 있는 것처럼 말하게 됩니다.
+    if get_strategy(session.get("strategy")).orchestrator_dispatches_parallel:
+        meta.append(("동시 실행 상한", str(session.get("parallel_limit") or 3)))
+
     out.append("| 항목 | 값 |")
     out.append("| --- | --- |")
     out.extend(f"| {key} | {value or '-'} |" for key, value in meta)

@@ -15,6 +15,8 @@ _ADDED_COLUMNS = {
         # 비어 있으면 "그때 무엇이 있었는지 모른다" 는 뜻입니다. 화면은 그 경우
         # 지금 있는 에이전트를 모두 새것으로 보고 켜 둡니다.
         "known_agents": "TEXT NOT NULL DEFAULT '[]'",
+        # 병렬 지시 전략의 동시 실행 상한. 다른 전략에서는 읽히지 않습니다.
+        "parallel_limit": "INTEGER NOT NULL DEFAULT 3",
     },
     "session_agents": {
         # NULL 이면 "이 컬럼이 생기기 전에 잠긴 대화" 입니다. 그런 대화는 예전처럼

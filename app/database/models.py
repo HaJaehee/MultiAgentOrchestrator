@@ -20,6 +20,13 @@ class SessionModel(Base):
     title: Mapped[str] = mapped_column(String(255), default="New Debate Session")
     strategy: Mapped[str] = mapped_column(String(50), default="sequential_debate")
     max_rounds: Mapped[int] = mapped_column(Integer, default=3)
+    # 병렬 지시 전략에서 한 라운드에 동시에 띄울 에이전트 수의 상한.
+    #
+    # 상한이 필요한 이유는 엔드포인트 쪽에 있습니다. 로컬 단일 GPU 런타임
+    # (Ollama·vLLM·LM Studio)에 동시 요청을 다섯 개 던지면 큐에 쌓이거나 메모리가
+    # 터지고, 그 실패는 "에이전트가 응답하지 못했다" 로 나타납니다. 상한을 넘는
+    # 지시는 버리지 않고 순차적으로 밀려 실행됩니다.
+    parallel_limit: Mapped[int] = mapped_column(Integer, default=3)
     active_agents: Mapped[List[str]] = mapped_column(JSON, default=list)
     # 이 대화의 로스터를 마지막으로 저장할 때 **존재하던** 에이전트 전부.
     #

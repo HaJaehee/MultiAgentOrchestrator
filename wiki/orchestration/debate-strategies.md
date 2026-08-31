@@ -2,7 +2,8 @@
 
 A strategy answers two questions for every round: **who speaks, in what order**, and **what
 instruction is attached to each turn**. It never decides *what* an agent says — that comes from
-the agent's persona and the transcript.
+the agent's persona and the transcript. One strategy also answers a third: **do they speak one
+at a time, or all at once** (`parallel_dispatch`).
 
 The orchestrator is not part of a round. It plans before round 1 and synthesises after the last
 round, so every strategy excludes it from the speaker list.
@@ -45,6 +46,16 @@ graph TD
     subgraph S3 ["3. Orchestrator-Led (orchestrator_led)"]
         direction LR
         OL1["Orchestrator"] -->|names who speaks| OL2["Only the named agents"]
+    end
+
+    subgraph S4 ["4. Parallel Dispatch (parallel_dispatch)"]
+        direction LR
+        PD0["Orchestrator"] -->|task A| PD1["Agent A"]
+        PD0 -->|task B| PD2["Agent B"]
+        PD0 -->|task C| PD3["Agent C"]
+        PD1 --> PD4["Orchestrator merges the round"]
+        PD2 --> PD4
+        PD3 --> PD4
     end
 ```
 
@@ -92,6 +103,44 @@ graph TD
   order **and records that it did** — silently running a different order is the worst outcome.
 - **Ideal For**: long, open-ended sessions where calling every agent every round wastes tokens.
 
+### 2.4. Parallel Dispatch (`parallel_dispatch`)
+- **Key**: `parallel_dispatch`
+- **Display Name**: 병렬 지시 (Orchestrator Parallel Dispatch)
+- **Round shape**: dispatch → concurrent execution → merge. The other three strategies run one
+  speaker at a time, so a round costs the *sum* of the turns; here it costs the *slowest* one.
+- **Dispatch**: the orchestrator is asked for a per-agent task
+  (`{"assignments": [{"agent": ..., "task": ...}], "reason": ...}`), told that the named agents
+  answer simultaneously and that overlapping tasks mean duplicated work. Calling one agent is a
+  valid answer; calling everyone is not required.
+- **What each agent sees**: its own task, plus a board of **who else is working on what** — but
+  none of their answers. Every prompt for the round is built *before* the first coroutine
+  starts, so a fast sibling's reply cannot leak into a slower one's context. Agents are told to
+  state assumptions rather than guess at another agent's output.
+- **Merge**: after the round the orchestrator writes an interim synthesis — combined conclusion,
+  contradictions and how they are judged, unverified assumptions, open items. That message is
+  the input to the next round's dispatch. Without it nobody in the debate has ever seen the
+  round as a whole, and contradictions survive to the final synthesis.
+- **Concurrency limit**: `sessions.parallel_limit` (UI: **동시 실행**, default 3) caps how many
+  run at once via an `asyncio.Semaphore`; extra assignments queue rather than being dropped.
+  A local single-GPU endpoint (Ollama, vLLM, LM Studio) turns five simultaneous requests into
+  timeouts, which surface as "the agent did not answer".
+- **Robustness**: an unreachable endpoint or an unparseable dispatch falls back to running
+  *everyone concurrently without tasks* — the dispatch was lost, not the parallelism — and the
+  fallback is recorded in the feed. A broken `assignments` array is still scraped for known
+  agent keys. With only one specialist active, no dispatch call is made at all.
+- **Human interjections and stop**: honoured at **round boundaries only**. The other strategies
+  can look between speakers; here that gap does not exist because everyone is already running.
+  A stop request during a round skips the interim merge and goes straight to final synthesis.
+- **Ideal For**: independent workstreams that do not need each other's output within the round —
+  design + skeleton + threat review of the same feature, or auditing several modules at once.
+
+> **Implementation notes.** Parallel speaking breaks two assumptions the sequential engine could
+> take for granted. Concurrent `db.add`/`commit` on the shared `AsyncSession` raises
+> `IllegalStateChangeError`, so `_speak()` takes a `db_lock` covering the record block only —
+> the LLM call stays outside it. And because messages are reloaded in `created_at` order,
+> finishing order would otherwise reshuffle the transcript on every refresh; `_speak()` accepts
+> an explicit `created_at` stamped in dispatch order, and `state.messages` is re-sorted to match.
+
 ---
 
 ## 3. Adding a Custom Debate Strategy
@@ -120,6 +169,9 @@ graph TD
 3. If your strategy needs an LLM call to pick speakers, set
    `orchestrator_selects_speakers = True` instead of calling the model from the strategy —
    strategies stay pure, and the engine performs the call (and the fallback) in
-   `OrchestratorEngine._select_speakers()`.
+   `OrchestratorEngine._select_speakers()`. For a round that runs its speakers concurrently, set
+   `orchestrator_dispatches_parallel = True`; the engine then runs the whole round through
+   `OrchestratorEngine._run_parallel_round()` (dispatch, `asyncio.gather` under the session's
+   `parallel_limit`, interim merge) instead of the one-speaker-at-a-time loop.
 4. If you retire a strategy key that sessions may already hold, add it to
    `LEGACY_STRATEGY_ALIASES` so those conversations keep running.

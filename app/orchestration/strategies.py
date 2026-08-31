@@ -49,6 +49,11 @@ class BaseDebateStrategy(ABC):
     # 물어보고, 실패하면 이 전략의 `get_speakers_for_round()` 로 물러섭니다.
     orchestrator_selects_speakers: bool = False
 
+    # 한 라운드의 발언자들이 **동시에** 도는 전략인지. True 면 엔진이 라운드마다
+    # 과업을 나눠 주고(dispatch), 지목된 에이전트를 함께 띄운 뒤(gather),
+    # 오케스트레이터가 결과를 취합합니다. False 면 한 명씩 순서대로 돕니다.
+    orchestrator_dispatches_parallel: bool = False
+
     @property
     @abstractmethod
     def name(self) -> str:
@@ -202,10 +207,55 @@ class OrchestratorLedStrategy(BaseDebateStrategy):
         )
 
 
+class ParallelDispatchStrategy(BaseDebateStrategy):
+    """병렬 지시: 오케스트레이터가 과업을 나눠 주고 여러 에이전트가 동시에 답합니다.
+
+    다른 세 전략은 한 명이 끝나야 다음 사람이 시작합니다. 그래서 라운드 시간은
+    발언 시간의 합이고, 뒷사람은 앞사람의 결론을 읽고 이어갑니다. 여기서는
+    반대입니다 — 오케스트레이터가 **서로 겹치지 않는 과업**을 나눠 주고, 지목된
+    에이전트들이 같은 시각에 각자의 일을 합니다. 라운드 시간은 가장 느린 한 명의
+    시간이고, 서로의 이번 라운드 결과는 볼 수 없습니다.
+
+    그래서 두 가지가 반드시 따라붙습니다.
+
+    * **지시** — 같은 질문을 여럿에게 동시에 던지면 답이 겹칩니다. 무엇을 맡았는지
+      개별로 적어 주고, 다른 사람이 무엇을 맡았는지도 알려 줘야 중복이 줄어듭니다.
+    * **취합** — 아무도 서로를 못 봤으므로 라운드 끝에 오케스트레이터가 결과를
+      합치고 충돌을 정리합니다. 이 접합부가 없으면 라운드는 그냥 독백 묶음이 되고,
+      모순이 최종 합성까지 그대로 실려 갑니다.
+
+    실제 분배와 취합은 엔진이 합니다 (`orchestrator_dispatches_parallel`). LLM 을
+    부르는 일이라 순수 함수인 전략 객체가 할 수 없습니다. 분배에 실패하면 우선순위
+    순의 전원을 과업 없이 동시에 돌리는 것으로 물러섭니다 — 지시를 못 받았을 뿐,
+    병렬이라는 성질은 남깁니다.
+    """
+
+    name = "parallel_dispatch"
+    display_name = "병렬 지시 (Orchestrator Parallel Dispatch)"
+    orchestrator_dispatches_parallel = True
+
+    def get_speakers_for_round(
+        self, active_agents: List[Agent], round_num: int, state: DebateState
+    ) -> List[Agent]:
+        specialists = order_by_priority(specialists_of(active_agents))
+        return specialists if specialists else active_agents
+
+    def turn_instruction(
+        self, agent: Agent, speakers: List[Agent], index: int, state: DebateState
+    ) -> str:
+        """분배가 실패했을 때 붙는 지침. 정상 경로에서는 엔진이 개별 과업을 씁니다."""
+        return (
+            "[병렬 라운드] 오케스트레이터의 과업 분배를 받지 못했습니다. 다른 에이전트가 "
+            "지금 동시에 발언 중이라 그들의 이번 라운드 결과는 볼 수 없습니다. 당신의 전문 "
+            "영역에 한정해 기여하고, 남의 결론이 필요하면 가정으로 명시하세요."
+        )
+
+
 STRATEGY_MAP = {
     "sequential_debate": SequentialDebateStrategy(),
     "adversarial_debate": AdversarialDebateStrategy(),
     "orchestrator_led": OrchestratorLedStrategy(),
+    "parallel_dispatch": ParallelDispatchStrategy(),
 }
 
 DEFAULT_STRATEGY = "sequential_debate"

@@ -117,6 +117,9 @@ class AgentRosterControl:
         self.selected_agents: Dict[str, bool] = {}
         self.strategy_name: str = DEFAULT_STRATEGY
         self.max_rounds: int = 3
+        # 병렬 지시 전략에서 한 라운드에 동시에 띄울 에이전트 수의 상한.
+        # 다른 전략에서는 쓰이지 않으므로 그 전략일 때만 화면에 나옵니다.
+        self.parallel_limit: int = 3
         self.custom_instructions: str = ""
         # 이 대화의 작업 공간. 빈 문자열이면 conf.json 기본값을 씁니다.
         self.workspace_dir: str = ""
@@ -127,6 +130,8 @@ class AgentRosterControl:
 
         self.strategy_select: Optional[ui.select] = None
         self.rounds_slider: Optional[ui.slider] = None
+        self.parallel_row: Optional[ui.row] = None
+        self.parallel_input: Optional[ui.number] = None
         self.custom_instr_input: Optional[ui.textarea] = None
         self.expansion: Optional[ui.expansion] = None
         self.summary_badge: Optional[ui.badge] = None
@@ -341,6 +346,23 @@ class AgentRosterControl:
                             min=1, max=5, step=1, value=self.max_rounds, on_change=self._on_rounds_change
                         ).props("dark label color=indigo-4").classes("w-20")
                         self.rounds_label = ui.badge(str(self.max_rounds), color="indigo-7").props("dense")
+
+                    # 동시 실행 상한 — 병렬 지시 전략에서만 뜹니다. 다른 전략에서는
+                    # 읽히지 않는 값이라, 늘 띄워 두면 안 듣는 손잡이가 됩니다.
+                    self.parallel_row = ui.row().classes("items-center gap-2 min-w-[180px]")
+                    with self.parallel_row:
+                        ui.icon("call_split", size="xs").classes("text-teal-400")
+                        ui.label("동시 실행:").classes("text-xs font-semibold text-slate-300")
+                        self.parallel_input = ui.number(
+                            value=self.parallel_limit, min=1, max=8, step=1, format="%.0f",
+                            on_change=self._on_parallel_limit_change,
+                        ).props("outlined dense dark").classes("w-16 text-xs")
+                        self.parallel_input.tooltip(
+                            "한 라운드에 동시에 띄울 에이전트 수. 이보다 많이 지시받으면 "
+                            "나머지는 순차적으로 밀려 실행됩니다. 로컬 단일 엔드포인트"
+                            "(Ollama 등)에서는 낮게 두세요"
+                        )
+                    self._sync_parallel_visibility()
 
                 # Custom Instructions Input
                 with ui.column().classes("w-full gap-1 mt-1"):
@@ -1742,6 +1764,25 @@ class AgentRosterControl:
 
     def _on_strategy_change(self, e) -> None:
         self.strategy_name = e.value
+        self._sync_parallel_visibility()
+        if self.on_config_changed:
+            ui.timer(0.01, self.on_config_changed, once=True)
+
+    def _sync_parallel_visibility(self) -> None:
+        """'동시 실행' 은 병렬 지시 전략에서만 의미가 있습니다."""
+        if self.parallel_row is None:
+            return
+        strategy = STRATEGY_MAP.get(self.strategy_name)
+        self.parallel_row.set_visibility(
+            bool(strategy and strategy.orchestrator_dispatches_parallel)
+        )
+
+    def _on_parallel_limit_change(self, e) -> None:
+        # 빈 칸으로 지우는 중이면 (`None`) 마지막 값을 지킵니다. 0 이나 음수는
+        # "동시에 아무도 못 돈다" 는 뜻이 되므로 최소 1 입니다.
+        if e.value is None:
+            return
+        self.parallel_limit = max(1, int(e.value))
         if self.on_config_changed:
             ui.timer(0.01, self.on_config_changed, once=True)
 
@@ -1812,6 +1853,7 @@ class AgentRosterControl:
         strategy: str,
         max_rounds: int,
         instructions: str,
+        parallel_limit: int = 3,
         session_id: Optional[str] = None,
         workspace_dir: str = "",
         personas_locked: bool = False,
@@ -1829,6 +1871,7 @@ class AgentRosterControl:
         }
         self.strategy_name = resolve_strategy_name(strategy)
         self.max_rounds = max_rounds
+        self.parallel_limit = max(1, int(parallel_limit or 3))
         self.custom_instructions = instructions
         self.workspace_dir = workspace_dir or ""
         self.session_id = session_id
@@ -1842,6 +1885,9 @@ class AgentRosterControl:
             self.strategy_select.value = self.strategy_name
         if self.rounds_slider:
             self.rounds_slider.value = max_rounds
+        if self.parallel_input:
+            self.parallel_input.value = self.parallel_limit
+        self._sync_parallel_visibility()
         if hasattr(self, "rounds_label") and self.rounds_label:
             self.rounds_label.set_text(str(max_rounds))
         if self.custom_instr_input:

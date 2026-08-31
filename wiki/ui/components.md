@@ -57,9 +57,16 @@ The web application workspace is organized into four primary UI components in [a
   `truncate` never engaged, and the stance badge overflowed onto the checkbox and ⋮ button.
 - **Dynamic Live Refresh**: Rendered inside a reactive container (`cards_row`). When personas are updated via the persona editor or config reloads, `refresh_agent_cards()` rebuilds the cards in place, so labels, roles, order, and badges update without a page reload.
 - **Configuration Tooltips**: Hovering over an agent card reveals its configured model, endpoint URL, and sequential thinking mode.
-- **Strategy Dropdown**: Selects between `sequential_debate`, `adversarial_debate`, and `orchestrator_led`.
+- **Strategy Dropdown**: Selects between `sequential_debate`, `adversarial_debate`,
+  `orchestrator_led`, and `parallel_dispatch`. Populated from `STRATEGY_MAP`, so a newly
+  registered strategy appears without touching the UI.
 - **Agent Cards**: Drag to reorder (writes `debate_priority` to `conf.json`); the ⋮ menu sets `debate_stance` and can disable or delete the agent.
 - **Max Rounds Slider**: Sets the maximum debate depth ($1$ to $10$ rounds).
+- **동시 실행 (Parallel Limit)**: How many agents run at once inside one round, stored as
+  `sessions.parallel_limit`. Shown **only** while the selected strategy declares
+  `orchestrator_dispatches_parallel` — every other strategy runs one speaker at a time and would
+  never read it, and a control that does nothing is worse than no control. Lower it for a local
+  single-GPU endpoint.
 - **Custom Instructions Box**: Allows injecting ad-hoc guidelines into all agent prompts for the current session.
 - **Persona Settings Button**: Links directly to `/personas/{session_id}`. Displays a lock icon if debate has commenced.
 - **MCP Server Chips**: Displays real-time connection states (Green/Orange/Red) and opens diagnostic tooltips on hover.

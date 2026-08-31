@@ -2,7 +2,7 @@
 
 > 상위: [핵심 기술 개관](README.md) · 이전: [MCP 호스트](04-mcp-host.md) · 다음: [토론 전략](06-debate-strategies.md)
 >
-> 파일: `app/orchestration/engine.py` (1,060줄) · `runner.py` (386줄) · `state.py` · `control.py`
+> 파일: `app/orchestration/engine.py` (1,492줄) · `runner.py` (386줄) · `state.py` · `control.py`
 >
 > 단계별 흐름은 [토론 한 턴의 생애주기](../04-workflows/01-debate-turn.md)
 
@@ -113,6 +113,28 @@ for round_num in 1..max_rounds:
         │
         └─ 도구 실행 기록을 DB 에 저장
 ```
+
+**병렬 지시 전략은 라운드째로 갈라집니다.** 발언자를 한 명씩 세우는 위 루프와 섞을
+수 없어, `_run_parallel_round()` 가 라운드 전체를 대신 돕니다.
+
+```text
+for round_num in 1..max_rounds:                     ← parallel_dispatch
+    ├─ 개입 반영 · 정지 확인                          (이 라운드 과업의 근거)
+    ├─ _dispatch_parallel_tasks()                    오케스트레이터에게 과업 분배 요청
+    │      실패 → 과업 없이 전원 동시 실행 + 물러섬 기록
+    ├─ 프롬프트를 **전부 먼저** 만든다                 (동료의 답이 섞이지 않도록)
+    ├─ asyncio.gather(  ... )  under Semaphore(parallel_limit)
+    │      각 _speak() 는 db_lock 으로 기록 구간만 직렬화
+    │      created_at 은 지시 순서로 박아 둔다
+    └─ _merge_parallel_round()                       라운드 취합 (정지 요청 시 건너뜀)
+```
+
+| 왜 필요한가 | 무엇을 했는가 |
+| :--- | :--- |
+| `AsyncSession` 은 동시 사용을 허용하지 않음 (`IllegalStateChangeError`) | `_speak(db_lock=...)` 로 **기록 구간만** 잠금. LLM 호출은 락 밖 |
+| 기록은 `created_at` 순으로 다시 읽힘 | `_speak(created_at=...)` 에 지시 순서를 박고 `state.messages` 도 같은 순서로 정렬 |
+| 늦게 시작한 발언이 동료의 답을 볼 수 있음 | 라운드의 프롬프트를 gather 이전에 전부 생성 |
+| 발언 사이라는 틈이 없음 | 개입·정지를 라운드 경계에서 확인 |
 
 정지와 개입은 **발언과 발언 사이의 안전한 지점**에서만 확인합니다. 발언 도중에
 끊으면 반쪽짜리 기록이 남습니다.

@@ -3,7 +3,7 @@
 > 상위: [레퍼런스 개관](README.md) · 이전: [프로젝트 구조](02-project-layout.md)
 
 ```bash
-pytest -q               # 전체 (249개, 약 26초)
+pytest -q               # 전체 (265개, 약 27초)
 pytest -v tests/test_config.py
 pytest -k "snapshot"
 ```
@@ -21,6 +21,7 @@ pytest -k "snapshot"
 | `test_llm_settings.py` | `llm` 상속, 파라미터 전달, 단계적 사고 모드 |
 | `test_orchestrator.py` | 발언 순서, 전략별 배치 |
 | `test_speaker_selection.py` | 오케스트레이터 지명, 실패 시 물러서기 |
+| `test_parallel_dispatch.py` | 병렬 지시: 동시 실행, 과업 분배, 라운드 취합, 동시 실행 상한 |
 | `test_personas.py` | 페르소나 수명주기: 편집 → 잠금 → 재개 |
 | `test_session_snapshot.py` | **시작한 대화는 자기완결적이다** |
 | `test_roster_lock.py` | 토론 중 MCP 구성 잠금 |

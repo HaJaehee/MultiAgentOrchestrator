@@ -194,6 +194,7 @@ class SessionSidebar:
                     "title": session_obj.title,
                     "strategy": session_obj.strategy,
                     "max_rounds": session_obj.max_rounds,
+                    "parallel_limit": session_obj.parallel_limit,
                     "active_agents": session_obj.active_agents or [],
                     "custom_instructions": session_obj.custom_instructions or "",
                     "workspace_dir": session_obj.workspace_dir or "",

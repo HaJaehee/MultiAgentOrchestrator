@@ -1,8 +1,11 @@
+import asyncio
 import json
 import logging
 import re
 import uuid
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+from contextlib import nullcontext
+from datetime import datetime, timedelta
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Tuple
 from sqlalchemy import select
 from app.agents.base import Agent
 from app.agents.llm import LLMCaller, LLMUnavailableError, estimate_tokens
@@ -10,7 +13,13 @@ from app.agents.personas import prepare_agents_for_turn
 from app.agents.pool import AgentPool, get_agent_pool
 from app.config import resolve_workspace_dir
 from app.mcp.manager import get_mcp_manager
-from app.database.models import ArtifactModel, MessageModel, SessionModel, ToolCallRecordModel
+from app.database.models import (
+    ArtifactModel,
+    MessageModel,
+    SessionModel,
+    ToolCallRecordModel,
+    utc_now,
+)
 from app.database.session import get_session_factory
 from app.orchestration.control import TurnControl
 from app.orchestration.state import ArtifactItem, DebateMessage, DebateState
@@ -150,8 +159,21 @@ class OrchestratorEngine:
         round_number: int,
         msg_type: str,
         on_event: Optional[EventCallback],
+        db_lock: Optional[asyncio.Lock] = None,
+        created_at: Optional[datetime] = None,
     ) -> DebateMessage:
         """한 에이전트의 발언을 스트리밍하고, DB 에 기록하고, 상태에 반영합니다.
+
+        `db_lock` 은 이 발언이 다른 발언과 **동시에** 진행될 때만 필요합니다
+        (병렬 지시 전략). `db` 는 세션 하나를 공유하는데 SQLAlchemy AsyncSession 은
+        동시 사용을 허용하지 않습니다 — 두 발언이 같은 순간에 커밋하면
+        `IllegalStateChangeError` 로 토론이 통째로 죽습니다. 락은 LLM 호출이 아니라
+        기록 구간에만 걸리므로 병렬성은 그대로입니다.
+
+        `created_at` 을 주면 그 시각으로 기록합니다. 병렬 라운드에서는 발언이 끝나는
+        순서가 제각각이라, 커밋 시각을 그대로 쓰면 새로고침한 화면의 발언 순서가
+        매번 달라집니다 (기록은 `created_at` 으로 정렬해 다시 읽힙니다). 지시받은
+        순서를 시각에 박아 두면 실시간 화면과 다시 연 화면이 같은 순서를 보여줍니다.
 
         LLM 이 응답하지 못하면 실패 사실을 그대로 적은 `msg_type="error"` 발언을
         남기고 토론을 계속합니다 (다른 에이전트는 아직 살아 있을 수 있습니다).
@@ -218,28 +240,30 @@ class OrchestratorEngine:
             if agent.key not in state.failed_agent_keys:
                 state.failed_agent_keys.append(agent.key)
 
-        db.add(MessageModel(
-            id=msg_id,
-            session_id=state.session_id,
-            sender_key=agent.key,
-            sender_name=agent.name,
-            sender_role=agent.role,
-            content=content,
-            round_number=round_number,
-            msg_type=final_type,
-        ))
-        for call_log in executed_tools:
-            db.add(ToolCallRecordModel(
-                id=str(uuid.uuid4()),
+        async with (db_lock or nullcontext()):
+            db.add(MessageModel(
+                id=msg_id,
                 session_id=state.session_id,
-                message_id=msg_id,
-                agent_key=agent.key,
-                tool_name=call_log.get("tool_name", ""),
-                arguments=call_log.get("arguments", {}),
-                output=call_log.get("output", ""),
-                status=call_log.get("status", "success"),
+                sender_key=agent.key,
+                sender_name=agent.name,
+                sender_role=agent.role,
+                content=content,
+                round_number=round_number,
+                msg_type=final_type,
+                **({"created_at": created_at} if created_at is not None else {}),
             ))
-        await db.commit()
+            for call_log in executed_tools:
+                db.add(ToolCallRecordModel(
+                    id=str(uuid.uuid4()),
+                    session_id=state.session_id,
+                    message_id=msg_id,
+                    agent_key=agent.key,
+                    tool_name=call_log.get("tool_name", ""),
+                    arguments=call_log.get("arguments", {}),
+                    output=call_log.get("output", ""),
+                    status=call_log.get("status", "success"),
+                ))
+            await db.commit()
 
         message = DebateMessage(
             id=msg_id,
@@ -371,6 +395,9 @@ class OrchestratorEngine:
             # 옛 이름으로 저장된 대화도 지금 쓰는 전략으로 옮겨 돌립니다.
             strategy_name = resolve_strategy_name(session_model.strategy)
             max_rounds = session_model.max_rounds
+            # 병렬 지시 전략에서만 읽힙니다. 0 이나 음수는 "동시에 아무도 못 돈다"
+            # 는 뜻이 되어 라운드가 통째로 비므로 최소 1 로 올립니다.
+            parallel_limit = max(1, int(session_model.parallel_limit or 3))
             active_keys = session_model.active_agents or ["orchestrator", "architect", "coder", "critic"]
             custom_instructions = session_model.custom_instructions or ""
 
@@ -488,6 +515,26 @@ class OrchestratorEngine:
                         "round": round_num,
                         "max_rounds": max_rounds,
                     })
+
+                # 병렬 지시 전략은 라운드 전체를 다르게 돕니다 — 과업을 나눠 주고
+                # 동시에 띄운 뒤 취합합니다. 발언자를 한 명씩 세우는 아래 루프와
+                # 섞을 수 없어 라운드째로 갈라집니다.
+                if strategy.orchestrator_dispatches_parallel:
+                    stopped_early = await self._run_parallel_round(
+                        db=db,
+                        state=state,
+                        strategy=strategy,
+                        orchestrator=orchestrator_agent,
+                        active_agents=active_agents,
+                        round_num=round_num,
+                        custom_instructions=custom_instructions,
+                        parallel_limit=parallel_limit,
+                        control=control,
+                        on_event=on_event,
+                    )
+                    if stopped_early:
+                        break
+                    continue
 
                 speakers = await self._select_speakers(
                     db=db,
@@ -827,6 +874,391 @@ class OrchestratorEngine:
             if agent is not None and agent not in picked:
                 picked.append(agent)
         return picked, reason
+
+    # ------------------------------------------------------- 병렬 지시 라운드
+
+    async def _run_parallel_round(
+        self,
+        *,
+        db,
+        state: DebateState,
+        strategy: BaseDebateStrategy,
+        orchestrator: Agent,
+        active_agents: List[Agent],
+        round_num: int,
+        custom_instructions: str,
+        parallel_limit: int,
+        control: Optional[TurnControl],
+        on_event: Optional[EventCallback],
+    ) -> bool:
+        """한 라운드를 병렬로 돕니다. 정지 요청으로 라운드를 접었으면 True.
+
+        순서: 개입 반영 → 과업 분배 → 동시 실행 → 취합. 사람의 개입과 정지를 보는
+        지점이 라운드 경계뿐인 것은 이 전략의 성질입니다 — 다른 전략은 발언과 발언
+        사이에서 볼 수 있지만, 여기서는 그 '사이' 에 전원이 이미 달리고 있습니다.
+        """
+        candidates = strategy.get_speakers_for_round(active_agents, round_num, state)
+        if not candidates:
+            return False
+
+        # 분배 **전에** 개입을 반영합니다. 이 라운드의 과업을 정하는 근거가
+        # 되어야지, 이미 나눠 준 뒤에 들어와서는 다음 라운드까지 놀게 됩니다.
+        await self._apply_interjections(
+            db=db, state=state, control=control, round_number=round_num, on_event=on_event
+        )
+        if control is not None and control.stop_requested:
+            return True
+
+        assignments = await self._dispatch_parallel_tasks(
+            db=db, state=state, strategy=strategy, orchestrator=orchestrator,
+            candidates=candidates, round_num=round_num,
+            custom_instructions=custom_instructions,
+            parallel_limit=parallel_limit, on_event=on_event,
+        )
+        if not assignments:
+            return False
+
+        board = self._assignment_board(assignments)
+        # 프롬프트는 **전부 먼저** 만듭니다. 코루틴 안에서 만들면 먼저 끝난 동료의
+        # 발언이 늦게 시작한 쪽의 맥락에 섞여 들어가, 같은 라운드인데 누구는 남의
+        # 답을 보고 누구는 못 보는 상태가 됩니다. 그건 병렬이 아닙니다.
+        prompts = [
+            self._build_context_for_agent(
+                state, agent, self._parallel_turn_instruction(strategy, agent, task, board)
+            )
+            for agent, task in assignments
+        ]
+
+        # 기록 시각을 지시 순서로 박아 둡니다 (`_speak` 의 `created_at` 주석 참고).
+        base_time = utc_now()
+        db_lock = asyncio.Lock()
+        semaphore = asyncio.Semaphore(parallel_limit)
+        start_index = len(state.messages)
+
+        async def run_one(index: int) -> DebateMessage:
+            agent, _task = assignments[index]
+            async with semaphore:
+                return await self._speak(
+                    db=db,
+                    state=state,
+                    agent=agent,
+                    prompt_messages=prompts[index],
+                    custom_instructions=custom_instructions,
+                    round_number=round_num,
+                    msg_type="agent",
+                    on_event=on_event,
+                    db_lock=db_lock,
+                    created_at=base_time + timedelta(milliseconds=index),
+                )
+
+        if on_event:
+            await on_event({
+                "type": "status_changed",
+                "status": "debating",
+                "speaker": " · ".join(a.name for a, _ in assignments),
+                "round": round_num,
+            })
+
+        results = await asyncio.gather(
+            *(run_one(i) for i in range(len(assignments))), return_exceptions=True
+        )
+
+        # 완료 순서가 아니라 지시 순서로 정렬합니다. 실시간 화면은 카드가 만들어진
+        # 순서(= 지시 순서)로 보여주는데, 기록은 `created_at` 순으로 다시 읽히므로
+        # 여기서 맞춰 두지 않으면 새로고침 후 순서가 달라 보입니다.
+        spoken = [r for r in results if isinstance(r, DebateMessage)]
+        produced = state.messages[start_index:]
+        if {m.id for m in spoken} == {m.id for m in produced}:
+            state.messages[start_index:] = spoken
+
+        for (agent, _task), result in zip(assignments, results):
+            if isinstance(result, BaseException):
+                logger.error(
+                    f"Parallel turn for '{agent.key}' failed: {type(result).__name__}: {result}",
+                    exc_info=result,
+                )
+                if agent.key not in state.failed_agent_keys:
+                    state.failed_agent_keys.append(agent.key)
+                await self._record_note(
+                    db=db, state=state, on_event=on_event, agent=agent,
+                    round_number=round_num, msg_type="error",
+                    content=(
+                        f"> ⚠️ **{agent.name} 의 병렬 발언이 실패했습니다.**\n>\n"
+                        f"> - 원인: `{type(result).__name__}: {result}`\n>\n"
+                        f"> 이 자리에 들어갈 내용을 대신 지어내지 않았습니다."
+                    ),
+                )
+
+        if control is not None and control.stop_requested:
+            # 정지를 원한 사람에게 취합 발언을 한 번 더 기다리게 할 이유가 없습니다.
+            # 최종 합성이 곧바로 이어지고, 그것이 이 라운드의 결과도 함께 읽습니다.
+            return True
+
+        await self._merge_parallel_round(
+            db=db, state=state, orchestrator=orchestrator, assignments=assignments,
+            round_num=round_num, custom_instructions=custom_instructions, on_event=on_event,
+        )
+        return False
+
+    async def _dispatch_parallel_tasks(
+        self,
+        *,
+        db,
+        state: DebateState,
+        strategy: BaseDebateStrategy,
+        orchestrator: Agent,
+        candidates: List[Agent],
+        round_num: int,
+        custom_instructions: str,
+        parallel_limit: int,
+        on_event: Optional[EventCallback],
+    ) -> List[Tuple[Agent, str]]:
+        """이번 라운드의 과업 분배를 받아 기록하고 돌려줍니다.
+
+        분배에 실패하면 전원을 과업 없이 돌리는 것으로 물러섭니다. 지시를 받지
+        못했을 뿐 병렬이라는 성질은 남기고, 물러섰다는 사실은 피드에 남깁니다 —
+        조용히 다른 방식으로 도는 것이 제일 나쁩니다.
+        """
+        fallback = [(agent, "") for agent in candidates]
+
+        async def _fall_back(why: str) -> List[Tuple[Agent, str]]:
+            await self._record_note(
+                db=db, state=state, on_event=on_event, agent=orchestrator,
+                round_number=round_num, msg_type="error",
+                content=(
+                    f"[과업 분배 실패] {why}\n"
+                    f"과업 없이 전원을 동시에 진행합니다: "
+                    f"{', '.join(a.name for a in candidates)}"
+                ),
+            )
+            return fallback
+
+        if len(candidates) <= 1:
+            # 한 명뿐이면 나눌 것이 없습니다. 분배를 물어보는 호출만 낭비됩니다.
+            assignments = fallback
+            reason = ""
+        else:
+            try:
+                assignments, reason = await self._ask_orchestrator_for_assignments(
+                    orchestrator=orchestrator,
+                    candidates=candidates,
+                    state=state,
+                    round_num=round_num,
+                    parallel_limit=parallel_limit,
+                    custom_instructions=custom_instructions,
+                )
+            except LLMUnavailableError as exc:
+                logger.warning(f"Task dispatch failed; running everyone without tasks: {exc}")
+                return await _fall_back(str(exc))
+
+            if not assignments:
+                logger.warning("Orchestrator assigned nobody we know; running everyone without tasks.")
+                return await _fall_back(
+                    "오케스트레이터의 응답에서 과업을 맡길 에이전트를 찾지 못했습니다."
+                )
+
+        named = [agent for agent, _ in assignments]
+        lines = [
+            f"- **{agent.name}** ({agent.role}): {task or '(과업 지정 없음 — 전문 영역에서 자유 기여)'}"
+            for agent, task in assignments
+        ]
+        over_limit = len(assignments) > parallel_limit
+        summary = (
+            f"[Round {round_num} 병렬 지시] {len(assignments)}명에게 과업을 나눴습니다"
+            + (f" (동시 실행 상한 {parallel_limit} — 나머지는 순차적으로 밀립니다)" if over_limit else " (동시 실행)")
+            + "\n" + "\n".join(lines)
+        )
+        skipped = [a.name for a in candidates if a not in named]
+        if skipped:
+            summary += f"\n\n(이번 라운드 미지명: {', '.join(skipped)})"
+        if reason:
+            summary += f"\n\n{reason}"
+        await self._record_note(
+            db=db, state=state, on_event=on_event, agent=orchestrator,
+            round_number=round_num, msg_type="orchestrator", content=summary,
+        )
+        return assignments
+
+    async def _ask_orchestrator_for_assignments(
+        self,
+        *,
+        orchestrator: Agent,
+        candidates: List[Agent],
+        state: DebateState,
+        round_num: int,
+        parallel_limit: int,
+        custom_instructions: str,
+    ) -> "Tuple[List[Tuple[Agent, str]], str]":
+        """오케스트레이터에게 이번 라운드의 과업 분배를 물어봅니다.
+
+        발언자 지명(`_ask_orchestrator_for_speakers`)과 같은 이유로 도구와 단계적
+        사고를 끈 사본으로 부릅니다. 이건 JSON 을 받는 호출이지 발언이 아닙니다.
+        """
+        planner = orchestrator.model_copy(update={
+            "allowed_mcp_servers": [],
+            "sequential_thinking": orchestrator.sequential_thinking.model_copy(
+                update={"enabled": False}
+            ),
+        })
+
+        roster = "\n".join(f"- {a.key}: {a.name} ({a.role})" for a in candidates)
+        recent = [
+            f"{m.sender_name}({m.sender_role}): {m.content[:300]}"
+            for m in state.messages if m.msg_type != "error"
+        ][-8:]
+
+        prompt = [{"role": "user", "content": (
+            f"[목표]\n{state.user_prompt}\n\n"
+            f"[지금까지의 토론]\n" + ("\n".join(recent) or "(아직 없음)") + "\n\n"
+            f"[과업을 맡길 수 있는 에이전트]\n{roster}\n\n"
+            f"지금은 Round {round_num}/{state.max_rounds} 이고, 지목된 에이전트는 "
+            f"**동시에 각자의 과업을 수행합니다**. 서로의 이번 라운드 결과를 볼 수 없으므로 "
+            f"과업이 겹치면 같은 일을 두 번 하게 됩니다.\n\n"
+            f"겹치지 않게 과업을 나누세요. 전원을 부를 필요는 없고, 한 명만 불러도 됩니다. "
+            f"각 과업은 다른 사람의 결과를 기다리지 않고 혼자 끝낼 수 있는 것이어야 하며, "
+            f"무엇을 만들어 낼지(산출물)까지 한두 문장으로 적으세요. "
+            f"동시 실행은 {parallel_limit}명까지이고 그보다 많이 부르면 나머지는 순차적으로 밀립니다.\n\n"
+            f"다음 JSON 형식으로만 답하세요:\n"
+            '{"assignments": [{"agent": "에이전트키", "task": "이 라운드에 맡길 구체적 과업"}], '
+            '"reason": "한두 문장으로 분배 사유"}'
+        )}]
+
+        content, _ = await self.llm_caller.call_agent(
+            planner, prompt, custom_instructions, session_id=state.session_id
+        )
+        return self._parse_assignments(content, candidates)
+
+    @staticmethod
+    def _parse_assignments(
+        content: str, candidates: List[Agent]
+    ) -> "Tuple[List[Tuple[Agent, str]], str]":
+        """응답에서 (에이전트, 과업) 목록과 분배 사유를 뽑습니다.
+
+        과업 문장을 잃더라도 누구를 부를지는 건집니다. `assignments` 가 깨졌으면
+        발언자 지명과 같은 방식으로 아는 키를 등장 순서대로 긁고, 과업은 빈
+        문자열이 됩니다 — 지시 없는 병렬 라운드가 라운드를 통째로 날리는 것보다
+        낫습니다.
+        """
+        by_key = {a.key: a for a in candidates}
+        reason = ""
+        pairs: List[Tuple[str, str]] = []
+
+        block = re.search(r"\{.*\}", content or "", re.DOTALL)
+        if block:
+            try:
+                data = json.loads(block.group(0))
+            except (ValueError, TypeError):
+                data = None
+            if isinstance(data, dict):
+                reason = str(data.get("reason") or "").strip()
+                raw = data.get("assignments")
+                if isinstance(raw, list):
+                    for item in raw:
+                        if isinstance(item, dict):
+                            key = str(item.get("agent") or item.get("key") or "").strip()
+                            task = str(item.get("task") or item.get("instruction") or "").strip()
+                            pairs.append((key, task))
+                        elif isinstance(item, str):
+                            pairs.append((item.strip(), ""))
+
+        if not any(key in by_key for key, _ in pairs):
+            # 분배가 깨졌습니다. 최소한 누구를 부르려 했는지는 살립니다.
+            picked, scraped = OrchestratorEngine._parse_speaker_selection(content, candidates)
+            reason = reason or scraped
+            pairs = [(a.key, "") for a in picked]
+
+        assignments: List[Tuple[Agent, str]] = []
+        seen = set()
+        for key, task in pairs:
+            agent = by_key.get(key)
+            if agent is None or agent.key in seen:
+                continue
+            seen.add(agent.key)
+            assignments.append((agent, task))
+        return assignments, reason
+
+    @staticmethod
+    def _assignment_board(assignments: List[Tuple[Agent, str]]) -> str:
+        """동시에 도는 동료들이 무엇을 맡았는지 적은 판.
+
+        결과는 못 보여 주지만 **누가 무엇을 하는지**는 알려 줄 수 있습니다. 이것이
+        없으면 여럿이 같은 표를 각자 그려 오고, 취합이 중복 제거부터 시작합니다.
+        """
+        return "\n".join(
+            f"- {agent.name}({agent.role}): {task or '(과업 지정 없음)'}"
+            for agent, task in assignments
+        )
+
+    @staticmethod
+    def _parallel_turn_instruction(
+        strategy: BaseDebateStrategy, agent: Agent, task: str, board: str
+    ) -> str:
+        """병렬 라운드에서 한 에이전트에게 붙는 지침 = 내 과업 + 동시 실행 현황."""
+        if task:
+            head = f"[병렬 지시] 오케스트레이터가 이번 라운드에 당신에게 맡긴 과업입니다:\n{task}"
+        else:
+            # 분배가 실패한 라운드. 전략이 들고 있는 문구를 그대로 씁니다.
+            head = strategy.turn_instruction(
+                agent, [agent], 0, DebateState(session_id="", user_prompt="")
+            )
+
+        return (
+            f"{head}\n\n"
+            f"[동시 진행 중]\n{board}\n\n"
+            f"이들은 지금 당신과 **같은 시각에** 답하고 있어 이번 라운드 결과를 볼 수 없습니다. "
+            f"남의 과업을 대신 하지 말고 당신 몫을 끝까지 마치세요. 다른 과업의 결과가 필요하면 "
+            f"추측해 채우지 말고 어떤 가정을 두었는지 명시하세요. 라운드 끝에 오케스트레이터가 "
+            f"결과를 합칩니다."
+        )
+
+    async def _merge_parallel_round(
+        self,
+        *,
+        db,
+        state: DebateState,
+        orchestrator: Agent,
+        assignments: List[Tuple[Agent, str]],
+        round_num: int,
+        custom_instructions: str,
+        on_event: Optional[EventCallback],
+    ) -> DebateMessage:
+        """라운드 끝의 취합 발언. 병렬 결과를 붙이고 충돌과 남은 쟁점을 정리합니다.
+
+        이 발언이 다음 라운드 분배의 입력이 됩니다. 없으면 서로를 못 본 독백들이
+        그대로 최종 합성까지 실려 가고, 모순은 거기서 처음 발견됩니다.
+        """
+        state.current_speaker = orchestrator.name
+        if on_event:
+            await on_event({
+                "type": "status_changed",
+                "status": "debating",
+                "speaker": f"{orchestrator.name} (취합)",
+                "round": round_num,
+            })
+
+        board = self._assignment_board(assignments)
+        instruction = (
+            f"[Round {round_num} 취합] 방금 다음 에이전트가 **동시에** 각자의 과업을 수행했습니다:\n"
+            f"{board}\n\n"
+            f"이들은 서로의 결과를 보지 못한 채 답했습니다. 수석 오케스트레이터로서 "
+            f"이번 라운드의 결과를 하나로 붙이세요:\n"
+            f"1. 통합된 현재 결론 (무엇이 정해졌는가)\n"
+            f"2. 서로 어긋나는 지점과 그 판정 (누구 말이 맞는지, 아직 판단할 수 없다면 그 이유)\n"
+            f"3. 각자가 세운 가정 중 아직 검증되지 않은 것\n"
+            f"4. 다음 라운드로 넘길 미해결 과제\n\n"
+            f"발언하지 못했거나 실패한 에이전트의 몫을 지어내지 마세요."
+        )
+
+        return await self._speak(
+            db=db,
+            state=state,
+            agent=orchestrator,
+            prompt_messages=self._build_context_for_agent(state, orchestrator, instruction),
+            custom_instructions=custom_instructions,
+            round_number=round_num,
+            msg_type="orchestrator",
+            on_event=on_event,
+        )
 
     def _build_context_for_agent(
         self,

@@ -242,6 +242,7 @@ def create_ui() -> None:
                     curr.known_agents = roster_control.known_agent_keys()
                     curr.strategy = roster_control.strategy_name
                     curr.max_rounds = roster_control.max_rounds
+                    curr.parallel_limit = roster_control.parallel_limit
                     curr.custom_instructions = roster_control.custom_instructions
                     curr.workspace_dir = roster_control.workspace_dir
                     await db.commit()
@@ -456,6 +457,7 @@ def create_ui() -> None:
                     title=title,
                     strategy=roster_control.strategy_name,
                     max_rounds=roster_control.max_rounds,
+                    parallel_limit=roster_control.parallel_limit,
                     active_agents=roster_control.get_active_agent_keys(),
                     known_agents=roster_control.known_agent_keys(),
                     custom_instructions=roster_control.custom_instructions,
@@ -487,6 +489,7 @@ def create_ui() -> None:
                         known_keys=s_obj.known_agents or [],
                         strategy=resolve_strategy_name(s_obj.strategy),
                         max_rounds=s_obj.max_rounds or 3,
+                        parallel_limit=s_obj.parallel_limit or 3,
                         instructions=s_obj.custom_instructions or "",
                         session_id=sid,
                         personas_locked=bool(s_obj.personas_locked),
