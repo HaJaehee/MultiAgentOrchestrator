@@ -26,7 +26,7 @@ from app.orchestration.strategies import resolve_strategy_name
 from app.ui.components.artifact_viewer import ArtifactViewer
 from app.ui.components.chat_feed import ChatFeed, clip_tool_output
 from app.ui.components.roster import AgentRosterControl
-from app.ui.components.sidebar import SessionSidebar
+from app.ui.components.sidebar import SessionSidebar, event_changes_session_list
 from app.ui.clipboard import copy_to_clipboard
 from app.ui.theme import CUSTOM_CSS, FAVICON_SVG
 
@@ -152,7 +152,6 @@ def create_ui() -> None:
                     chat_feed.set_busy(False, "토론 완료 및 최종 아티팩트 합성 완료", "Done")
                 # 첫 턴에서 페르소나가 고정되었으므로 편집 버튼을 잠금 상태로 바꿉니다.
                 roster_control.set_personas_locked(True)
-                await sidebar.refresh_list()
             elif etype == "run_finished":
                 # 토론이 끝났으므로 MCP 서버 구성을 다시 만질 수 있습니다. 상태가
                 # 확정되는 시점이 여기라, 잠금 해제도 여기서 알립니다.
@@ -166,6 +165,13 @@ def create_ui() -> None:
                     chat_feed.set_busy(False, "토론이 취소되었습니다.", "Cancelled")
                 else:
                     chat_feed.set_busy(False)
+
+            # 목록에 보이는 것이 바뀌는 이벤트에서만 사이드바를 다시 그립니다.
+            # 판단은 한 곳(`event_changes_session_list`)에서 합니다 — 갈래마다
+            # 흩어 두면 새 이벤트를 더할 때마다 빠뜨립니다. 실제로 첫 사용자
+            # 발언이 이 호출을 얻지 못해, 카드가 토론 내내 '시작 전' 이었습니다.
+            if event_changes_session_list(event):
+                await sidebar.refresh_list()
 
         async def consume(run: TurnRun, queue: "asyncio.Queue[Dict[str, Any]]") -> None:
             """구독 큐를 화면에 흘려보냅니다.

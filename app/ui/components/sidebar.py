@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import Callable, Coroutine, Dict, List, Optional
+from typing import Any, Callable, Coroutine, Dict, List, Optional
 from nicegui import ui
 from sqlalchemy import desc, func, select, delete
 from app.database.models import ArtifactModel, MessageModel, SessionModel, ToolCallRecordModel
@@ -32,6 +32,28 @@ async def first_user_message_times(db) -> Dict[str, datetime]:
 
 
 # `to_local()` 은 저장 문서와 같은 규칙을 써야 해서 app.export 에 둡니다.
+
+
+def event_changes_session_list(event: Dict[str, Any]) -> bool:
+    """이 토론 이벤트가 세션 목록에 보이는 것을 바꾸는가.
+
+    목록에 보이는 것은 세 가지입니다: **첫 사용자 발언 시각**, 진행 중 표시(스피너),
+    그리고 제목·에이전트 수. 이 중 토론이 도는 동안 바뀌는 것은 앞의 둘입니다.
+
+    예전에는 `turn_completed` 에서만 목록을 다시 그렸습니다. 그런데 카드의 시각은
+    세션 행이 아니라 **사용자 발언 행**에서 오고, 그 행은 토론이 시작된 뒤에
+    생깁니다. 그래서 첫 요청을 보내도 카드는 토론이 끝날 때까지 '시작 전' 이었고,
+    새로고침해야 시각이 나타났습니다. 실패로 끝난 토론은 `turn_completed` 자체가
+    나오지 않아 스피너가 계속 돌았습니다.
+    """
+    etype = event.get("type")
+    if etype == "message_added":
+        # 사용자 발언이 방금 기록되었습니다. 이 대화의 '시작 시각' 이 생기는
+        # 순간입니다 (개입 발언이면 이미 있는 값이라 결과는 그대로입니다).
+        return ((event.get("message") or {}).get("sender_key")) == "user"
+    # 토론이 끝났습니다 — 진행 중 표시를 내려야 합니다. 오류·취소로 끝난 경우
+    # `turn_completed` 는 오지 않으므로 `run_finished` 도 함께 봅니다.
+    return etype in ("turn_completed", "run_finished")
 
 
 class SessionSidebar:
