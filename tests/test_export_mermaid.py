@@ -106,6 +106,12 @@ def test_class_diagram_to_staruml():
     assert return_param["type"] == "Boolean"
     assert return_param["direction"] == "return"
 
+    # Check relationships exist in model and diagram views
+    assoc_views = [v for v in diagram["ownedViews"] if v["_type"] == "UMLAssociationView"]
+    assert len(assoc_views) == 2
+    assert any(v.get("nameLabel", {}).get("text") == "uses" for v in assoc_views)
+    assert any(v.get("nameLabel", {}).get("text") == "manages" for v in assoc_views)
+
 
 def test_sequence_diagram_to_staruml():
     mermaid_code = """sequenceDiagram

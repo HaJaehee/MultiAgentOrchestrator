@@ -372,6 +372,13 @@ class MermaidToStarUMLConverter:
         classes: Dict[str, Dict[str, Any]] = {}
         relations: List[Dict[str, Any]] = []
 
+        rel_pattern = re.compile(
+            r'^\s*([A-Za-z0-9_]+)\s*(?:\"([^\"]*)\")?\s*'
+            r'([<*o]?\|?--\|?[*o>]?|[<*o]?\|?\.\.\|?[*o>]?|<--|-->|--|\.\.>|<\.\.|\.\.)\s*'
+            r'(?:\"([^\"]*)\")?\s*([A-Za-z0-9_]+)'
+            r'(?:\s*:\s*(.*))?$'
+        )
+
         curr_class: Optional[str] = None
         for line in lines[1:]:
             line_str = line.strip()
@@ -395,20 +402,60 @@ class MermaidToStarUMLConverter:
                     classes[curr_class]["attrs"].append(line_str)
                 continue
 
-            # 클래스 간 관계 (상속, 연관 등)
-            rel_m = re.search(r'([A-Za-z0-9_]+)\s*(<\|--|--\|>|--\*|\*--|--o|o--|-->|<--|--)\s*(?:\"([^\"]+)\")?\s*([A-Za-z0-9_]+)', line_str)
+            # 클래스 간 관계 파싱 (User "1" --> "*" Order : places 등 모든 표기 지원)
+            rel_m = rel_pattern.match(line_str)
             if rel_m:
-                c1, rel_type, lbl, c2 = rel_m.groups()
+                c1, card1, rel_type, card2, c2, lbl = rel_m.groups()
                 for c in (c1, c2):
                     if c not in classes:
                         classes[c] = {"name": c, "attrs": [], "methods": [], "elem_id": _gen_staruml_id(), "view_id": _gen_staruml_id()}
+
+                clean_lbl = (lbl or "").strip().strip('"\'')
+                clean_card1 = (card1 or "").strip()
+                clean_card2 = (card2 or "").strip()
+
+                # 관계 종류 및 방향 판별
+                is_gen = "<|--" in rel_type or "--|>" in rel_type
+                is_real = "<|.." in rel_type or "..|>" in rel_type
+                is_dep = rel_type in ("..>", "<..", "..")
+
+                if "<|--" in rel_type or "<|.." in rel_type or "<.." in rel_type:
+                    src_name, tgt_name = c2, c1
+                    card_src, card_tgt = clean_card2, clean_card1
+                else:
+                    src_name, tgt_name = c1, c2
+                    card_src, card_tgt = clean_card1, clean_card2
+
+                agg1 = "none"
+                agg2 = "none"
+                if "*--" in rel_type:
+                    agg1 = "composite"
+                elif "--*" in rel_type:
+                    agg2 = "composite"
+                elif "o--" in rel_type:
+                    agg1 = "shared"
+                elif "--o" in rel_type:
+                    agg2 = "shared"
+
+                nav2 = "-->" in rel_type or "<--" in rel_type or agg1 != "none" or agg2 != "none"
+
                 relations.append({
-                    "source": c1,
-                    "target": c2,
+                    "source": src_name,
+                    "target": tgt_name,
                     "type": rel_type,
-                    "label": lbl or "",
+                    "label": clean_lbl,
+                    "card1": card_src,
+                    "card2": card_tgt,
+                    "is_gen": is_gen,
+                    "is_real": is_real,
+                    "is_dep": is_dep,
+                    "agg1": agg1,
+                    "agg2": agg2,
+                    "nav2": nav2,
                     "elem_id": _gen_staruml_id(),
                     "view_id": _gen_staruml_id(),
+                    "end1_id": _gen_staruml_id(),
+                    "end2_id": _gen_staruml_id(),
                 })
                 continue
 
@@ -425,9 +472,9 @@ class MermaidToStarUMLConverter:
         for idx, cls in enumerate(class_list):
             row = idx // cols
             col = idx % cols
-            cls["x"] = 80 + col * 260
-            cls["y"] = 80 + row * 200
-            cls["width"] = 220
+            cls["x"] = 80 + col * 280
+            cls["y"] = 80 + row * 220
+            cls["width"] = 230
             cls["height"] = max(110, 60 + (len(cls["attrs"]) + len(cls["methods"])) * 22)
 
         owned_elements = []
@@ -437,22 +484,30 @@ class MermaidToStarUMLConverter:
             uml_attrs = [self._parse_attribute(attr, cls["elem_id"]) for attr in cls["attrs"]]
             uml_ops = [self._parse_operation(meth, cls["elem_id"]) for meth in cls["methods"]]
 
-            uml_cls = {
-                "_type": "UMLClass",
-                "_id": cls["elem_id"],
-                "_parent": {"$ref": self.model_id},
-                "name": cls["name"],
-                "attributes": uml_attrs,
-                "operations": uml_ops,
-                "ownedElements": [],
-            }
+            cls_owned_elements: List[Dict[str, Any]] = []
 
             for rel in [r for r in relations if r["source"] == cls["name"]]:
                 target_cls = classes.get(rel["target"])
                 if target_cls:
-                    if "<|" in rel["type"] or "|>" in rel["type"]:
+                    if rel["is_gen"]:
                         rel_elem = {
                             "_type": "UMLGeneralization",
+                            "_id": rel["elem_id"],
+                            "_parent": {"$ref": cls["elem_id"]},
+                            "source": {"$ref": cls["elem_id"]},
+                            "target": {"$ref": target_cls["elem_id"]},
+                        }
+                    elif rel["is_real"]:
+                        rel_elem = {
+                            "_type": "UMLInterfaceRealization",
+                            "_id": rel["elem_id"],
+                            "_parent": {"$ref": cls["elem_id"]},
+                            "source": {"$ref": cls["elem_id"]},
+                            "target": {"$ref": target_cls["elem_id"]},
+                        }
+                    elif rel["is_dep"]:
+                        rel_elem = {
+                            "_type": "UMLDependency",
                             "_id": rel["elem_id"],
                             "_parent": {"$ref": cls["elem_id"]},
                             "name": rel["label"],
@@ -460,16 +515,46 @@ class MermaidToStarUMLConverter:
                             "target": {"$ref": target_cls["elem_id"]},
                         }
                     else:
+                        end1: Dict[str, Any] = {
+                            "_type": "UMLAssociationEnd",
+                            "_id": rel["end1_id"],
+                            "_parent": {"$ref": rel["elem_id"]},
+                            "reference": {"$ref": cls["elem_id"]},
+                            "aggregation": rel["agg1"],
+                        }
+                        if rel["card1"]:
+                            end1["multiplicity"] = rel["card1"]
+
+                        end2: Dict[str, Any] = {
+                            "_type": "UMLAssociationEnd",
+                            "_id": rel["end2_id"],
+                            "_parent": {"$ref": rel["elem_id"]},
+                            "reference": {"$ref": target_cls["elem_id"]},
+                            "navigable": rel["nav2"],
+                            "aggregation": rel["agg2"],
+                        }
+                        if rel["card2"]:
+                            end2["multiplicity"] = rel["card2"]
+
                         rel_elem = {
                             "_type": "UMLAssociation",
                             "_id": rel["elem_id"],
                             "_parent": {"$ref": cls["elem_id"]},
                             "name": rel["label"],
-                            "end1": {"_type": "UMLAssociationEnd", "_id": _gen_staruml_id(), "_parent": {"$ref": rel["elem_id"]}, "reference": {"$ref": cls["elem_id"]}},
-                            "end2": {"_type": "UMLAssociationEnd", "_id": _gen_staruml_id(), "_parent": {"$ref": rel["elem_id"]}, "reference": {"$ref": target_cls["elem_id"]}},
+                            "end1": end1,
+                            "end2": end2,
                         }
-                    uml_cls["ownedElements"].append(rel_elem)
+                    cls_owned_elements.append(rel_elem)
 
+            uml_cls = {
+                "_type": "UMLClass",
+                "_id": cls["elem_id"],
+                "_parent": {"$ref": self.model_id},
+                "name": cls["name"],
+                "attributes": uml_attrs,
+                "operations": uml_ops,
+                "ownedElements": cls_owned_elements,
+            }
             owned_elements.append(uml_cls)
 
             cls_view = {
@@ -489,17 +574,53 @@ class MermaidToStarUMLConverter:
             src = classes.get(rel["source"])
             tgt = classes.get(rel["target"])
             if src and tgt:
-                view_type = "UMLGeneralizationView" if "<|" in rel["type"] or "|>" in rel["type"] else "UMLAssociationView"
-                rel_view = {
+                if rel["is_gen"]:
+                    view_type = "UMLGeneralizationView"
+                elif rel["is_real"]:
+                    view_type = "UMLInterfaceRealizationView"
+                elif rel["is_dep"]:
+                    view_type = "UMLDependencyView"
+                else:
+                    view_type = "UMLAssociationView"
+
+                rel_view: Dict[str, Any] = {
                     "_type": view_type,
                     "_id": rel["view_id"],
                     "_parent": {"$ref": self.diagram_id},
                     "model": {"$ref": rel["elem_id"]},
-                    "head": {"$ref": tgt["view_id"]},
                     "tail": {"$ref": src["view_id"]},
+                    "head": {"$ref": tgt["view_id"]},
                     "lineStyle": 1,
                     "points": f"{src['x'] + src['width']//2},{src['y'] + src['height']//2};{tgt['x'] + tgt['width']//2},{tgt['y'] + tgt['height']//2}",
                 }
+                if rel["label"]:
+                    rel_view["nameLabel"] = {
+                        "_type": "EdgeLabelView",
+                        "_id": _gen_staruml_id(),
+                        "_parent": {"$ref": rel["view_id"]},
+                        "model": {"$ref": rel["elem_id"]},
+                        "text": rel["label"],
+                        "visible": True,
+                    }
+                if not (rel["is_gen"] or rel["is_real"] or rel["is_dep"]):
+                    if rel["card1"]:
+                        rel_view["tailNameLabel"] = {
+                            "_type": "EdgeLabelView",
+                            "_id": _gen_staruml_id(),
+                            "_parent": {"$ref": rel["view_id"]},
+                            "model": {"$ref": rel["end1_id"]},
+                            "text": rel["card1"],
+                            "visible": True,
+                        }
+                    if rel["card2"]:
+                        rel_view["headNameLabel"] = {
+                            "_type": "EdgeLabelView",
+                            "_id": _gen_staruml_id(),
+                            "_parent": {"$ref": rel["view_id"]},
+                            "model": {"$ref": rel["end2_id"]},
+                            "text": rel["card2"],
+                            "visible": True,
+                        }
                 owned_views.append(rel_view)
 
         diagram = {
