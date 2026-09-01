@@ -495,12 +495,15 @@ class AgentRosterControl:
                     ui.badge("필수", color="indigo-9").props("dense text-[9px]")
                 else:
                     with ui.row().classes("items-center gap-0 no-wrap flex-shrink-0"):
-                        ui.checkbox(
+                        cb = ui.checkbox(
                             value=is_active,
-                            on_change=lambda e, k=agent.key: self._on_agent_toggle(k, e.value),
-                        ).props("dense dark color=indigo-4").tooltip(
-                            "이 대화의 토론에 참여시킬지 (conf.json 은 그대로)"
-                        )
+                            on_change=lambda e, k=agent.key, c=card: self._on_agent_toggle(k, e.value, c),
+                        ).props("dense dark color=indigo-4")
+                        if self.personas_locked:
+                            cb.disable()
+                            cb.tooltip("이 대화는 이미 토론이 시작되어 에이전트가 고정되었습니다")
+                        else:
+                            cb.tooltip("이 대화의 토론에 참여시킬지 (conf.json 은 그대로)")
                         # 진영·끄기·삭제는 conf.json 을 고치는 조작이라, 이 대화에만
                         # 걸리는 위의 참여 체크박스와 나란히 두면 반드시 헷갈립니다.
                         # 한 겹 안에 둡니다.
@@ -1829,8 +1832,19 @@ class AgentRosterControl:
             if self.workspace_apply_btn and not self.workspace_apply_btn.is_deleted:
                 self.workspace_apply_btn.enable()
 
-    def _on_agent_toggle(self, key: str, value: bool) -> None:
+    def _on_agent_toggle(self, key: str, value: bool, card: Optional[ui.card] = None) -> None:
         self.selected_agents[key] = value
+        if card is not None and not card.is_deleted:
+            if value:
+                card.classes(
+                    remove="bg-slate-900/60 border-slate-800 opacity-50",
+                    add="bg-slate-800/90 border-indigo-500/60",
+                )
+            else:
+                card.classes(
+                    remove="bg-slate-800/90 border-indigo-500/60",
+                    add="bg-slate-900/60 border-slate-800 opacity-50",
+                )
         self._update_summary_badge()
         if self.on_config_changed:
             ui.timer(0.01, self.on_config_changed, once=True)

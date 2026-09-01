@@ -80,3 +80,37 @@ def test_a_started_conversation_keeps_the_agents_it_already_had():
 def test_the_lock_does_not_change_sessions_older_than_the_record():
     """`known_agents` 가 없으면 그때 무엇이 있었는지 알 수 없습니다. 규칙은 그대로."""
     assert selected("researcher", ["orchestrator", "coder"], [], locked=True) is True
+
+
+def test_on_agent_toggle_updates_card_classes():
+    """체크박스를 토글하면 전달받은 카드의 CSS 클래스가 즉시 밝음/어두움으로 교체되어야 합니다."""
+    control = AgentRosterControl()
+
+    class FakeCard:
+        def __init__(self):
+            self.is_deleted = False
+            self.calls = []
+
+        def classes(self, add=None, remove=None, replace=None):
+            self.calls.append({"add": add, "remove": remove, "replace": replace})
+
+    card = FakeCard()
+
+    # 1. 켜기 (True)
+    control._on_agent_toggle("architect", True, card=card)
+    assert control.selected_agents["architect"] is True
+    assert card.calls[-1] == {
+        "remove": "bg-slate-900/60 border-slate-800 opacity-50",
+        "add": "bg-slate-800/90 border-indigo-500/60",
+        "replace": None,
+    }
+
+    # 2. 끄기 (False)
+    control._on_agent_toggle("architect", False, card=card)
+    assert control.selected_agents["architect"] is False
+    assert card.calls[-1] == {
+        "remove": "bg-slate-800/90 border-indigo-500/60",
+        "add": "bg-slate-900/60 border-slate-800 opacity-50",
+        "replace": None,
+    }
+
