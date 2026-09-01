@@ -1,10 +1,18 @@
+import json
 import logging
+import uuid
 from typing import Any, Dict, List, Optional
 from nicegui import ui
 
+from app.export_mermaid import convert_mermaid_to_staruml_mdj, generate_mermaid_standalone_html
 from app.ui.clipboard import copy_to_clipboard
 
 logger = logging.getLogger(__name__)
+
+
+def _clean_title_for_filename(title: str, default: str = "artifact") -> str:
+    cleaned = "".join(c for c in title if c.isalnum() or c in ("-", "_", " ")).strip().replace(" ", "_")
+    return cleaned or default
 
 
 class ArtifactViewer:
@@ -89,30 +97,78 @@ class ArtifactViewer:
         title = art.get("title", "Artifact")
         content = art.get("content", "")
         language = art.get("language", "markdown")
+        wrapper_id = f"art-mermaid-{uuid.uuid4().hex[:8]}"
 
         with ui.column().classes("w-full h-full gap-2 flex flex-col flex-nowrap overflow-hidden"):
             # Sub-header with copy/download controls
             with ui.row().classes("w-full items-center justify-between bg-slate-800/80 px-3 py-1.5 rounded-lg text-xs flex-shrink-0"):
                 with ui.row().classes("items-center gap-2"):
                     ui.label(title).classes("font-bold text-slate-200 truncate max-w-[200px]")
-                    ui.badge(art_type.upper(), color="indigo-7").props("dense text-[10px]")
+                    badge_color = "purple-7" if art_type == "mermaid" else "indigo-7"
+                    ui.badge(art_type.upper(), color=badge_color).props("dense text-[10px]")
 
-                with ui.row().classes("items-center gap-1"):
-                    ui.button(
-                        "Copy",
-                        icon="content_copy",
-                        on_click=lambda _, text=content: self._copy_to_clipboard(text),
-                    ).props("flat dense size=sm color=slate-3")
-                    ui.button(
-                        "Download",
-                        icon="download",
-                        on_click=lambda _, t=title, c=content, ty=art_type: self._download_artifact(t, c, ty),
-                    ).props("flat dense size=sm color=slate-3")
+                if art_type == "mermaid":
+                    with ui.row().classes("items-center gap-1 flex-wrap"):
+                        # 1. 이미지 복사 및 확장 복사 드롭다운
+                        with ui.button_group().props("flat dense rounded"):
+                            ui.button(
+                                "이미지 복사",
+                                icon="photo_library",
+                                on_click=lambda _, wid=wrapper_id: self._copy_mermaid_image(wid),
+                            ).props("flat dense size=sm color=indigo-3").tooltip("PNG 다이어그램 이미지를 클립보드에 복사 (Ctrl+V로 바로 붙여넣기)")
+                            with ui.button(icon="arrow_drop_down").props("flat dense size=sm color=indigo-3"):
+                                with ui.menu().classes("bg-slate-900 border border-slate-800 text-xs text-slate-200"):
+                                    ui.menu_item("🖼️ PNG 이미지 복사", on_click=lambda _, wid=wrapper_id: self._copy_mermaid_image(wid))
+                                    ui.menu_item("📐 SVG 코드 복사", on_click=lambda _, wid=wrapper_id: self._copy_mermaid_svg(wid))
+                                    ui.menu_item("📝 Mermaid 스크립트 복사", on_click=lambda _, text=content: self._copy_to_clipboard(text))
+
+                        # 2. 멀티 포맷 다운로드 버튼들 (PNG, SVG, HTML, StarUML, MMD)
+                        ui.button(
+                            "PNG",
+                            icon="image",
+                            on_click=lambda _, wid=wrapper_id, t=title: self._download_mermaid_png(wid, t),
+                        ).props("flat dense size=sm color=emerald-4").tooltip("고해상도(2x) PNG 이미지로 다운로드")
+
+                        ui.button(
+                            "SVG",
+                            icon="polyline",
+                            on_click=lambda _, wid=wrapper_id, t=title: self._download_mermaid_svg(wid, t),
+                        ).props("flat dense size=sm color=sky-4").tooltip("SVG 벡터 이미지로 다운로드")
+
+                        ui.button(
+                            "HTML",
+                            icon="code",
+                            on_click=lambda _, t=title, c=content: self._download_mermaid_html(t, c),
+                        ).props("flat dense size=sm color=amber-4").tooltip("줌/패닝 및 소스 보기가 가능한 독립 실행형 HTML (</>) 문서 다운로드")
+
+                        ui.button(
+                            "StarUML",
+                            icon="schema",
+                            on_click=lambda _, t=title, c=content: self._download_mermaid_staruml(t, c),
+                        ).props("flat dense size=sm color=purple-4").tooltip("StarUML 호환 프로젝트 (.mdj) 다운로드 (StarUML에서 File > Open으로 즉시 편집 가능)")
+
+                        ui.button(
+                            "MMD",
+                            icon="text_snippet",
+                            on_click=lambda _, t=title, c=content: self._download_artifact(t, c, "mermaid"),
+                        ).props("flat dense size=sm color=slate-4").tooltip("Mermaid 원본 스크립트 (.mmd) 파일 다운로드")
+                else:
+                    with ui.row().classes("items-center gap-1"):
+                        ui.button(
+                            "Copy",
+                            icon="content_copy",
+                            on_click=lambda _, text=content: self._copy_to_clipboard(text),
+                        ).props("flat dense size=sm color=slate-3")
+                        ui.button(
+                            "Download",
+                            icon="download",
+                            on_click=lambda _, t=title, c=content, ty=art_type: self._download_artifact(t, c, ty),
+                        ).props("flat dense size=sm color=slate-3")
 
             # Body based on type (Scrolls vertically)
             with ui.scroll_area().classes("w-full flex-grow min-h-0 p-3 bg-slate-950/80 border border-slate-800 rounded-lg"):
                 if art_type == "mermaid":
-                    self._render_mermaid(content)
+                    self._render_mermaid(content, wrapper_id=wrapper_id)
                 elif art_type == "code":
                     ui.code(content, language=language).classes("w-full text-xs")
                 elif art_type == "json":
@@ -121,7 +177,7 @@ class ArtifactViewer:
                     with ui.column().classes("prose prose-invert max-w-none text-xs text-slate-200"):
                         ui.markdown(content)
 
-    def _render_mermaid(self, content: str) -> None:
+    def _render_mermaid(self, content: str, wrapper_id: Optional[str] = None) -> None:
         """Mermaid 다이어그램. 렌더링에 실패하면 그 사실과 원본을 같이 보여줍니다.
 
         LLM 이 만든 다이어그램은 문법이 어긋나는 일이 잦은데, 예전에는 그때 화면이
@@ -132,7 +188,8 @@ class ArtifactViewer:
             ui.label("다이어그램 내용이 비어 있습니다.").classes("text-xs text-slate-500")
             return
 
-        with ui.column().classes("w-full gap-2") as wrapper:
+        wid = wrapper_id or f"art-mermaid-{uuid.uuid4().hex[:8]}"
+        with ui.column().classes("w-full gap-2").props(f'id="{wid}"') as wrapper:
             error_box = ui.column().classes("w-full gap-1")
             error_box.set_visibility(False)
 
@@ -170,11 +227,44 @@ class ArtifactViewer:
         copy_to_clipboard(text)
         ui.notify("클립보드에 복사되었습니다!", type="positive", position="top")
 
+    def _copy_mermaid_image(self, wrapper_id: str) -> None:
+        ui.run_javascript(f"window.MadoMermaid && window.MadoMermaid.copyImageToClipboard('{wrapper_id}')")
+
+    def _copy_mermaid_svg(self, wrapper_id: str) -> None:
+        ui.run_javascript(f"window.MadoMermaid && window.MadoMermaid.copySvgToClipboard('{wrapper_id}')")
+
+    def _download_mermaid_png(self, wrapper_id: str, title: str) -> None:
+        clean_title = _clean_title_for_filename(title, default="architecture_diagram")
+        ui.run_javascript(f"window.MadoMermaid && window.MadoMermaid.downloadPng('{wrapper_id}', {json.dumps(clean_title)})")
+
+    def _download_mermaid_svg(self, wrapper_id: str, title: str) -> None:
+        clean_title = _clean_title_for_filename(title, default="architecture_diagram")
+        ui.run_javascript(f"window.MadoMermaid && window.MadoMermaid.downloadSvg('{wrapper_id}', {json.dumps(clean_title)})")
+
+    def _download_mermaid_html(self, title: str, content: str) -> None:
+        clean_title = _clean_title_for_filename(title, default="architecture_diagram")
+        html_str = generate_mermaid_standalone_html(title, content)
+        filename = f"{clean_title}.html"
+        ui.download(html_str.encode("utf-8"), filename)
+        ui.notify(f"'{filename}' 독립 실행형 HTML 다운로드가 시작되었습니다.", type="info", position="top")
+
+    def _download_mermaid_staruml(self, title: str, content: str) -> None:
+        clean_title = _clean_title_for_filename(title, default="architecture_model")
+        mdj_json = convert_mermaid_to_staruml_mdj(title, content)
+        filename = f"{clean_title}.mdj"
+        ui.download(mdj_json.encode("utf-8"), filename)
+        ui.notify(
+            f"StarUML 호환 프로젝트 '{filename}' 다운로드가 시작되었습니다. (StarUML에서 File > Open으로 열기 가능)",
+            type="positive",
+            position="top",
+            close_button="확인",
+        )
+
     def _download_artifact(self, title: str, content: str, art_type: str) -> None:
         ext_map = {"code": "py", "mermaid": "mmd", "json": "json", "markdown": "md"}
         ext = ext_map.get(art_type, "txt")
-        clean_title = "".join(c for c in title if c.isalnum() or c in ("-", "_")).rstrip()
-        filename = f"{clean_title or 'artifact'}.{ext}"
+        clean_title = _clean_title_for_filename(title, default="artifact")
+        filename = f"{clean_title}.{ext}"
 
         ui.download(content.encode("utf-8"), filename)
         ui.notify(f"'{filename}' 다운로드가 시작되었습니다.", type="info", position="top")

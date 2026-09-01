@@ -29,6 +29,7 @@ from app.ui.components.chat_feed import ChatFeed, clip_tool_output
 from app.ui.components.roster import AgentRosterControl
 from app.ui.components.sidebar import SessionSidebar, event_changes_session_list
 from app.ui.clipboard import copy_to_clipboard
+from app.ui.mermaid_export import MERMAID_EXPORT_JS
 from app.ui.theme import CUSTOM_CSS, FAVICON_SVG
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ def create_ui() -> None:
     @ui.page("/", title="MADO: Multi-Agent Debate & Orchestration Platform", favicon=FAVICON_SVG)
     async def index_page():
         ui.dark_mode(True)
-        ui.add_head_html(f"<style>{CUSTOM_CSS}</style>")
+        ui.add_head_html(f"<style>{CUSTOM_CSS}</style><script>{MERMAID_EXPORT_JS}</script>")
 
         session_factory = get_session_factory()
         runner = get_debate_runner()
