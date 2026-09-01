@@ -228,7 +228,7 @@ class MermaidToStarUMLConverter:
                     "head": {"$ref": tgt["view_id"]},
                     "tail": {"$ref": src["view_id"]},
                     "lineStyle": 1,
-                    "points": f"{src['x'] + src['width']//2},{src['y'] + src['height']//2};{tgt['x'] + tgt['width']//2},{tgt['y'] + tgt['height']//2}",
+                    "points": f"{src['x'] + src['width']//2}:{src['y'] + src['height']//2};{tgt['x'] + tgt['width']//2}:{tgt['y'] + tgt['height']//2}",
                     "nameLabel": {
                         "_type": "EdgeLabelView",
                         "_id": _gen_staruml_id(),
@@ -591,7 +591,7 @@ class MermaidToStarUMLConverter:
                     "tail": {"$ref": src["view_id"]},
                     "head": {"$ref": tgt["view_id"]},
                     "lineStyle": 1,
-                    "points": f"{src['x'] + src['width']//2},{src['y'] + src['height']//2};{tgt['x'] + tgt['width']//2},{tgt['y'] + tgt['height']//2}",
+                    "points": f"{src['x'] + src['width']//2}:{src['y'] + src['height']//2};{tgt['x'] + tgt['width']//2}:{tgt['y'] + tgt['height']//2}",
                 }
                 if rel["label"]:
                     rel_view["nameLabel"] = {
@@ -654,28 +654,40 @@ class MermaidToStarUMLConverter:
         participants: Dict[str, Dict[str, Any]] = {}
         messages: List[Dict[str, Any]] = []
 
-        part_pattern = re.compile(r'(?:participant|actor)\s+([A-Za-z0-9_\-]+)(?:\s+as\s+[\"\']?([^\r\n\"\']+)[\"\']?)?')
-        msg_pattern = re.compile(r'([A-Za-z0-9_\-]+)\s*(->>|-->>|->|-->)\s*([A-Za-z0-9_\-]+)\s*:\s*(.+)')
+        part_pattern = re.compile(r'^\s*(?:participant|actor)\s+([A-Za-z0-9_]+)(?:\s+as\s+[\"\']?([^\r\n\"\']+)[\"\']?)?')
+        msg_pattern = re.compile(r'^\s*([A-Za-z0-9_]+)\s*(-->>|->>|-->|->)\s*([A-Za-z0-9_]+)\s*:\s*(.+)')
 
         for line in lines[1:]:
             line_str = line.strip()
             if not line_str or line_str.startswith(("autonumber", "box")) or line_str == "end":
                 continue
 
-            p_m = part_pattern.search(line_str)
-            if p_m and not msg_pattern.search(line_str):
+            p_m = part_pattern.match(line_str)
+            if p_m and not msg_pattern.match(line_str):
                 p_id, p_alias = p_m.groups()
-                p_label = p_alias or p_id
+                p_label = (p_alias or p_id).strip().strip('"\'')
                 if p_id not in participants:
-                    participants[p_id] = {"id": p_id, "name": p_label, "elem_id": _gen_staruml_id(), "view_id": _gen_staruml_id()}
+                    participants[p_id] = {
+                        "id": p_id,
+                        "name": p_label,
+                        "elem_id": _gen_staruml_id(),
+                        "view_id": _gen_staruml_id(),
+                        "line_part_id": _gen_staruml_id(),
+                    }
                 continue
 
-            m_m = msg_pattern.search(line_str)
+            m_m = msg_pattern.match(line_str)
             if m_m:
                 s_id, arrow, t_id, text = m_m.groups()
                 for p in (s_id, t_id):
                     if p not in participants:
-                        participants[p] = {"id": p, "name": p, "elem_id": _gen_staruml_id(), "view_id": _gen_staruml_id()}
+                        participants[p] = {
+                            "id": p,
+                            "name": p,
+                            "elem_id": _gen_staruml_id(),
+                            "view_id": _gen_staruml_id(),
+                            "line_part_id": _gen_staruml_id(),
+                        }
                 messages.append({
                     "source": s_id,
                     "target": t_id,
@@ -686,18 +698,27 @@ class MermaidToStarUMLConverter:
                 })
 
         if not participants:
-            participants["Participant1"] = {"id": "Participant1", "name": "Actor", "elem_id": _gen_staruml_id(), "view_id": _gen_staruml_id()}
+            participants["Participant1"] = {
+                "id": "Participant1",
+                "name": "Actor",
+                "elem_id": _gen_staruml_id(),
+                "view_id": _gen_staruml_id(),
+                "line_part_id": _gen_staruml_id(),
+            }
 
         part_list = list(participants.values())
         interaction_id = _gen_staruml_id()
 
-        start_x = 100
-        spacing_x = 200
+        start_x = 80
+        spacing_x = 220
+        head_height = 40
+        line_length = max(450, 160 + len(messages) * 55)
+
         for idx, p in enumerate(part_list):
             p["x"] = start_x + idx * spacing_x
-            p["y"] = 80
-            p["width"] = 120
-            p["height"] = max(400, 150 + len(messages) * 50)
+            p["y"] = 40
+            p["width"] = 140
+            p["height"] = line_length
 
         owned_views = []
         lifelines = []
@@ -708,27 +729,91 @@ class MermaidToStarUMLConverter:
                 "_id": p["elem_id"],
                 "_parent": {"$ref": interaction_id},
                 "name": p["name"],
+                "isMultiInstance": False,
             }
             lifelines.append(lifeline_elem)
+
+            name_comp_id = _gen_staruml_id()
+            st_label_id = _gen_staruml_id()
+            n_label_id = _gen_staruml_id()
+            ns_label_id = _gen_staruml_id()
+            p_label_id = _gen_staruml_id()
+
+            name_comp_view = {
+                "_type": "UMLNameCompartmentView",
+                "_id": name_comp_id,
+                "_parent": {"$ref": p["view_id"]},
+                "model": {"$ref": p["elem_id"]},
+                "subViews": [
+                    {
+                        "_type": "LabelView",
+                        "_id": st_label_id,
+                        "_parent": {"$ref": name_comp_id},
+                        "visible": False,
+                    },
+                    {
+                        "_type": "LabelView",
+                        "_id": n_label_id,
+                        "_parent": {"$ref": name_comp_id},
+                        "text": p["name"],
+                    },
+                    {
+                        "_type": "LabelView",
+                        "_id": ns_label_id,
+                        "_parent": {"$ref": name_comp_id},
+                        "visible": False,
+                    },
+                    {
+                        "_type": "LabelView",
+                        "_id": p_label_id,
+                        "_parent": {"$ref": name_comp_id},
+                        "visible": False,
+                    },
+                ],
+                "stereotypeLabel": {"$ref": st_label_id},
+                "nameLabel": {"$ref": n_label_id},
+                "namespaceLabel": {"$ref": ns_label_id},
+                "propertyLabel": {"$ref": p_label_id},
+            }
+
+            line_part_view = {
+                "_type": "UMLLinePartView",
+                "_id": p["line_part_id"],
+                "_parent": {"$ref": p["view_id"]},
+                "model": {"$ref": p["elem_id"]},
+                "left": p["x"] + p["width"] // 2,
+                "top": p["y"] + head_height,
+                "width": 1,
+                "height": line_length - head_height,
+            }
 
             lifeline_view = {
                 "_type": "UMLSeqLifelineView",
                 "_id": p["view_id"],
                 "_parent": {"$ref": self.diagram_id},
                 "model": {"$ref": p["elem_id"]},
+                "subViews": [
+                    name_comp_view,
+                    line_part_view,
+                ],
                 "left": p["x"],
                 "top": p["y"],
                 "width": p["width"],
                 "height": p["height"],
-                "nameLabel": {"_type": "LabelView", "_id": _gen_staruml_id(), "_parent": {"$ref": p["view_id"]}, "text": p["name"]},
+                "nameCompartment": {"$ref": name_comp_id},
+                "linePart": {"$ref": p["line_part_id"]},
             }
             owned_views.append(lifeline_view)
 
         msg_elements = []
+        start_y = 120
+        step_y = 50
+
         for idx, msg in enumerate(messages):
             src = participants.get(msg["source"])
             tgt = participants.get(msg["target"])
             if src and tgt:
+                is_reply = "--" in msg["arrow"]
                 msg_elem = {
                     "_type": "UMLMessage",
                     "_id": msg["elem_id"],
@@ -736,34 +821,88 @@ class MermaidToStarUMLConverter:
                     "name": msg["text"],
                     "source": {"$ref": src["elem_id"]},
                     "target": {"$ref": tgt["elem_id"]},
+                    "messageSort": "reply" if is_reply else "synchCall",
                 }
                 msg_elements.append(msg_elem)
+
+                src_cx = src["x"] + src["width"] // 2
+                tgt_cx = tgt["x"] + tgt["width"] // 2
+                curr_y = start_y + idx * step_y
+
+                if src["id"] == tgt["id"]:
+                    points_str = f"{src_cx}:{curr_y};{src_cx + 45}:{curr_y};{src_cx + 45}:{curr_y + 25};{src_cx}:{curr_y + 25}"
+                else:
+                    points_str = f"{src_cx}:{curr_y};{tgt_cx}:{curr_y}"
+
+                n_label_id = _gen_staruml_id()
+                st_label_id = _gen_staruml_id()
+                p_label_id = _gen_staruml_id()
+                act_id = _gen_staruml_id()
 
                 msg_view = {
                     "_type": "UMLSeqMessageView",
                     "_id": msg["view_id"],
                     "_parent": {"$ref": self.diagram_id},
                     "model": {"$ref": msg["elem_id"]},
-                    "head": {"$ref": tgt["view_id"]},
-                    "tail": {"$ref": src["view_id"]},
-                    "points": f"{src['x'] + src['width']//2},{140 + idx * 45};{tgt['x'] + tgt['width']//2},{140 + idx * 45}",
-                    "nameLabel": {
-                        "_type": "EdgeLabelView",
-                        "_id": _gen_staruml_id(),
-                        "_parent": {"$ref": msg["view_id"]},
-                        "model": {"$ref": msg["elem_id"]},
-                        "text": msg["text"],
-                    },
+                    "subViews": [
+                        {
+                            "_type": "EdgeLabelView",
+                            "_id": n_label_id,
+                            "_parent": {"$ref": msg["view_id"]},
+                            "model": {"$ref": msg["elem_id"]},
+                            "text": msg["text"],
+                            "alpha": 1.5707963267948966,
+                            "distance": 10,
+                            "edgePosition": 1,
+                        },
+                        {
+                            "_type": "EdgeLabelView",
+                            "_id": st_label_id,
+                            "_parent": {"$ref": msg["view_id"]},
+                            "model": {"$ref": msg["elem_id"]},
+                            "visible": False,
+                            "alpha": 1.5707963267948966,
+                            "distance": 25,
+                            "edgePosition": 1,
+                        },
+                        {
+                            "_type": "EdgeLabelView",
+                            "_id": p_label_id,
+                            "_parent": {"$ref": msg["view_id"]},
+                            "model": {"$ref": msg["elem_id"]},
+                            "visible": False,
+                            "alpha": -1.5707963267948966,
+                            "distance": 10,
+                            "edgePosition": 1,
+                        },
+                        {
+                            "_type": "UMLActivationView",
+                            "_id": act_id,
+                            "_parent": {"$ref": msg["view_id"]},
+                            "model": {"$ref": msg["elem_id"]},
+                            "visible": not is_reply,
+                        },
+                    ],
+                    "head": {"$ref": tgt["line_part_id"]},
+                    "tail": {"$ref": src["line_part_id"]},
+                    "points": points_str,
+                    "nameLabel": {"$ref": n_label_id},
+                    "stereotypeLabel": {"$ref": st_label_id},
+                    "propertyLabel": {"$ref": p_label_id},
+                    "activation": {"$ref": act_id},
                 }
                 owned_views.append(msg_view)
 
         diagram = {
             "_type": "UMLSequenceDiagram",
             "_id": self.diagram_id,
-            "_parent": {"$ref": self.model_id},
+            "_parent": {"$ref": interaction_id},
             "name": self.title,
             "visible": True,
             "defaultDiagram": True,
+            "showSequenceNumber": True,
+            "showSignature": True,
+            "showActivation": True,
             "ownedViews": owned_views,
         }
 
@@ -772,6 +911,7 @@ class MermaidToStarUMLConverter:
             "_id": interaction_id,
             "_parent": {"$ref": self.model_id},
             "name": "Interaction",
+            "ownedElements": [diagram],
             "participants": lifelines,
             "messages": msg_elements,
         }
@@ -787,7 +927,7 @@ class MermaidToStarUMLConverter:
                     "_id": self.model_id,
                     "_parent": {"$ref": self.project_id},
                     "name": "SequenceModel",
-                    "ownedElements": [diagram, interaction],
+                    "ownedElements": [interaction],
                 }
             ],
         }

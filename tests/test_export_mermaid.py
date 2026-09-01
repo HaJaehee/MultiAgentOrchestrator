@@ -135,13 +135,94 @@ def test_sequence_diagram_to_staruml():
     model = data["ownedElements"][0]
     assert model["name"] == "SequenceModel"
 
-    diagram = model["ownedElements"][0]
-    assert diagram["_type"] == "UMLSequenceDiagram"
-
-    interaction = model["ownedElements"][1]
+    interaction = model["ownedElements"][0]
     assert interaction["_type"] == "UMLInteraction"
     assert len(interaction["participants"]) >= 4
     assert len(interaction["messages"]) >= 5
+
+    diagram = interaction["ownedElements"][0]
+    assert diagram["_type"] == "UMLSequenceDiagram"
+
+    lifeline_views = [v for v in diagram["ownedViews"] if v["_type"] == "UMLSeqLifelineView"]
+    assert len(lifeline_views) == 4
+    for lv in lifeline_views:
+        assert "linePart" in lv and "$ref" in lv["linePart"]
+        assert "nameCompartment" in lv and "$ref" in lv["nameCompartment"]
+        assert "subViews" in lv
+        sub_types = [sv["_type"] for sv in lv["subViews"]]
+        assert "UMLNameCompartmentView" in sub_types
+        assert "UMLLinePartView" in sub_types
+
+    msg_views = [v for v in diagram["ownedViews"] if v["_type"] == "UMLSeqMessageView"]
+    assert len(msg_views) == 6
+    for mv in msg_views:
+        assert "head" in mv and "$ref" in mv["head"]
+        assert "tail" in mv and "$ref" in mv["tail"]
+        assert "nameLabel" in mv and "$ref" in mv["nameLabel"]
+        assert "stereotypeLabel" in mv and "$ref" in mv["stereotypeLabel"]
+        assert "propertyLabel" in mv and "$ref" in mv["propertyLabel"]
+        assert "activation" in mv and "$ref" in mv["activation"]
+        assert "subViews" in mv
+        sub_types = [sv["_type"] for sv in mv["subViews"]]
+        assert "EdgeLabelView" in sub_types
+        assert "UMLActivationView" in sub_types
+        assert ":" in mv["points"]
+
+
+def test_complex_sequence_diagram_7_lifelines_11_messages():
+    mermaid_code = """sequenceDiagram
+    autonumber
+    actor User as 사용자
+    participant Gateway as API 게이트웨이
+    participant Auth as 인증 서버
+    participant UserSvc as 사용자 서비스
+    participant OrderSvc as 주문 서비스
+    participant PaymentSvc as 결제 서비스
+    participant DB as 데이터베이스
+
+    User->>Gateway: 1. 주문 생성 요청
+    Gateway->>Auth: 2. 토큰 검증 요청
+    Auth-->>Gateway: 3. 토큰 유효 응답
+    Gateway->>UserSvc: 4. 사용자 등급 조회
+    UserSvc-->>Gateway: 5. 등급 정보 반환
+    Gateway->>OrderSvc: 6. 주문 처리 요청
+    OrderSvc->>DB: 7. 재고 확인 및 차감
+    DB-->>OrderSvc: 8. 처리 완료
+    OrderSvc->>PaymentSvc: 9. 결제 승인 요청
+    PaymentSvc-->>OrderSvc: 10. 결제 성공 응답
+    OrderSvc-->>User: 11. 최종 주문 완료
+    """
+    mdj_str = convert_mermaid_to_staruml_mdj("E-Commerce Order Sequence", mermaid_code)
+    data = json.loads(mdj_str)
+
+    interaction = data["ownedElements"][0]["ownedElements"][0]
+    assert len(interaction["participants"]) == 7
+    assert len(interaction["messages"]) == 11
+
+    diagram = interaction["ownedElements"][0]
+    lifeline_views = [v for v in diagram["ownedViews"] if v["_type"] == "UMLSeqLifelineView"]
+    msg_views = [v for v in diagram["ownedViews"] if v["_type"] == "UMLSeqMessageView"]
+
+    assert len(lifeline_views) == 7
+    assert len(msg_views) == 11
+
+    # Verify Y coordinates are strictly ascending
+    y_coords = []
+    for mv in msg_views:
+        # points format: x1:y1;x2:y2
+        pts = [p.split(":") for p in mv["points"].split(";")]
+        y0 = int(pts[0][1])
+        y_coords.append(y0)
+
+    assert y_coords == sorted(y_coords)
+    assert len(set(y_coords)) == 11  # All distinct vertical levels
+
+    # Verify activations
+    sync_msgs = [mv for mv in msg_views if any(sv["_type"] == "UMLActivationView" and sv.get("visible") is True for sv in mv["subViews"])]
+    reply_msgs = [mv for mv in msg_views if any(sv["_type"] == "UMLActivationView" and sv.get("visible") is False for sv in mv["subViews"])]
+    assert len(sync_msgs) == 6
+    assert len(reply_msgs) == 5
+
 
 
 def test_empty_mermaid_to_staruml():
